@@ -146,8 +146,14 @@ def _fetch_case_data(supabase, case_id: str) -> dict:
 
     case_row = case_resp.data[0]
 
-    # Defendants linked to this case
-    defendant_ids = case_row.get("defendant_ids") or []
+    # Defendants linked to this case via the junction table
+    cd_resp = (
+        supabase.table("case_defendants")
+        .select("defendant_id")
+        .eq("case_id", case_id)
+        .execute()
+    )
+    defendant_ids = [row["defendant_id"] for row in (cd_resp.data or [])]
     defendants: list[dict] = []
     for did in defendant_ids:
         d_resp = (
@@ -185,7 +191,14 @@ def _fetch_case_data(supabase, case_id: str) -> dict:
     return case_data
 
 
-def _generate_docx(case_id: str, complaint_text: str) -> None:
+def _generate_docx(
+    case_id: str,
+    complaint_text: str,
+    case_data: dict,
+    defendants: list,
+    agent_outputs: dict,
+    version: int = 1,
+) -> None:
     """Generate DOCX files via the formatter utility.
 
     The formatter is imported lazily so that the orchestrator module
@@ -193,8 +206,10 @@ def _generate_docx(case_id: str, complaint_text: str) -> None:
     installed (e.g. lightweight test runners).
     """
     try:
-        from utils.formatter import generate_complaint_docx  # type: ignore[import]
-        generate_complaint_docx(case_id, complaint_text)
+        from utils.formatter import format_complaint_documents  # type: ignore[import]
+        format_complaint_documents(
+            case_id, complaint_text, case_data, defendants, agent_outputs, version
+        )
         logger.info("DOCX generated for case %s", case_id)
     except ImportError:
         logger.warning(
@@ -379,7 +394,21 @@ async def run_pipeline(case_id: str) -> dict:
             )
 
         # ── 6. Generate DOCX files ───────────────────────────────────────
-        _generate_docx(case_id, complaint_text)
+        agent_outputs_for_memo = {
+            "intake_analyst": fact_sheet,
+            "case_classifier": classification,
+            "legal_researcher": research,
+            "damages_analyst": damages,
+            "complaint_drafter": draft_result,
+            "qa_reviewer": qa_result,
+        }
+        _generate_docx(
+            case_id,
+            complaint_text,
+            case_data,
+            case_data.get("defendants", []),
+            agent_outputs_for_memo,
+        )
 
         # ── 7. Update case status to draft_ready ─────────────────────────
         _update_case_status(supabase, case_id, "draft_ready")
