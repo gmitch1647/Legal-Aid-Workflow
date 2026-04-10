@@ -1,0 +1,17 @@
+.env
+.env.local
+.env.production
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+*.docx
+cases/
+dist/
+build/
+.DS_Store
+*.log
+.vscode/
+.idea/
+venv/
+.venv/
