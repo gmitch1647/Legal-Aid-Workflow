@@ -210,6 +210,43 @@ export async function markNotificationRead(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Conversations (Interactive Agents)
+// ---------------------------------------------------------------------------
+
+export async function getAgentTypes() {
+  return request('/conversations/agent-types');
+}
+
+export async function getConversations(caseId = null) {
+  const params = caseId ? `?case_id=${caseId}` : '';
+  return request(`/conversations${params}`);
+}
+
+export async function getConversation(id) {
+  return request(`/conversations/${id}`);
+}
+
+export async function createConversation(agentType, caseId = null, title = null) {
+  return request('/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ agent_type: agentType, case_id: caseId, title }),
+  });
+}
+
+export async function sendAgentMessage(conversationId, message) {
+  return request(`/conversations/${conversationId}/chat`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+}
+
+export async function archiveConversation(id) {
+  return request(`/conversations/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Auth / Registration
 // ---------------------------------------------------------------------------
 
