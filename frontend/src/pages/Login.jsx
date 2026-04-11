@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Scale, Eye, EyeOff, Loader2, AlertCircle } from 'lucide-react';
-import { signIn, getUserProfile } from '../lib/supabase';
+import { signIn, getUserProfile, SUPABASE_CONFIGURED } from '../lib/supabase';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -18,6 +18,13 @@ export default function Login() {
 
   async function handleSubmit(e) {
     e.preventDefault();
+
+    if (!SUPABASE_CONFIGURED) {
+      setError(
+        'CONFIGURATION ERROR: Supabase env vars are missing. Go to Vercel → Settings → Environment Variables and add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then redeploy from the Deployments tab.'
+      );
+      return;
+    }
 
     if (!email.trim() || !password) {
       setError('Please enter both email and password.');
@@ -47,12 +54,14 @@ export default function Login() {
 
       if (err.message) {
         const msg = err.message.toLowerCase();
-        if (msg.includes('invalid login') || msg.includes('invalid credentials')) {
-          message = 'Invalid email or password. Please try again.';
+        if (msg.includes('failed to fetch') || msg.includes('networkerror')) {
+          message = 'Cannot reach Supabase. Check that VITE_SUPABASE_URL is set correctly in Vercel env vars and that you redeployed after adding them.';
+        } else if (msg.includes('invalid login') || msg.includes('invalid credentials')) {
+          message = 'Invalid email or password. Check Supabase → Authentication → Users to verify the account exists and is confirmed.';
         } else if (msg.includes('email not confirmed')) {
-          message = 'Please confirm your email address before signing in.';
+          message = 'Email not confirmed. Go to Supabase → Authentication → Users, find your user, and toggle Auto Confirm ON.';
         } else if (msg.includes('too many requests') || msg.includes('rate limit')) {
-          message = 'Too many login attempts. Please wait a moment and try again.';
+          message = 'Too many login attempts. Wait a minute and try again.';
         } else {
           message = err.message;
         }
