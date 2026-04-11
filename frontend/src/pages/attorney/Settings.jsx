@@ -16,9 +16,19 @@ import {
   Check,
   X,
   ChevronRight,
+  BookOpen,
+  RefreshCw,
+  FileText,
+  Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../../App';
-import { getDefendants, createDefendant, updateDefendant } from '../../lib/api';
+import {
+  getDefendants,
+  createDefendant,
+  updateDefendant,
+  reindexReferenceCases,
+  getReindexStatus,
+} from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
 // ---------------------------------------------------------------------------
@@ -28,6 +38,7 @@ import { supabase } from '../../lib/supabase';
 const TABS = [
   { key: 'profile', label: 'Attorney Profile', icon: User },
   { key: 'defendants', label: 'Defendant Database', icon: Database },
+  { key: 'reference_cases', label: 'Reference Cases', icon: BookOpen },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'branding', label: 'Branding', icon: Building2 },
 ];
@@ -838,6 +849,296 @@ function BrandingTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Reference Cases Tab — RAG index management
+// ---------------------------------------------------------------------------
+
+function ReferenceCasesTab() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [reindexing, setReindexing] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await getReindexStatus();
+      setStatus(data);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || 'Failed to load index status');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
+  const handleReindex = async (force) => {
+    if (reindexing) return;
+    if (
+      force &&
+      !window.confirm(
+        'Force rebuild will wipe the entire index and re-embed every reference case file. This may take several minutes and will use Voyage API credits. Continue?'
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setReindexing(true);
+      setError(null);
+      setLastResult(null);
+      const result = await reindexReferenceCases(force);
+      setLastResult(result);
+      await loadStatus();
+    } catch (err) {
+      console.error(err);
+      setError(err.message || 'Reindex failed');
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+      </div>
+    );
+  }
+
+  const voyageOk = status?.voyage_configured;
+  const filesOnDisk = status?.files_on_disk || [];
+  const filesIndexed = status?.files_indexed || [];
+  const missing = status?.missing_from_index || [];
+  const totalChunks = status?.total_chunks || 0;
+
+  return (
+    <div className="space-y-6">
+      {/* Intro */}
+      <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+        <div className="flex items-start gap-3">
+          <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-purple-500" />
+          <div>
+            <div className="text-sm font-semibold text-slate-900">
+              RAG Reference Library
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+              The Complaint Drafter uses semantic retrieval to pull only the most
+              relevant excerpts from your reference case library into each draft.
+              Upload <code className="rounded bg-slate-200 px-1">.docx</code> files
+              to{' '}
+              <code className="rounded bg-slate-200 px-1">
+                backend/reference_cases/
+              </code>{' '}
+              via GitHub, then reindex here.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Voyage config warning */}
+      {!voyageOk && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div className="flex-1 text-sm">
+              <div className="font-semibold text-amber-900">
+                Voyage API key not configured
+              </div>
+              <p className="mt-1 text-amber-800">
+                RAG is disabled. The drafter will fall back to loading the first
+                few reference files alphabetically. To enable semantic retrieval:
+              </p>
+              <ol className="mt-2 ml-4 list-decimal space-y-1 text-amber-800">
+                <li>
+                  Sign up at{' '}
+                  <a
+                    href="https://www.voyageai.com"
+                    target="_blank"
+                    rel="noopener"
+                    className="underline"
+                  >
+                    voyageai.com
+                  </a>{' '}
+                  (free tier includes 200M tokens)
+                </li>
+                <li>Create an API key</li>
+                <li>
+                  Add <code className="rounded bg-amber-100 px-1">VOYAGE_API_KEY</code>{' '}
+                  to your Railway service Variables
+                </li>
+                <li>Wait for Railway to redeploy, then reload this page</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatCard label="Files on disk" value={filesOnDisk.length} icon={FileText} />
+        <StatCard
+          label="Files indexed"
+          value={filesIndexed.length}
+          icon={Check}
+          tone={filesIndexed.length === filesOnDisk.length ? 'success' : 'warning'}
+        />
+        <StatCard label="Total chunks" value={totalChunks} icon={Database} />
+      </div>
+
+      {/* Missing files */}
+      {missing.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="text-sm font-semibold text-amber-900">
+            {missing.length} file{missing.length !== 1 ? 's' : ''} not yet indexed
+          </div>
+          <ul className="mt-2 space-y-0.5 text-xs text-amber-800">
+            {missing.map((f) => (
+              <li key={f}>• {f}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-amber-700">
+            Click "Reindex" below to process these files.
+          </p>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => handleReindex(false)}
+          disabled={reindexing || !voyageOk}
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {reindexing ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" /> Reindexing...
+            </>
+          ) : (
+            <>
+              <RefreshCw className="h-4 w-4" /> Reindex (incremental)
+            </>
+          )}
+        </button>
+        <button
+          onClick={() => handleReindex(true)}
+          disabled={reindexing || !voyageOk}
+          className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2.5 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Trash2 className="h-4 w-4" /> Force Rebuild
+        </button>
+        <button
+          onClick={loadStatus}
+          disabled={loading || reindexing}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+        >
+          <RefreshCw className="h-4 w-4" /> Refresh Status
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+            <div className="text-sm text-red-800">
+              <div className="font-semibold">Error</div>
+              <div className="mt-1">{error}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Result */}
+      {lastResult && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+          <div className="flex items-start gap-3">
+            <Check className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+            <div className="flex-1 text-sm text-emerald-900">
+              <div className="font-semibold">Reindex complete</div>
+              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                <div>
+                  <dt className="text-emerald-700">Scanned</dt>
+                  <dd className="font-semibold">{lastResult.files_scanned ?? 0}</dd>
+                </div>
+                <div>
+                  <dt className="text-emerald-700">Indexed</dt>
+                  <dd className="font-semibold">{lastResult.files_indexed ?? 0}</dd>
+                </div>
+                <div>
+                  <dt className="text-emerald-700">Skipped (unchanged)</dt>
+                  <dd className="font-semibold">{lastResult.files_skipped ?? 0}</dd>
+                </div>
+                <div>
+                  <dt className="text-emerald-700">New chunks</dt>
+                  <dd className="font-semibold">{lastResult.chunks_indexed ?? 0}</dd>
+                </div>
+              </dl>
+              {lastResult.errors?.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-xs font-semibold text-red-700">
+                    Errors ({lastResult.errors.length}):
+                  </div>
+                  <ul className="mt-1 space-y-0.5 text-xs text-red-700">
+                    {lastResult.errors.map((e, i) => (
+                      <li key={i}>• {e}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Indexed files list */}
+      {filesIndexed.length > 0 && (
+        <div>
+          <div className="mb-2 text-sm font-semibold text-slate-700">
+            Indexed files ({filesIndexed.length})
+          </div>
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+            <ul className="divide-y divide-slate-100">
+              {filesIndexed.map((f) => (
+                <li
+                  key={f}
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-slate-700"
+                >
+                  <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                  <span className="truncate">{f}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, icon: Icon, tone = 'default' }) {
+  const toneClasses = {
+    default: 'border-slate-200 bg-white text-slate-900',
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    warning: 'border-amber-200 bg-amber-50 text-amber-900',
+  };
+  return (
+    <div className={`rounded-lg border p-4 ${toneClasses[tone] || toneClasses.default}`}>
+      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide opacity-70">
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-bold">{value}</div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Settings Component
 // ---------------------------------------------------------------------------
 
@@ -850,6 +1151,8 @@ export default function Settings() {
         return <ProfileTab />;
       case 'defendants':
         return <DefendantsTab />;
+      case 'reference_cases':
+        return <ReferenceCasesTab />;
       case 'notifications':
         return <NotificationsTab />;
       case 'branding':
