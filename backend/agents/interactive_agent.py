@@ -15,8 +15,13 @@ from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic()
 MODEL = "claude-sonnet-4-5-20250514"
+
+
+def _get_client():
+    """Lazy-initialize the Anthropic client so import doesn't crash
+    if ANTHROPIC_API_KEY isn't set yet."""
+    return anthropic.Anthropic()
 
 # ---------------------------------------------------------------------------
 # Agent system prompts — each specialist has deep domain knowledge
@@ -295,6 +300,7 @@ async def chat(
 
     # Call Claude
     try:
+        client = _get_client()
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
