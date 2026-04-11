@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Scale, Eye, EyeOff, Loader2, AlertCircle } from 'lucide-react';
-import { signIn, getUserProfile, SUPABASE_CONFIGURED } from '../lib/supabase';
+import { signIn, getUserProfile, SUPABASE_CONFIGURED, supabase } from '../lib/supabase';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -37,8 +37,28 @@ export default function Login() {
     try {
       await signIn(email.trim(), password);
 
+      // Explicitly ping the backend to trigger profile auto-create
+      const apiUrl = import.meta.env.VITE_API_URL;
+      if (apiUrl) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+          if (token) {
+            const resp = await fetch(`${apiUrl}/cases`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            console.log('[Login] Bootstrap call status:', resp.status);
+          }
+        } catch (bootstrapErr) {
+          console.warn('[Login] Bootstrap call failed:', bootstrapErr);
+        }
+      } else {
+        console.warn('[Login] VITE_API_URL not set');
+      }
+
       // Fetch profile to determine role-based redirect
       const profile = await getUserProfile();
+      console.log('[Login] Profile after bootstrap:', profile);
       const role = profile?.role;
 
       if (role === 'attorney') {
@@ -46,8 +66,14 @@ export default function Login() {
       } else if (role === 'client') {
         navigate('/client/dashboard', { replace: true });
       } else {
-        // Default fallback
-        navigate('/', { replace: true });
+        // Profile still missing after bootstrap — show error
+        setError(
+          'Signed in, but no profile could be created. Check that the backend ' +
+          '(Railway) is running and VITE_API_URL is set correctly in Vercel env vars. ' +
+          `Backend URL: ${apiUrl || 'NOT SET'}`
+        );
+        setLoading(false);
+        return;
       }
     } catch (err) {
       let message = 'An error occurred. Please try again.';
