@@ -6,6 +6,7 @@ __pycache__/
 *.pyo
 node_modules/
 *.docx
+!backend/reference_cases/*.docx
 cases/
 dist/
 build/
