@@ -6,82 +6,25 @@ style using all prior agent outputs (fact sheet, classification, research
 packet, and damages analysis).  Supports revision loops when the QA
 reviewer identifies issues.
 
-Reads `.docx` files from `backend/reference_cases/` at runtime and
-includes condensed excerpts in the system context so the drafter
-matches the exact voice and structure of previously filed complaints.
+Uses RAG retrieval from `reference_chunks` (Supabase pgvector) to pull
+only the most semantically similar excerpts from previously filed
+complaints — keeps token costs low while maximizing style accuracy.
+Falls back to reading raw .docx files from `backend/reference_cases/`
+if RAG is not configured (no VOYAGE_API_KEY).
+
+Also uses Anthropic prompt caching on the core system prompt so repeat
+drafts within a 5-minute window pay only 10% for the cached portion.
 """
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 import anthropic
 
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Reference cases loader
-# ---------------------------------------------------------------------------
-
-_REFERENCE_CASES_DIR = Path(__file__).resolve().parent.parent / "reference_cases"
-_REFERENCE_CACHE: dict[str, str] | None = None
-_REFERENCE_MAX_CHARS_PER_FILE = 4000
-_REFERENCE_MAX_FILES = 5  # cap how many we include to stay within token budget
-
-
-def _load_reference_cases() -> dict[str, str]:
-    """Load and extract text from all .docx files in reference_cases/.
-
-    Cached in-memory after first call. Returns a mapping of filename
-    to extracted plain text (truncated to _REFERENCE_MAX_CHARS_PER_FILE).
-    """
-    global _REFERENCE_CACHE
-    if _REFERENCE_CACHE is not None:
-        return _REFERENCE_CACHE
-
-    _REFERENCE_CACHE = {}
-    if not _REFERENCE_CASES_DIR.exists():
-        logger.info("reference_cases/ directory not found — skipping")
-        return _REFERENCE_CACHE
-
-    try:
-        from docx import Document as DocxDocument
-    except ImportError:
-        logger.warning("python-docx not available — skipping reference cases")
-        return _REFERENCE_CACHE
-
-    for docx_path in sorted(_REFERENCE_CASES_DIR.glob("*.docx")):
-        try:
-            doc = DocxDocument(str(docx_path))
-            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-            if len(text) > _REFERENCE_MAX_CHARS_PER_FILE:
-                text = text[:_REFERENCE_MAX_CHARS_PER_FILE] + "\n[...truncated]"
-            _REFERENCE_CACHE[docx_path.name] = text
-            logger.info(f"Loaded reference case: {docx_path.name}")
-        except Exception as e:
-            logger.warning(f"Could not read reference case {docx_path.name}: {e}")
-
-    return _REFERENCE_CACHE
-
-
-def _build_reference_context(max_files: int = _REFERENCE_MAX_FILES) -> str:
-    """Return a formatted string of reference case excerpts, or empty
-    string if there are no reference files."""
-    cases = _load_reference_cases()
-    if not cases:
-        return ""
-
-    selected = list(cases.items())[:max_files]
-    parts = [
-        "\n\n=== REFERENCE CASES (prior filed complaints — match this style) ==="
-    ]
-    for filename, text in selected:
-        parts.append(f"\n--- {filename} ---\n{text}")
-    return "\n".join(parts)
 
 AGENT_NAME = "complaint_drafter"
 MODEL = "claude-sonnet-4-5"
@@ -160,6 +103,81 @@ def _parse_json_response(text: str) -> dict:
 def _update_agent_output(supabase, output_id: str, **fields) -> None:
     """Update an agent_outputs row with the given fields."""
     supabase.table("agent_outputs").update(fields).eq("id", output_id).execute()
+
+
+def _retrieve_reference_context(
+    fact_sheet: dict, classification: dict, damages: dict
+) -> str:
+    """Build a RAG query from the prior agent outputs and retrieve the
+    most relevant reference chunks from pgvector.
+
+    Falls back to an empty string (no reference context) if Voyage is
+    not configured or retrieval fails — the drafter still works, just
+    without style grounding.
+    """
+    try:
+        from utils.rag_retrieval import retrieve_relevant_chunks, format_retrieved_context
+        from utils.embeddings import is_configured
+    except Exception as e:
+        logger.warning(f"RAG imports failed: {e}")
+        return ""
+
+    if not is_configured():
+        logger.info("Voyage not configured — skipping RAG retrieval")
+        return ""
+
+    # Compose a rich query from the structured inputs
+    query_parts: list[str] = []
+
+    # Facts
+    if isinstance(fact_sheet, dict):
+        facts = fact_sheet.get("facts") or fact_sheet.get("narrative") or ""
+        if isinstance(facts, list):
+            facts = " ".join(str(f) for f in facts)
+        query_parts.append(str(facts))
+
+        # Defendants
+        defendants = fact_sheet.get("defendants") or []
+        if isinstance(defendants, list):
+            def_names = [
+                d.get("name", "") if isinstance(d, dict) else str(d)
+                for d in defendants
+            ]
+            query_parts.append("Defendants: " + ", ".join(n for n in def_names if n))
+
+    # Statutes identified
+    if isinstance(classification, dict):
+        statutes = classification.get("statutes") or classification.get("violations") or []
+        if isinstance(statutes, list):
+            statute_text = " ".join(
+                s.get("statute", "") if isinstance(s, dict) else str(s)
+                for s in statutes
+            )
+            query_parts.append(statute_text)
+
+    # Damages description
+    if isinstance(damages, dict):
+        dmg_text = damages.get("summary") or damages.get("description") or ""
+        query_parts.append(str(dmg_text))
+
+    query = "\n".join(p for p in query_parts if p).strip()
+    if not query:
+        return ""
+
+    try:
+        chunks = retrieve_relevant_chunks(
+            query_text=query,
+            top_k=8,
+            document_type="complaint",
+        )
+        if not chunks:
+            logger.info("RAG query returned no chunks")
+            return ""
+        logger.info(f"RAG retrieved {len(chunks)} chunks for drafter")
+        return format_retrieved_context(chunks)
+    except Exception as e:
+        logger.warning(f"RAG retrieval failed: {e}")
+        return ""
 
 
 async def run(
@@ -252,16 +270,48 @@ async def run(
 
         user_message = "\n".join(user_parts)
 
-        # Append reference case excerpts to the system prompt at runtime
-        system_with_refs = SYSTEM_PROMPT + _build_reference_context()
+        # ── Retrieve relevant reference chunks via RAG ───────────────────
+        retrieved_context = _retrieve_reference_context(
+            fact_sheet, classification, damages
+        )
+
+        # ── Build system prompt with cache control ───────────────────────
+        # The core prompt is marked as cacheable so repeat drafts within
+        # 5 minutes pay only 10% of the token cost for it. The retrieved
+        # RAG chunks are NOT cached because they change per request.
+        system_blocks = [
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+        if retrieved_context:
+            system_blocks.append(
+                {
+                    "type": "text",
+                    "text": retrieved_context,
+                }
+            )
 
         # ── Call Claude ──────────────────────────────────────────────────
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            system=system_with_refs,
+            system=system_blocks,
             messages=[{"role": "user", "content": user_message}],
         )
+
+        # Log cache performance for cost tracking
+        usage = getattr(response, "usage", None)
+        if usage:
+            logger.info(
+                "Drafter tokens — input: %s, cache_creation: %s, cache_read: %s, output: %s",
+                getattr(usage, "input_tokens", 0),
+                getattr(usage, "cache_creation_input_tokens", 0),
+                getattr(usage, "cache_read_input_tokens", 0),
+                getattr(usage, "output_tokens", 0),
+            )
 
         raw_text = response.content[0].text
         result = _parse_json_response(raw_text)

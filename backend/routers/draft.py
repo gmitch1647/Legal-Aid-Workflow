@@ -554,3 +554,93 @@ async def save_draft_to_case(
     supabase.table("cases").update(update_fields).eq("id", session_id).execute()
 
     return {"session_id": session_id, "saved": True}
+
+
+# ---------------------------------------------------------------------------
+# POST /reindex — rebuild the reference_chunks table from backend/reference_cases/
+# ---------------------------------------------------------------------------
+
+
+class ReindexPayload(BaseModel):
+    force: bool = False
+
+
+@router.post("/reindex")
+async def reindex_reference_cases(
+    payload: ReindexPayload = ReindexPayload(),
+    authorization: str = Header(...),
+):
+    """Rebuild the RAG reference index from .docx files in
+    backend/reference_cases/.
+
+    Parameters
+    ----------
+    force : bool
+        If True, wipes the existing index first and re-indexes
+        everything. Otherwise only processes files whose hash has
+        changed since the last index.
+
+    Returns a summary dict with counts of files processed and any
+    errors encountered. Attorney-only.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    try:
+        from utils.reference_indexer import index_all_reference_cases
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reference indexer could not be loaded: {e}",
+        )
+
+    logger.info(f"Reindex triggered by {profile.get('email')} (force={payload.force})")
+    result = index_all_reference_cases(force=payload.force)
+
+    return {
+        "status": "done",
+        **result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /reindex/status — count of indexed chunks + list of indexed files
+# ---------------------------------------------------------------------------
+
+
+@router.get("/reindex/status")
+async def reindex_status(authorization: str = Header(...)):
+    """Return the current state of the RAG reference index."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    try:
+        from utils.reference_indexer import iter_reference_files, count_indexed_chunks
+        from utils.embeddings import is_configured
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Indexer unavailable: {e}")
+
+    supabase = get_supabase()
+
+    # Files on disk
+    disk_files = [p.name for p in iter_reference_files()]
+
+    # Files currently indexed (distinct source_file values)
+    indexed_files: list[str] = []
+    try:
+        resp = (
+            supabase.table("reference_chunks")
+            .select("source_file")
+            .execute()
+        )
+        indexed_files = sorted({row["source_file"] for row in (resp.data or [])})
+    except Exception as e:
+        logger.warning(f"Could not fetch indexed files: {e}")
+
+    return {
+        "voyage_configured": is_configured(),
+        "files_on_disk": disk_files,
+        "files_indexed": indexed_files,
+        "total_chunks": count_indexed_chunks(supabase),
+        "missing_from_index": [f for f in disk_files if f not in indexed_files],
+    }

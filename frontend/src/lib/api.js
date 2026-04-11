@@ -298,6 +298,24 @@ export async function saveDraftToCase(sessionId, clientId = null) {
   });
 }
 
+/**
+ * Rebuild the RAG reference index from backend/reference_cases/.
+ * Pass force=true to wipe and fully re-index.
+ */
+export async function reindexReferenceCases(force = false) {
+  return request('/draft/reindex', {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+}
+
+/**
+ * Return the current state of the RAG reference index.
+ */
+export async function getReindexStatus() {
+  return request('/draft/reindex/status');
+}
+
 // ---------------------------------------------------------------------------
 // Auth / Registration
 // ---------------------------------------------------------------------------

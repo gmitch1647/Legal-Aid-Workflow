@@ -298,16 +298,37 @@ async def chat(
         "content": user_message,
     }).execute()
 
-    # Call Claude
+    # Call Claude with prompt caching on the system prompt.
+    # The system prompt for each agent type is identical across messages
+    # in a conversation, so caching it yields ~90% savings on repeated
+    # turns (cache window is 5 minutes).
     try:
         client = _get_client()
+        system_blocks = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=system_prompt,
+            system=system_blocks,
             messages=messages,
         )
         assistant_content = response.content[0].text
+
+        # Log cache performance for cost tracking
+        usage = getattr(response, "usage", None)
+        if usage:
+            logger.info(
+                "Interactive agent tokens — input: %s, cache_creation: %s, cache_read: %s, output: %s",
+                getattr(usage, "input_tokens", 0),
+                getattr(usage, "cache_creation_input_tokens", 0),
+                getattr(usage, "cache_read_input_tokens", 0),
+                getattr(usage, "output_tokens", 0),
+            )
 
         # Save assistant response to database
         supabase.table("conversation_messages").insert({
