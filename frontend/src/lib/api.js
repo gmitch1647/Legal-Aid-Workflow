@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
 /**
  * Get the current session's access token for Authorization headers.

@@ -38,7 +38,8 @@ export default function Login() {
       await signIn(email.trim(), password);
 
       // Explicitly ping the backend to trigger profile auto-create
-      const apiUrl = import.meta.env.VITE_API_URL;
+      // Strip trailing slashes from the URL so we don't build // paths
+      const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
       if (apiUrl) {
         try {
           const { data: { session } } = await supabase.auth.getSession();

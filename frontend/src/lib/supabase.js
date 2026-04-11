@@ -51,7 +51,7 @@ export async function getUserProfile() {
   if (data) return data;
 
   // No profile — ask the backend to create one via the /me endpoint
-  const apiUrl = import.meta.env.VITE_API_URL;
+  const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
   if (apiUrl) {
     try {
       const { data: { session } } = await supabase.auth.getSession();
