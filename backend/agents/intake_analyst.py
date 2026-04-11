@@ -17,7 +17,7 @@ from utils.document_reader import read_document
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "intake_analyst"
-MODEL = "claude-sonnet-4-5-20250514"
+MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = (

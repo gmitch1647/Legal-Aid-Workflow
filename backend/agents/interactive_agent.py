@@ -15,7 +15,7 @@ from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-5-20250514"
+MODEL = "claude-sonnet-4-5"
 
 
 def _get_client():

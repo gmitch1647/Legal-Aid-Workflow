@@ -18,7 +18,7 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "complaint_drafter"
-MODEL = "claude-sonnet-4-5-20250514"
+MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (

@@ -17,7 +17,7 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "case_classifier"
-MODEL = "claude-sonnet-4-5-20250514"
+MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = (
