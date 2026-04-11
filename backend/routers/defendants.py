@@ -80,7 +80,7 @@ def _require_attorney(profile: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/")
+@router.get("")
 async def list_defendants():
     """Return all defendants, ordered by name.  No auth required."""
     return get_all_defendants()
@@ -91,7 +91,7 @@ async def list_defendants():
 # ---------------------------------------------------------------------------
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_defendant_endpoint(
     body: DefendantCreate,
     authorization: str = Header(...),

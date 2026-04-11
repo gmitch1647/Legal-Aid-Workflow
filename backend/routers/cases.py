@@ -214,7 +214,7 @@ async def submit_case(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/")
+@router.get("")
 async def list_cases(
     authorization: str = Header(...),
     status_filter: Optional[str] = Query(None, alias="status"),

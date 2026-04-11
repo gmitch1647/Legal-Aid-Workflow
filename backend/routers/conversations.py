@@ -78,7 +78,7 @@ async def list_agent_types():
 # POST / — create a new conversation
 # ---------------------------------------------------------------------------
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_conversation(
     body: ConversationCreate,
     authorization: str = Header(...),
@@ -110,7 +110,7 @@ async def create_conversation(
 # GET / — list conversations
 # ---------------------------------------------------------------------------
 
-@router.get("/")
+@router.get("")
 async def list_conversations(
     authorization: str = Header(...),
     case_id: str | None = None,

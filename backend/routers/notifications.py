@@ -63,7 +63,7 @@ async def _get_current_user(authorization: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/")
+@router.get("")
 async def list_notifications(
     authorization: str = Header(...),
     unread_only: bool = Query(False, description="If true, return only unread notifications"),

@@ -68,6 +68,8 @@ export default function AgentChat() {
   const [cases, setCases] = useState([]);
   const [selectedCase, setSelectedCase] = useState(searchParams.get('case_id') || null);
   const [selectedAgent, setSelectedAgent] = useState('general');
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [creating, setCreating] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -86,27 +88,42 @@ export default function AgentChat() {
   }, [activeConvo]);
 
   async function loadInitialData() {
-    try {
-      setLoading(true);
-      const [typesRes, convosRes, casesRes] = await Promise.all([
-        getAgentTypes(),
-        getConversations(),
-        getCases(),
-      ]);
-      setAgentTypes(typesRes || []);
-      setConversations(convosRes || []);
-      setCases(Array.isArray(casesRes) ? casesRes : casesRes?.data || []);
+    setLoading(true);
 
-      // Auto-open conversation from URL param
-      const convoId = searchParams.get('conversation');
-      if (convoId) {
-        await openConversation(convoId);
-      }
+    // Load each independently so one failure doesn't block everything
+    try {
+      const typesRes = await getAgentTypes();
+      setAgentTypes(typesRes || []);
     } catch (err) {
-      console.error('Failed to load data:', err);
-    } finally {
-      setLoading(false);
+      console.error('Failed to load agent types:', err);
     }
+
+    try {
+      const convosRes = await getConversations();
+      setConversations(convosRes || []);
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+    }
+
+    try {
+      const casesRes = await getCases();
+      setCases(Array.isArray(casesRes) ? casesRes : casesRes?.data || []);
+    } catch (err) {
+      console.error('Failed to load cases:', err);
+      // Non-fatal — cases are optional for creating a conversation
+    }
+
+    // Auto-open conversation from URL param
+    const convoId = searchParams.get('conversation');
+    if (convoId) {
+      try {
+        await openConversation(convoId);
+      } catch (err) {
+        console.error('Failed to auto-open conversation:', err);
+      }
+    }
+
+    setLoading(false);
   }
 
   async function openConversation(convoId) {
@@ -121,6 +138,8 @@ export default function AgentChat() {
   }
 
   async function handleNewChat() {
+    setErrorMsg(null);
+    setCreating(true);
     try {
       const convo = await createConversation(selectedAgent, selectedCase);
       setConversations((prev) => [convo, ...prev]);
@@ -130,6 +149,13 @@ export default function AgentChat() {
       setSearchParams({ conversation: convo.id });
     } catch (err) {
       console.error('Failed to create conversation:', err);
+      setErrorMsg(
+        err?.message ||
+          err?.body?.detail ||
+          'Could not start the chat. Check the browser console for details.'
+      );
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -519,18 +545,30 @@ export default function AgentChat() {
               </div>
             </div>
 
+            {errorMsg && (
+              <div className="mx-5 mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {errorMsg}
+              </div>
+            )}
+
             <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
               <button
-                onClick={() => setShowNewChat(false)}
-                className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
+                onClick={() => {
+                  setShowNewChat(false);
+                  setErrorMsg(null);
+                }}
+                disabled={creating}
+                className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleNewChat}
-                className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+                disabled={creating}
+                className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                Start Chat
+                {creating && <Loader2 className="w-4 h-4 animate-spin" />}
+                {creating ? 'Creating...' : 'Start Chat'}
               </button>
             </div>
           </div>
