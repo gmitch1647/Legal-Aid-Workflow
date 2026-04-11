@@ -33,19 +33,49 @@ export async function getCurrentUser() {
 
 /**
  * Fetch the profile row from the profiles table for the current user.
+ * If the profile doesn't exist, ping the backend /me endpoint which
+ * will auto-create one, then retry.
  */
 export async function getUserProfile() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const { data, error } = await supabase
+  // First attempt — use maybeSingle so 0 rows returns null instead of erroring
+  let { data, error } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', user.id)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
-  return data;
+  if (data) return data;
+
+  // No profile — ask the backend to create one via the /me endpoint
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (token) {
+        // Hit any authed endpoint to trigger auto-create in the backend
+        await fetch(`${apiUrl}/cases`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to trigger profile auto-create:', err);
+    }
+
+    // Retry fetching the profile
+    const retry = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (retry.data) return retry.data;
+  }
+
+  return null;
 }
 
 /**
