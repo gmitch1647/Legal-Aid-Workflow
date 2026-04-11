@@ -38,27 +38,9 @@ class ChatMessage(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def _get_current_user(authorization: str) -> dict:
-    """Validate bearer token and return user profile."""
-    supabase = get_supabase()
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization[7:]
-    try:
-        user_resp = supabase.auth.get_user(token)
-        user_id = user_resp.user.id
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    profile_resp = (
-        supabase.table("profiles")
-        .select("*")
-        .eq("id", str(user_id))
-        .limit(1)
-        .execute()
-    )
-    if not profile_resp.data:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return profile_resp.data[0]
+    """Validate bearer token and return user profile (auto-creates if missing)."""
+    from routers.cases import get_current_user as _shared_get_current_user
+    return await _shared_get_current_user(authorization)
 
 
 # ---------------------------------------------------------------------------

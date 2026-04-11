@@ -104,3 +104,28 @@ async def root():
 async def health():
     """Railway healthcheck endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/me", tags=["Health"])
+async def whoami(authorization: str = None):
+    """Diagnostic: show what the backend sees for the current auth user."""
+    from fastapi import Header
+    from utils.supabase_client import get_supabase
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"error": "No Authorization header provided"}
+    token = authorization[7:]
+    sb = get_supabase()
+    try:
+        user_resp = sb.auth.get_user(token)
+        user = user_resp.user
+    except Exception as e:
+        return {"error": f"Token invalid: {e}"}
+
+    profile_resp = sb.table("profiles").select("*").eq("id", str(user.id)).execute()
+
+    return {
+        "auth_user_id": str(user.id),
+        "auth_email": user.email,
+        "profile_exists": bool(profile_resp.data),
+        "profile": profile_resp.data[0] if profile_resp.data else None,
+    }

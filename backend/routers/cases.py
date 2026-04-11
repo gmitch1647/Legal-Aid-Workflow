@@ -58,8 +58,9 @@ VALID_AGENTS = {
 async def get_current_user(authorization: str = Header(...)) -> dict:
     """Extract and validate the bearer token, returning the caller's profile.
 
-    The profile dict includes at minimum: id, role, full_name, email.
-    Raises HTTP 401 on any authentication failure.
+    If the user is authenticated but has no profile row yet, one is
+    automatically created. The very first user becomes an attorney;
+    subsequent users default to client.
     """
     supabase = get_supabase()
 
@@ -73,7 +74,9 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
 
     try:
         user_response = supabase.auth.get_user(token)
-        user_id = user_response.user.id
+        auth_user = user_response.user
+        user_id = auth_user.id
+        user_email = getattr(auth_user, "email", None) or ""
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -88,13 +91,38 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
         .execute()
     )
 
-    if not profile_resp.data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Profile not found.",
-        )
+    if profile_resp.data:
+        return profile_resp.data[0]
 
-    return profile_resp.data[0]
+    # Profile doesn't exist — auto-create one.
+    # First user to sign up gets attorney role; everyone else is a client.
+    any_profiles = (
+        supabase.table("profiles")
+        .select("id")
+        .limit(1)
+        .execute()
+    )
+    default_role = "client" if any_profiles.data else "attorney"
+
+    new_profile = {
+        "id": str(user_id),
+        "role": default_role,
+        "full_name": user_email.split("@")[0] if user_email else "User",
+        "email": user_email,
+    }
+
+    try:
+        insert_resp = supabase.table("profiles").insert(new_profile).execute()
+        if insert_resp.data:
+            return insert_resp.data[0]
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to auto-create profile: {e}")
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Profile not found and could not be created.",
+    )
 
 
 def _require_attorney(profile: dict) -> None:

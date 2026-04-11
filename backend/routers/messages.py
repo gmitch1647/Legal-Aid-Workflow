@@ -24,42 +24,9 @@ router = APIRouter()
 
 
 async def _get_current_user(authorization: str) -> dict:
-    """Validate the bearer token and return the user's profile."""
-    supabase = get_supabase()
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header format.",
-        )
-
-    token = authorization[len("Bearer "):]
-
-    try:
-        user_response = supabase.auth.get_user(token)
-        user_id = user_response.user.id
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token.",
-        )
-
-    profile_resp = (
-        supabase.table("profiles")
-        .select("*")
-        .eq("id", str(user_id))
-        .limit(1)
-        .execute()
-    )
-
-    if not profile_resp.data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Profile not found.",
-        )
-
-    return profile_resp.data[0]
-
+    """Delegate to the shared auth helper in cases.py (auto-creates profile)."""
+    from routers.cases import get_current_user as _shared
+    return await _shared(authorization)
 
 def _fetch_case_and_verify(case_id: str, profile: dict) -> dict:
     """Fetch a case and verify the caller is the attorney or the case owner."""
