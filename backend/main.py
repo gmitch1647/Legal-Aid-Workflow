@@ -39,12 +39,29 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS -- allow all origins for development; tighten for production
+# CORS -- allow frontend origins
 # ---------------------------------------------------------------------------
+
+import os
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "").rstrip("/")
+
+# Allowed origins — include the deployed Vercel site and common dev URLs.
+# Note: you cannot combine "*" with allow_credentials=True (browsers reject it),
+# so we use an explicit list that covers production and local development.
+_allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+]
+if FRONTEND_URL:
+    _allowed_origins.append(FRONTEND_URL)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Regex covers any Vercel preview URL + the custom FRONTEND_URL.
+    # If you have a custom domain, add it to FRONTEND_URL env var in Railway.
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?",
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
