@@ -247,6 +247,58 @@ export async function archiveConversation(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Draft (attorney complaint drafting tool)
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a single file to the backend for use in a draft session.
+ * Returns { storage_path, file_name, size }.
+ */
+export async function uploadDraftDocument(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request('/draft/upload', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+/**
+ * Start a new draft session. Triggers the full 7-agent pipeline.
+ * Returns { session_id, status }.
+ */
+export async function startDraft(payload) {
+  return request('/draft/start', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Poll the status of a draft session.
+ */
+export async function getDraftStatus(sessionId) {
+  return request(`/draft/${sessionId}/status`);
+}
+
+/**
+ * Fetch the completed draft result (complaint text + download URLs).
+ */
+export async function getDraftResult(sessionId) {
+  return request(`/draft/${sessionId}/result`);
+}
+
+/**
+ * Save a draft session to an existing client case (or reassign).
+ */
+export async function saveDraftToCase(sessionId, clientId = null) {
+  return request(`/draft/${sessionId}/save`, {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId }),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Auth / Registration
 // ---------------------------------------------------------------------------
 

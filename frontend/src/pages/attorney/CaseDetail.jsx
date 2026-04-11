@@ -576,6 +576,13 @@ export default function CaseDetail() {
             )}
           </div>
         </div>
+        <button
+          onClick={() => navigate('/attorney/draft')}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"
+        >
+          <FileText className="h-4 w-4" />
+          Draft Complaint
+        </button>
       </div>
 
       {/* Error banner */}

@@ -5,17 +5,83 @@ Drafts a complete federal complaint in the Northern District of Georgia
 style using all prior agent outputs (fact sheet, classification, research
 packet, and damages analysis).  Supports revision loops when the QA
 reviewer identifies issues.
+
+Reads `.docx` files from `backend/reference_cases/` at runtime and
+includes condensed excerpts in the system context so the drafter
+matches the exact voice and structure of previously filed complaints.
 """
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import anthropic
 
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Reference cases loader
+# ---------------------------------------------------------------------------
+
+_REFERENCE_CASES_DIR = Path(__file__).resolve().parent.parent / "reference_cases"
+_REFERENCE_CACHE: dict[str, str] | None = None
+_REFERENCE_MAX_CHARS_PER_FILE = 4000
+_REFERENCE_MAX_FILES = 5  # cap how many we include to stay within token budget
+
+
+def _load_reference_cases() -> dict[str, str]:
+    """Load and extract text from all .docx files in reference_cases/.
+
+    Cached in-memory after first call. Returns a mapping of filename
+    to extracted plain text (truncated to _REFERENCE_MAX_CHARS_PER_FILE).
+    """
+    global _REFERENCE_CACHE
+    if _REFERENCE_CACHE is not None:
+        return _REFERENCE_CACHE
+
+    _REFERENCE_CACHE = {}
+    if not _REFERENCE_CASES_DIR.exists():
+        logger.info("reference_cases/ directory not found — skipping")
+        return _REFERENCE_CACHE
+
+    try:
+        from docx import Document as DocxDocument
+    except ImportError:
+        logger.warning("python-docx not available — skipping reference cases")
+        return _REFERENCE_CACHE
+
+    for docx_path in sorted(_REFERENCE_CASES_DIR.glob("*.docx")):
+        try:
+            doc = DocxDocument(str(docx_path))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            if len(text) > _REFERENCE_MAX_CHARS_PER_FILE:
+                text = text[:_REFERENCE_MAX_CHARS_PER_FILE] + "\n[...truncated]"
+            _REFERENCE_CACHE[docx_path.name] = text
+            logger.info(f"Loaded reference case: {docx_path.name}")
+        except Exception as e:
+            logger.warning(f"Could not read reference case {docx_path.name}: {e}")
+
+    return _REFERENCE_CACHE
+
+
+def _build_reference_context(max_files: int = _REFERENCE_MAX_FILES) -> str:
+    """Return a formatted string of reference case excerpts, or empty
+    string if there are no reference files."""
+    cases = _load_reference_cases()
+    if not cases:
+        return ""
+
+    selected = list(cases.items())[:max_files]
+    parts = [
+        "\n\n=== REFERENCE CASES (prior filed complaints — match this style) ==="
+    ]
+    for filename, text in selected:
+        parts.append(f"\n--- {filename} ---\n{text}")
+    return "\n".join(parts)
 
 AGENT_NAME = "complaint_drafter"
 MODEL = "claude-sonnet-4-5"
@@ -186,11 +252,14 @@ async def run(
 
         user_message = "\n".join(user_parts)
 
+        # Append reference case excerpts to the system prompt at runtime
+        system_with_refs = SYSTEM_PROMPT + _build_reference_context()
+
         # ── Call Claude ──────────────────────────────────────────────────
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=system_with_refs,
             messages=[{"role": "user", "content": user_message}],
         )
 
