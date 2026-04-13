@@ -57,14 +57,9 @@ SYSTEM_PROMPT = (
 
 
 def _parse_json_response(text: str) -> dict:
-    """Parse JSON from Claude's response, handling markdown-wrapped JSON."""
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        first_newline = cleaned.index("\n")
-        cleaned = cleaned[first_newline + 1:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
-    return json.loads(cleaned)
+    """Parse JSON from Claude's response with robust error handling."""
+    from utils.json_parser import parse_agent_json
+    return parse_agent_json(text, agent_name=AGENT_NAME)
 
 
 def _update_agent_output(supabase, output_id: str, **fields) -> None:
