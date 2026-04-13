@@ -163,6 +163,97 @@ def _resolve_defendant_id(supabase, defendant: DefendantPayload) -> Optional[str
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# GET /list — list all draft sessions for the attorney
+# ---------------------------------------------------------------------------
+
+
+@router.get("/list")
+async def list_drafts(authorization: str = Header(default=None)):
+    """Return all draft sessions (cases), newest first.
+
+    Returns a list with session_id, plaintiff name (parsed from case_facts),
+    status, latest version, and created_at for each draft.
+    """
+    supabase = get_supabase()
+
+    try:
+        # Fetch all cases (drafts + real cases)
+        cases_resp = (
+            supabase.table("cases")
+            .select("id, status, case_facts, created_at, updated_at, client_id")
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+        cases = cases_resp.data or []
+
+        # Enrich each case with defendant names and the latest complaint version
+        results = []
+        for c in cases:
+            # Extract plaintiff name from case_facts header
+            plaintiff_name = "Untitled Draft"
+            facts = c.get("case_facts", "") or ""
+            if "=== PLAINTIFF ===" in facts:
+                for line in facts.split("\n"):
+                    if line.startswith("Name:"):
+                        plaintiff_name = line.replace("Name:", "").strip() or plaintiff_name
+                        break
+
+            # Get defendants
+            defendants = []
+            try:
+                cd = (
+                    supabase.table("case_defendants")
+                    .select("defendant_id")
+                    .eq("case_id", c["id"])
+                    .execute()
+                )
+                for row in cd.data or []:
+                    d = (
+                        supabase.table("defendants")
+                        .select("name")
+                        .eq("id", row["defendant_id"])
+                        .limit(1)
+                        .execute()
+                    )
+                    if d.data:
+                        defendants.append(d.data[0]["name"])
+            except Exception:
+                pass
+
+            # Get current complaint version
+            version = None
+            try:
+                comp = (
+                    supabase.table("complaints")
+                    .select("version")
+                    .eq("case_id", c["id"])
+                    .eq("is_current", True)
+                    .limit(1)
+                    .execute()
+                )
+                if comp.data:
+                    version = comp.data[0].get("version")
+            except Exception:
+                pass
+
+            results.append({
+                "session_id": c["id"],
+                "plaintiff_name": plaintiff_name,
+                "defendants": defendants,
+                "status": c.get("status"),
+                "version": version,
+                "created_at": c.get("created_at"),
+                "updated_at": c.get("updated_at"),
+            })
+
+        return results
+    except Exception as e:
+        logger.exception("Failed to list drafts")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/start", status_code=status.HTTP_202_ACCEPTED)
 async def start_draft(
     payload: DraftStartPayload,

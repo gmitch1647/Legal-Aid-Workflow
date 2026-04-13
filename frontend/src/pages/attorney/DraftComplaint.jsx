@@ -23,6 +23,7 @@ import {
   getDraftResult,
   reviseDraft,
   downloadDraftDocx,
+  listDrafts,
 } from '../../lib/api';
 
 // ---------------------------------------------------------------------------
@@ -102,8 +103,37 @@ export default function DraftComplaint() {
   const fileInputRef = useRef(null);
   const pollIntervalRef = useRef(null);
 
+  // ── Recent drafts ─────────────────────────────────────────────────────
+  const [recentDrafts, setRecentDrafts] = useState([]);
+  const [showDraftsList, setShowDraftsList] = useState(false);
+
+  async function loadRecentDrafts() {
+    try {
+      const data = await listDrafts();
+      setRecentDrafts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load recent drafts:', err);
+    }
+  }
+
+  async function handleOpenDraft(draft) {
+    setShowDraftsList(false);
+    setSessionId(draft.session_id);
+    setOutputState('running');
+    try {
+      const result = await getDraftResult(draft.session_id);
+      setComplaintResult(result);
+      setOutputState('complete');
+    } catch (err) {
+      console.error('Failed to open draft:', err);
+      setOutputState('idle');
+      alert('Could not open this draft: ' + (err.message || 'Unknown error'));
+    }
+  }
+
   useEffect(() => {
     loadKnownDefendants();
+    loadRecentDrafts();
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
@@ -345,7 +375,14 @@ export default function DraftComplaint() {
             FCRA · FDCPA · TCPA · Georgia & Federal Courts
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          <button
+            onClick={() => { setShowDraftsList(true); loadRecentDrafts(); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+          >
+            <FileText className="w-4 h-4" />
+            Recent Drafts ({recentDrafts.length})
+          </button>
           <span className="px-2.5 py-1 rounded-md text-xs font-semibold uppercase tracking-wide" style={{ background: '#E1F5EE', color: '#085041' }}>
             FCRA
           </span>
@@ -357,6 +394,74 @@ export default function DraftComplaint() {
           </span>
         </div>
       </div>
+
+      {/* Recent Drafts Modal */}
+      {showDraftsList && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">Recent Drafts</h2>
+              <button
+                onClick={() => setShowDraftsList(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-2">
+              {recentDrafts.length === 0 ? (
+                <div className="text-center py-12 text-slate-400 text-sm">
+                  No drafts yet. Create your first complaint below.
+                </div>
+              ) : (
+                recentDrafts.map((draft) => (
+                  <button
+                    key={draft.session_id}
+                    onClick={() => handleOpenDraft(draft)}
+                    className="w-full text-left p-3 rounded-lg hover:bg-slate-50 border-b border-slate-100 transition"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-sm text-slate-900 truncate">
+                          {draft.plaintiff_name}
+                          {draft.defendants && draft.defendants.length > 0 && (
+                            <span className="font-normal text-slate-500">
+                              {' '}v. {draft.defendants.slice(0, 3).join(', ')}
+                              {draft.defendants.length > 3 ? ` +${draft.defendants.length - 3}` : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 flex items-center gap-3">
+                          <span>
+                            {draft.created_at
+                              ? new Date(draft.created_at).toLocaleDateString('en-US', {
+                                  month: 'short', day: 'numeric', year: 'numeric',
+                                  hour: 'numeric', minute: '2-digit',
+                                })
+                              : ''}
+                          </span>
+                          {draft.version && <span>· v{draft.version}</span>}
+                        </div>
+                      </div>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase ${
+                          draft.status === 'draft_ready' ? 'bg-amber-100 text-amber-700' :
+                          draft.status === 'approved' || draft.status === 'filed' ? 'bg-green-100 text-green-700' :
+                          draft.status === 'error' ? 'bg-red-100 text-red-700' :
+                          draft.status === 'agents_processing' ? 'bg-blue-100 text-blue-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {draft.status?.replace(/_/g, ' ') || 'draft'}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[55%_45%] gap-5">
         {/* ═════════════ LEFT COLUMN — FORM ═════════════ */}

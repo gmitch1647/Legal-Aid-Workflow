@@ -275,6 +275,13 @@ export async function startDraft(payload) {
 }
 
 /**
+ * List all draft sessions.
+ */
+export async function listDrafts() {
+  return request('/draft/list');
+}
+
+/**
  * Poll the status of a draft session.
  */
 export async function getDraftStatus(sessionId) {
