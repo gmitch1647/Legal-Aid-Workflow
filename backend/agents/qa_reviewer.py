@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 AGENT_NAME = "qa_reviewer"
 MODEL = "claude-haiku-4-5"
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
     "You are a quality assurance reviewer for legal complaints. Review the "

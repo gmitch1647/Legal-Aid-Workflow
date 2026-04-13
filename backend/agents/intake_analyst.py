@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 AGENT_NAME = "intake_analyst"
 MODEL = "claude-haiku-4-5"
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
     "You are a legal intake analyst specializing in consumer protection law. "
@@ -29,22 +29,42 @@ SYSTEM_PROMPT = (
     "responses were received, key violation dates), account numbers and account "
     "details, specific violations described, any forbearance or administrative "
     "protection covering the relevant period, prior dispute history, and any "
-    "damages described by the client. Return a structured JSON fact sheet."
+    "damages described by the client. Return a structured JSON fact sheet. "
+    "IMPORTANT: Keep your response concise. Use short values, not long paragraphs. "
+    "Ensure the JSON is complete and properly closed."
 )
 
 
 def _parse_json_response(text: str) -> dict:
-    """Parse JSON from Claude's response, handling markdown-wrapped JSON."""
+    """Parse JSON from Claude's response, handling markdown-wrapped JSON
+    and truncated output."""
     cleaned = text.strip()
     # Handle markdown code blocks
     if cleaned.startswith("```"):
-        # Remove opening fence (with optional language tag)
         first_newline = cleaned.index("\n")
-        cleaned = cleaned[first_newline + 1 :]
-        # Remove closing fence
+        cleaned = cleaned[first_newline + 1:]
         if cleaned.endswith("```"):
-            cleaned = cleaned[: -3].strip()
-    return json.loads(cleaned)
+            cleaned = cleaned[:-3].strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Response was likely truncated — try to salvage by closing open braces
+        salvaged = cleaned
+        open_braces = salvaged.count("{") - salvaged.count("}")
+        open_brackets = salvaged.count("[") - salvaged.count("]")
+        # Trim to last complete value (find last comma or colon+value)
+        if salvaged and salvaged[-1] not in "]}\"0123456789truefalsn":
+            last_good = max(salvaged.rfind(","), salvaged.rfind("}"), salvaged.rfind("]"))
+            if last_good > 0:
+                salvaged = salvaged[:last_good]
+        salvaged += "]" * max(0, open_brackets) + "}" * max(0, open_braces)
+        try:
+            return json.loads(salvaged)
+        except json.JSONDecodeError:
+            # Last resort: return raw text as a fact sheet
+            logger.warning("Could not parse intake analyst JSON — returning raw text")
+            return {"raw_facts": text.strip(), "parse_error": True}
 
 
 def _update_agent_output(supabase, output_id: str, **fields) -> None:

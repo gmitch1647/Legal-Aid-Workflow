@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 AGENT_NAME = "case_classifier"
 MODEL = "claude-haiku-4-5"
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
     "You are a consumer protection law case classifier. Based on the fact sheet "

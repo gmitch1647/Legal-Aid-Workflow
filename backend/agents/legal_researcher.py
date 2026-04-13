@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 AGENT_NAME = "legal_researcher"
 MODEL = "claude-sonnet-4-5"
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
     "You are a legal researcher specializing in consumer protection litigation. "
