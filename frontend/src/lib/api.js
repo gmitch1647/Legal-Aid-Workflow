@@ -300,6 +300,26 @@ export async function reviseDraft(sessionId, message, complaintText) {
 }
 
 /**
+ * Download the current complaint as a formatted Word document.
+ * Returns a Blob that can be saved via URL.createObjectURL.
+ */
+export async function downloadDraftDocx(sessionId) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/draft/${sessionId}/download`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    let detail = 'Download failed';
+    try {
+      const body = await response.json();
+      detail = body.detail || detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return response.blob();
+}
+
+/**
  * Save a draft session to an existing client case (or reassign).
  */
 export async function saveDraftToCase(sessionId, clientId = null) {

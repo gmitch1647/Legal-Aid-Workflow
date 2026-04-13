@@ -598,6 +598,150 @@ async def save_draft_to_case(
 
 
 # ---------------------------------------------------------------------------
+# GET /{session_id}/download — generate and download a formatted .docx
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{session_id}/download")
+async def download_complaint_docx(
+    session_id: str,
+    authorization: str = Header(...),
+):
+    """Generate a properly formatted Word document from the current
+    complaint text and return it as a downloadable file.
+
+    Format: Times New Roman 12pt, double line spacing (2.0),
+    1-inch margins, US Letter page size.
+    """
+    import io
+    import tempfile
+
+    from fastapi.responses import StreamingResponse
+
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    # Fetch current complaint text
+    complaint_resp = (
+        supabase.table("complaints")
+        .select("complaint_text, version")
+        .eq("case_id", session_id)
+        .eq("is_current", True)
+        .limit(1)
+        .execute()
+    )
+    if not complaint_resp.data:
+        raise HTTPException(status_code=404, detail="No complaint found for this session.")
+
+    complaint_text = complaint_resp.data[0].get("complaint_text", "")
+    version = complaint_resp.data[0].get("version", 1)
+
+    if not complaint_text.strip():
+        raise HTTPException(status_code=400, detail="Complaint text is empty.")
+
+    # Generate the Word document
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+
+        doc = Document()
+
+        # Page setup — US Letter, 1-inch margins
+        for section in doc.sections:
+            section.top_margin = Inches(1)
+            section.bottom_margin = Inches(1)
+            section.left_margin = Inches(1)
+            section.right_margin = Inches(1)
+            section.page_width = Inches(8.5)
+            section.page_height = Inches(11)
+
+        # Default style — Times New Roman 12pt, double spacing
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = "Times New Roman"
+        font.size = Pt(12)
+        pf = style.paragraph_format
+        pf.line_spacing_rule = WD_LINE_SPACING.DOUBLE
+        pf.space_before = Pt(0)
+        pf.space_after = Pt(0)
+
+        # Parse complaint text into paragraphs and apply formatting
+        lines = complaint_text.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                # Empty line — add a blank paragraph
+                doc.add_paragraph("")
+                continue
+
+            p = doc.add_paragraph()
+            p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
+
+            # Detect headers and center/bold them
+            upper = stripped.upper()
+            is_header = (
+                stripped == upper
+                and len(stripped) > 3
+                and not stripped[0].isdigit()
+                and any(kw in upper for kw in [
+                    "INTRODUCTION", "JURISDICTION", "PARTIES",
+                    "FACTUAL ALLEGATIONS", "PRAYER", "RELIEF",
+                    "TRIAL BY JURY", "COUNT", "VIOLATION",
+                    "FINDINGS", "SIGNATURE",
+                ])
+            )
+
+            is_count_header = upper.startswith("COUNT ") or "VIOLATION OF" in upper
+
+            if is_header or is_count_header:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p.add_run(stripped)
+                run.bold = True
+                run.font.name = "Times New Roman"
+                run.font.size = Pt(12)
+            elif stripped == "TRIAL BY JURY IS DEMANDED":
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p.add_run(stripped)
+                run.bold = True
+                run.font.name = "Times New Roman"
+                run.font.size = Pt(12)
+            else:
+                run = p.add_run(stripped)
+                run.font.name = "Times New Roman"
+                run.font.size = Pt(12)
+
+        # Save to bytes
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+
+        filename = f"complaint_v{version}.docx"
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="python-docx is not installed on the server.",
+        )
+    except Exception as e:
+        logger.exception(f"Failed to generate DOCX for session {session_id}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Document generation failed: {type(e).__name__}: {e}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # POST /reindex — rebuild the reference_chunks table from backend/reference_cases/
 # ---------------------------------------------------------------------------
 

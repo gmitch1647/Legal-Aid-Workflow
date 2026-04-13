@@ -22,6 +22,7 @@ import {
   getDraftStatus,
   getDraftResult,
   reviseDraft,
+  downloadDraftDocx,
 } from '../../lib/api';
 
 // ---------------------------------------------------------------------------
@@ -824,16 +825,7 @@ function OutputPanel({
                 Draft Complete {complaintResult.version > 1 ? `(v${complaintResult.version})` : ''}
               </span>
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => onDownload(complaintResult.complaint_docx_url)}
-                disabled={!complaintResult.complaint_docx_url}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition"
-                style={{ background: '#1D9E75' }}
-              >
-                <Download className="w-3.5 h-3.5" /> Complaint .docx
-              </button>
-            </div>
+            <DownloadDocxButton sessionId={sessionId} version={complaintResult.version} />
           </div>
 
           <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[500px] overflow-y-auto mb-4">
@@ -973,6 +965,54 @@ function AgentRow({ number, display, desc, status, elapsed, logMessages }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Download .docx button — generates formatted Word doc from current complaint
+// ---------------------------------------------------------------------------
+
+function DownloadDocxButton({ sessionId, version }) {
+  const [downloading, setDownloading] = useState(false);
+
+  async function handleDownload() {
+    if (!sessionId || downloading) return;
+    setDownloading(true);
+    try {
+      const blob = await downloadDraftDocx(sessionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `complaint_v${version || 1}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+      alert('Download failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleDownload}
+      disabled={downloading}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg text-xs font-medium transition disabled:opacity-60"
+      style={{ background: '#1D9E75' }}
+    >
+      {downloading ? (
+        <>
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...
+        </>
+      ) : (
+        <>
+          <Download className="w-3.5 h-3.5" /> Download .docx
+        </>
+      )}
+    </button>
   );
 }
 
