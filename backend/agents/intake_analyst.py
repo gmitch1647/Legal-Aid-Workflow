@@ -111,7 +111,7 @@ async def run(case_id: str, case_data: dict) -> dict:
     try:
         # ── Gather document text ─────────────────────────────────────────
         docs_response = (
-            supabase.table("documents")
+            supabase.table("case_documents")
             .select("file_name, file_type, storage_path")
             .eq("case_id", case_id)
             .execute()
