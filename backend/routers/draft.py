@@ -165,7 +165,6 @@ def _resolve_defendant_id(supabase, defendant: DefendantPayload) -> Optional[str
 @router.post("/start", status_code=status.HTTP_202_ACCEPTED)
 async def start_draft(
     payload: DraftStartPayload,
-    background_tasks: BackgroundTasks,
     authorization: str = Header(...),
 ):
     """Create a draft case record and launch the agent pipeline."""
@@ -228,10 +227,29 @@ async def start_draft(
         except Exception as e:
             logger.warning(f"Could not attach document {doc_url}: {e}")
 
-    # Launch the pipeline in a background task
-    from agents.orchestrator import run_pipeline
+    # Launch the pipeline as an asyncio task so it runs in the
+    # background without blocking the response.  We wrap it in a
+    # _safe_run helper so that any exception is caught and logged
+    # (asyncio.create_task swallows exceptions silently otherwise).
+    async def _safe_pipeline(cid: str) -> None:
+        try:
+            logger.info(f"Pipeline background task starting for case {cid}")
+            from agents.orchestrator import run_pipeline
+            await run_pipeline(cid)
+            logger.info(f"Pipeline background task finished for case {cid}")
+        except Exception as e:
+            logger.exception(f"Pipeline background task CRASHED for case {cid}: {e}")
+            # Try to mark the case as errored
+            try:
+                sb = get_supabase()
+                sb.table("cases").update({
+                    "status": "error",
+                    "revision_notes": f"PIPELINE ERROR: {type(e).__name__}: {e}",
+                }).eq("id", cid).execute()
+            except Exception:
+                pass
 
-    background_tasks.add_task(run_pipeline, case_id)
+    asyncio.create_task(_safe_pipeline(case_id))
 
     logger.info(f"Draft session started for case {case_id} by {profile.get('email')}")
 

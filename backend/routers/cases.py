@@ -436,7 +436,6 @@ async def update_case_status(
 @router.post("/{case_id}/approve-for-processing")
 async def approve_for_processing(
     case_id: str,
-    background_tasks: BackgroundTasks,
     authorization: str = Header(...),
 ):
     """Attorney approves a submitted case for AI agent processing.
@@ -444,6 +443,8 @@ async def approve_for_processing(
     Sets status to ``approved_for_processing`` and launches the agent
     pipeline in a background task.
     """
+    import asyncio
+
     profile = await get_current_user(authorization)
     _require_attorney(profile)
     case = _fetch_case(case_id)
@@ -456,10 +457,23 @@ async def approve_for_processing(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", case_id).execute()
 
-    # Launch pipeline in background
-    from agents.orchestrator import run_pipeline
+    # Launch pipeline as asyncio task
+    async def _safe_pipeline(cid: str) -> None:
+        try:
+            from agents.orchestrator import run_pipeline
+            await run_pipeline(cid)
+        except Exception as e:
+            logger.exception(f"Pipeline crashed for case {cid}: {e}")
+            try:
+                sb = get_supabase()
+                sb.table("cases").update({
+                    "status": "error",
+                    "revision_notes": f"PIPELINE ERROR: {type(e).__name__}: {e}",
+                }).eq("id", cid).execute()
+            except Exception:
+                pass
 
-    background_tasks.add_task(run_pipeline, case_id)
+    asyncio.create_task(_safe_pipeline(case_id))
 
     return {
         "message": "Case approved for processing. Agent pipeline started.",
