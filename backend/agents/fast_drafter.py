@@ -28,7 +28,43 @@ DRAFTING_MODEL = "claude-haiku-4-5"  # Haiku for speed (~8s); revision chat uses
 # Call 1 — Analysis (Haiku)
 # ---------------------------------------------------------------------------
 
-ANALYSIS_PROMPT = """You are a consumer protection law analyst. Analyze the case facts below and return a SINGLE JSON object with this exact structure. Be thorough but concise.
+ANALYSIS_PROMPT = """You are a consumer protection law analyst specializing in FCRA, FDCPA, and TCPA cases filed in the Northern District of Georgia.
+
+CRITICAL — USE ONLY THESE STATUTES FOR COUNTS:
+
+FOR CRA DEFENDANTS (Equifax, Experian, TransUnion, Chex Systems):
+- 15 U.S.C. § 1681e(b) — failure to follow reasonable procedures for maximum accuracy
+- 15 U.S.C. § 1681i(a)(1)(A) — failure to conduct reasonable reinvestigation after dispute
+- 15 U.S.C. § 1681i(a)(2)(A) — failure to forward all relevant dispute info to furnisher
+- 15 U.S.C. § 1681i(a)(4) — failure to review all relevant information submitted by consumer
+- 15 U.S.C. § 1681i(a)(5)(A) — failure to promptly delete inaccurate information after reinvestigation
+- 15 U.S.C. § 1681i(a)(5)(B)(i)(ii)(iii) and (C) — reinsertion of deleted info without certification, notice, or procedures (ONLY when CRA reinserted previously deleted info)
+- 15 U.S.C. § 1681g — failure to provide full file disclosure (ONLY if consumer requested file and was denied)
+- 15 U.S.C. § 1681i(c) — failure to add consumer statement (ONLY if consumer asked to add statement)
+
+FOR FURNISHER DEFENDANTS (ED Financial, Truist, debt servicers):
+- 15 U.S.C. § 1681s-2(b) — failure to investigate after receiving notice of dispute from CRA
+  (NEVER use §1681s-2(a) — there is no private right of action under (a))
+
+FOR DEBT COLLECTOR DEFENDANTS (Midland, LVNV, Portfolio Recovery):
+- 15 U.S.C. § 1692c(c) — failure to cease communication after written request
+- 15 U.S.C. § 1692e — false, deceptive, or misleading representations
+- 15 U.S.C. § 1692f — unfair practices
+- 15 U.S.C. § 1692g — failure to validate debt
+
+FOR TCPA:
+- 47 U.S.C. § 227(b)(1)(A)(iii) — autodialer calls to cell phone
+- 47 U.S.C. § 227(b)(1)(B) — prerecorded message calls
+- 47 U.S.C. § 227(c) — do-not-call violations
+
+GEORGIA STATE:
+- O.C.G.A. § 10-1-390 et seq. — Georgia Fair Business Practices Act (ONLY when conduct is willful or deceptive)
+  (NEVER cite O.C.G.A. § 34-6-2 — that is a different statute)
+
+CONDENSED COUNTS: If multiple defendants committed the same violation, combine them into ONE count.
+Example: §1681e(b) violated by Equifax, Experian, and TransUnion = ONE count naming all three.
+
+Analyze the case facts below and return a SINGLE JSON object with this structure:
 
 {
   "plaintiff": {
@@ -48,20 +84,19 @@ ANALYSIS_PROMPT = """You are a consumer protection law analyst. Analyze the case
   "court": "recommended court with full name",
   "statutes_violated": [
     {
-      "statute": "e.g. 15 U.S.C. § 1681e(b)",
+      "statute": "exact statute from the list above",
       "short_name": "e.g. FCRA §1681e(b)",
       "violation": "what the defendant did",
       "defendants": ["which defendants violated this"],
-      "willful": true or false
+      "willful": true
     }
   ],
   "count_structure": [
     {
       "count_number": "I",
-      "title": "Violation of FCRA 15 U.S.C. § 1681e(b)",
+      "title": "Violation of the Fair Credit Reporting Act",
       "statute": "15 U.S.C. § 1681e(b)",
-      "defendants": ["Equifax", "Experian"],
-      "elements": ["what must be proved"],
+      "defendants": ["Equifax", "Experian", "TransUnion"],
       "willful": true
     }
   ],
@@ -73,18 +108,18 @@ ANALYSIS_PROMPT = """You are a consumer protection law analyst. Analyze the case
     "statutory": "statutory damages description",
     "punitive": "punitive damages if willful",
     "attorney_fees": true,
-    "ga_fbpa_treble": true or false
+    "ga_fbpa_treble": true
   },
   "key_dates": [
-    {"date": "YYYY-MM-DD or description", "event": "what happened"}
+    {"date": "description", "event": "what happened"}
   ],
   "jury_demand": true
 }
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no explanation, no text before or after the JSON."""
+IMPORTANT: Return ONLY valid JSON. No markdown, no explanation. Use ONLY statutes from the list above — never invent or guess statute numbers."""
 
 # ---------------------------------------------------------------------------
-# Call 2 — Drafting (Sonnet)
+# Call 2 — Drafting
 # ---------------------------------------------------------------------------
 
 DRAFTING_PROMPT = """\
