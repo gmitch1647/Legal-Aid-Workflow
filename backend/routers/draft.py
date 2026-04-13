@@ -685,3 +685,145 @@ async def reindex_status(authorization: str = Header(...)):
         "total_chunks": count_indexed_chunks(supabase),
         "missing_from_index": [f for f in disk_files if f not in indexed_files],
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /{session_id}/revise — chat-style revision of a drafted complaint
+# ---------------------------------------------------------------------------
+
+
+class RevisePayload(BaseModel):
+    message: str
+    complaint_text: str  # the current complaint text to revise
+
+
+@router.post("/{session_id}/revise")
+async def revise_draft(
+    session_id: str,
+    payload: RevisePayload,
+    authorization: str = Header(...),
+):
+    """Send a revision instruction and get back the updated complaint.
+
+    The attorney types something like 'add a count for §1681g failure
+    to provide file disclosure' and receives the full revised complaint
+    text in response. Maintains conversation history per session so
+    multi-turn revision is supported.
+    """
+    import anthropic
+
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+    client = anthropic.Anthropic()
+
+    # Load revision history for this session (stored in a simple jsonb column)
+    case_resp = (
+        supabase.table("cases")
+        .select("revision_notes")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    existing_notes = ""
+    if case_resp.data:
+        existing_notes = case_resp.data[0].get("revision_notes") or ""
+
+    # Build conversation-style messages for the revision
+    system_prompt = (
+        "You are a legal complaint revision assistant. The attorney has drafted "
+        "a federal complaint and wants to make changes. You will receive the "
+        "current complaint text and the attorney's revision instructions.\n\n"
+        "RULES:\n"
+        "- Return the COMPLETE revised complaint text, not just the changed parts\n"
+        "- Maintain all existing formatting, paragraph numbering, and structure\n"
+        "- If the attorney asks to add a count, insert it in proper sequence and "
+        "renumber all subsequent paragraphs\n"
+        "- If the attorney asks to change language, make the change precisely\n"
+        "- Keep all standard damages language and willful/negligent closings intact\n"
+        "- If the instruction is a question (not a revision), answer it briefly "
+        "then include the unchanged complaint text\n"
+        "- Always return the full complaint text at the end of your response\n\n"
+        "Format your response as:\n"
+        "CHANGES MADE:\n"
+        "- [bullet list of what you changed]\n\n"
+        "REVISED COMPLAINT:\n"
+        "[full complaint text here]"
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Here is the current complaint:\n\n"
+                f"---BEGIN COMPLAINT---\n{payload.complaint_text}\n---END COMPLAINT---\n\n"
+                f"Attorney's instruction: {payload.message}"
+            ),
+        }
+    ]
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=16384,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=messages,
+        )
+
+        assistant_text = response.content[0].text
+
+        # Try to extract the revised complaint from the response
+        revised_complaint = assistant_text
+        if "REVISED COMPLAINT:" in assistant_text:
+            parts = assistant_text.split("REVISED COMPLAINT:", 1)
+            changes_summary = parts[0].strip()
+            revised_complaint = parts[1].strip()
+        elif "---BEGIN COMPLAINT---" in assistant_text:
+            start = assistant_text.index("---BEGIN COMPLAINT---") + len("---BEGIN COMPLAINT---")
+            end = assistant_text.index("---END COMPLAINT---") if "---END COMPLAINT---" in assistant_text else len(assistant_text)
+            revised_complaint = assistant_text[start:end].strip()
+            changes_summary = assistant_text[:assistant_text.index("---BEGIN COMPLAINT---")].strip()
+        else:
+            changes_summary = ""
+
+        # Save the revised complaint as a new version
+        version_query = (
+            supabase.table("complaints")
+            .select("version")
+            .eq("case_id", session_id)
+            .order("version", desc=True)
+            .limit(1)
+            .execute()
+        )
+        next_version = 1
+        if version_query.data:
+            next_version = version_query.data[0]["version"] + 1
+            supabase.table("complaints").update(
+                {"is_current": False}
+            ).eq("case_id", session_id).execute()
+
+        supabase.table("complaints").insert({
+            "case_id": session_id,
+            "complaint_text": revised_complaint,
+            "version": next_version,
+            "is_current": True,
+        }).execute()
+
+        return {
+            "revised_complaint": revised_complaint,
+            "changes_summary": changes_summary,
+            "version": next_version,
+            "full_response": assistant_text,
+        }
+
+    except Exception as e:
+        logger.exception(f"Revision failed for session {session_id}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Revision failed: {type(e).__name__}: {e}",
+        )

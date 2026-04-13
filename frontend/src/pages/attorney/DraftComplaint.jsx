@@ -21,6 +21,7 @@ import {
   startDraft,
   getDraftStatus,
   getDraftResult,
+  reviseDraft,
 } from '../../lib/api';
 
 // ---------------------------------------------------------------------------
@@ -614,6 +615,7 @@ export default function DraftComplaint() {
         <div className="lg:sticky lg:top-4 lg:h-fit">
           <OutputPanel
             state={outputState}
+            sessionId={sessionId}
             pipelineStatus={pipelineStatus}
             complaintResult={complaintResult}
             pipelineError={pipelineError}
@@ -621,6 +623,13 @@ export default function DraftComplaint() {
             onStartOver={handleStartOver}
             onCopyText={handleCopyText}
             onDownload={handleDownload}
+            onComplaintUpdate={(newText, version) => {
+              setComplaintResult((prev) => ({
+                ...prev,
+                complaint_text: newText,
+                version,
+              }));
+            }}
           />
         </div>
       </div>
@@ -762,6 +771,7 @@ function DefendantCard({ defendant, knownDefendants, canRemove, onSelectKnown, o
 
 function OutputPanel({
   state,
+  sessionId,
   pipelineStatus,
   complaintResult,
   pipelineError,
@@ -769,6 +779,7 @@ function OutputPanel({
   onStartOver,
   onCopyText,
   onDownload,
+  onComplaintUpdate,
 }) {
   if (state === 'error') {
     return (
@@ -804,74 +815,56 @@ function OutputPanel({
 
   if (state === 'complete' && complaintResult) {
     return (
-      <Card>
-        <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-            <span className="font-semibold text-emerald-700">Draft Complete</span>
+      <div className="space-y-4">
+        <Card>
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              <span className="font-semibold text-emerald-700">
+                Draft Complete {complaintResult.version > 1 ? `(v${complaintResult.version})` : ''}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onDownload(complaintResult.complaint_docx_url)}
+                disabled={!complaintResult.complaint_docx_url}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition"
+                style={{ background: '#1D9E75' }}
+              >
+                <Download className="w-3.5 h-3.5" /> Complaint .docx
+              </button>
+            </div>
           </div>
+
+          <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[500px] overflow-y-auto mb-4">
+            <pre className="text-xs text-slate-800 whitespace-pre-wrap font-serif leading-relaxed">
+              {complaintResult.complaint_text}
+            </pre>
+          </div>
+
           <div className="flex gap-2">
             <button
-              onClick={() => onDownload(complaintResult.complaint_docx_url)}
-              disabled={!complaintResult.complaint_docx_url}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition"
-              style={{ background: '#1D9E75' }}
+              onClick={onCopyText}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 transition"
             >
-              <Download className="w-3.5 h-3.5" /> Complaint .docx
+              <Copy className="w-3.5 h-3.5" /> Copy Text
             </button>
             <button
-              onClick={() => onDownload(complaintResult.strategy_memo_url)}
-              disabled={!complaintResult.strategy_memo_url}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 disabled:opacity-50 transition"
+              onClick={onStartOver}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 transition"
             >
-              <Download className="w-3.5 h-3.5" /> Strategy Memo
+              <RefreshCw className="w-3.5 h-3.5" /> New Draft
             </button>
           </div>
-        </div>
+        </Card>
 
-        <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[600px] overflow-y-auto mb-4">
-          <pre className="text-xs text-slate-800 whitespace-pre-wrap font-serif leading-relaxed">
-            {complaintResult.complaint_text}
-          </pre>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            onClick={onCopyText}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 transition"
-          >
-            <Copy className="w-3.5 h-3.5" /> Copy Text
-          </button>
-          <button
-            onClick={onStartOver}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 transition"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> New Draft
-          </button>
-        </div>
-
-        {complaintResult.case_summary && (
-          <div className="mt-4 pt-4 border-t border-slate-200">
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-              Case Summary
-            </div>
-            <dl className="text-xs text-slate-600 space-y-1">
-              {complaintResult.case_summary.defendants?.length > 0 && (
-                <div>
-                  <dt className="inline font-medium text-slate-700">Defendants: </dt>
-                  <dd className="inline">{complaintResult.case_summary.defendants.join(', ')}</dd>
-                </div>
-              )}
-              {complaintResult.case_summary.damages_potential && (
-                <div>
-                  <dt className="inline font-medium text-slate-700">Damages: </dt>
-                  <dd className="inline">{complaintResult.case_summary.damages_potential}</dd>
-                </div>
-              )}
-            </dl>
-          </div>
-        )}
-      </Card>
+        {/* Revision Chat */}
+        <RevisionChat
+          sessionId={sessionId}
+          complaintText={complaintResult.complaint_text}
+          onComplaintUpdate={onComplaintUpdate}
+        />
+      </div>
     );
   }
 
@@ -980,5 +973,140 @@ function AgentRow({ number, display, desc, status, elapsed, logMessages }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Revision Chat — inline chat for iterating on the drafted complaint
+// ---------------------------------------------------------------------------
+
+function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  async function handleSend() {
+    if (!input.trim() || sending) return;
+
+    const userMsg = input.trim();
+    setInput('');
+    setSending(true);
+
+    setMessages((prev) => [...prev, { role: 'user', content: userMsg }]);
+
+    try {
+      const result = await reviseDraft(sessionId, userMsg, complaintText);
+
+      const assistantMsg = result.changes_summary
+        ? `${result.changes_summary}\n\n✅ Complaint updated to v${result.version}`
+        : `✅ Complaint revised (v${result.version})`;
+
+      setMessages((prev) => [...prev, { role: 'assistant', content: assistantMsg }]);
+
+      if (result.revised_complaint && onComplaintUpdate) {
+        onComplaintUpdate(result.revised_complaint, result.version);
+      }
+    } catch (err) {
+      console.error('Revision failed:', err);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `Error: ${err.message || 'Revision failed. Try again.'}` },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center gap-2 mb-3">
+        <Sparkles className="w-4 h-4 text-purple-500" />
+        <span className="text-sm font-semibold text-slate-900">Revision Chat</span>
+        <span className="text-[10px] text-slate-400 ml-1">Ask for changes to the draft</span>
+      </div>
+
+      {messages.length === 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {[
+            'Add a count for §1681g failure to provide file disclosure',
+            'Strengthen the damages language',
+            'Add Georgia FBPA count',
+            'Change the court to Middle District of Georgia',
+            'Add more factual detail about the dispute timeline',
+          ].map((suggestion) => (
+            <button
+              key={suggestion}
+              onClick={() => setInput(suggestion)}
+              className="px-2.5 py-1 bg-slate-100 rounded-full text-[11px] text-slate-600 hover:bg-slate-200 transition truncate max-w-[280px]"
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {messages.length > 0 && (
+        <div className="max-h-[300px] overflow-y-auto mb-3 space-y-2">
+          {messages.map((msg, i) => (
+            <div
+              key={i}
+              className={`rounded-lg px-3 py-2 text-xs ${
+                msg.role === 'user'
+                  ? 'bg-blue-50 text-blue-900 ml-8'
+                  : 'bg-slate-50 text-slate-800 mr-8 border border-slate-200'
+              }`}
+            >
+              <div className="font-semibold text-[10px] uppercase tracking-wide mb-0.5 opacity-60">
+                {msg.role === 'user' ? 'You' : 'Drafter'}
+              </div>
+              <div className="whitespace-pre-wrap">{msg.content}</div>
+            </div>
+          ))}
+
+          {sending && (
+            <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs mr-8">
+              <div className="flex items-center gap-2 text-slate-500">
+                <Loader2 className="w-3 h-3 animate-spin" /> Revising complaint...
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      )}
+
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Tell the drafter what to change... (Enter to send)"
+          rows={2}
+          disabled={sending}
+          className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:opacity-60"
+        />
+        <button
+          onClick={handleSend}
+          disabled={!input.trim() || sending}
+          className="shrink-0 bg-purple-600 text-white p-2.5 rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      </div>
+    </Card>
   );
 }

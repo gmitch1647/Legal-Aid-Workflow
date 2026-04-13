@@ -289,6 +289,17 @@ export async function getDraftResult(sessionId) {
 }
 
 /**
+ * Send a revision instruction for a drafted complaint.
+ * Returns { revised_complaint, changes_summary, version }.
+ */
+export async function reviseDraft(sessionId, message, complaintText) {
+  return request(`/draft/${sessionId}/revise`, {
+    method: 'POST',
+    body: JSON.stringify({ message, complaint_text: complaintText }),
+  });
+}
+
+/**
  * Save a draft session to an existing client case (or reassign).
  */
 export async function saveDraftToCase(sessionId, clientId = null) {
