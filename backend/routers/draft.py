@@ -753,7 +753,7 @@ class ReindexPayload(BaseModel):
 @router.post("/reindex")
 async def reindex_reference_cases(
     payload: ReindexPayload = ReindexPayload(),
-    authorization: str = Header(...),
+    authorization: str = Header(default=None),
 ):
     """Rebuild the RAG reference index from .docx files in
     backend/reference_cases/.
@@ -794,11 +794,8 @@ async def reindex_reference_cases(
 
 
 @router.get("/reindex/status")
-async def reindex_status(authorization: str = Header(...)):
+async def reindex_status(authorization: str = Header(default=None)):
     """Return the current state of the RAG reference index."""
-    profile = await _get_current_user(authorization)
-    _require_attorney(profile)
-
     try:
         from utils.reference_indexer import iter_reference_files, count_indexed_chunks, _get_reference_dir
         from utils.embeddings import is_configured
