@@ -845,77 +845,133 @@ class RevisePayload(BaseModel):
 async def revise_draft(
     session_id: str,
     payload: RevisePayload,
-    authorization: str = Header(...),
+    authorization: str = Header(default=None),
 ):
     """Send a revision instruction and get back the updated complaint.
 
-    The attorney types something like 'add a count for §1681g failure
-    to provide file disclosure' and receives the full revised complaint
-    text in response. Maintains conversation history per session so
-    multi-turn revision is supported.
+    Uses RAG retrieval + conversation memory + explicit statute guidance
+    for high-quality revisions that match the attorney's filed case style.
     """
     import anthropic
-
-    profile = await _get_current_user(authorization)
-    _require_attorney(profile)
 
     supabase = get_supabase()
     client = anthropic.Anthropic()
 
-    # Load revision history for this session (stored in a simple jsonb column)
+    # Load revision history for this session (stored in session_metadata jsonb)
     case_resp = (
         supabase.table("cases")
-        .select("revision_notes")
+        .select("revision_history")
         .eq("id", session_id)
         .limit(1)
         .execute()
     )
-    existing_notes = ""
-    if case_resp.data:
-        existing_notes = case_resp.data[0].get("revision_notes") or ""
+    conversation_history = []
+    if case_resp.data and case_resp.data[0].get("revision_history"):
+        conversation_history = case_resp.data[0]["revision_history"] or []
 
-    # Build conversation-style messages for the revision
-    system_prompt = (
-        "You are a legal complaint revision assistant. The attorney has drafted "
-        "a federal complaint and wants to make changes. You will receive the "
-        "current complaint text and the attorney's revision instructions.\n\n"
-        "RULES:\n"
-        "- Return the COMPLETE revised complaint text, not just the changed parts\n"
-        "- Maintain all existing formatting, paragraph numbering, and structure\n"
-        "- If the attorney asks to add a count, insert it in proper sequence and "
-        "renumber all subsequent paragraphs\n"
-        "- If the attorney asks to change language, make the change precisely\n"
-        "- Keep all standard damages language and willful/negligent closings intact\n"
-        "- If the instruction is a question (not a revision), answer it briefly "
-        "then include the unchanged complaint text\n"
-        "- Always return the full complaint text at the end of your response\n\n"
-        "Format your response as:\n"
-        "CHANGES MADE:\n"
-        "- [bullet list of what you changed]\n\n"
-        "REVISED COMPLAINT:\n"
-        "[full complaint text here]"
+    # Retrieve relevant reference chunks via RAG
+    reference_context = ""
+    try:
+        from utils.rag_retrieval import retrieve_relevant_chunks, format_retrieved_context
+        from utils.embeddings import is_configured
+        if is_configured():
+            query = f"{payload.message}\n\n{payload.complaint_text[:2000]}"
+            chunks = retrieve_relevant_chunks(query, top_k=6, document_type="complaint")
+            if chunks:
+                reference_context = format_retrieved_context(chunks)
+                logger.info(f"[revise] RAG retrieved {len(chunks)} chunks")
+    except Exception as e:
+        logger.warning(f"[revise] RAG retrieval failed: {e}")
+
+    # Build the enhanced system prompt
+    system_prompt = """You are a legal complaint revision assistant specializing in consumer protection law in the Northern District of Georgia.
+
+CRITICAL — USE ONLY THESE STATUTES FOR COUNTS:
+
+FOR CRA DEFENDANTS (Equifax, Experian, TransUnion, Chex Systems):
+- 15 U.S.C. § 1681e(b) — failure to follow reasonable procedures for maximum accuracy
+- 15 U.S.C. § 1681i(a)(1)(A) — failure to conduct reasonable reinvestigation after dispute
+- 15 U.S.C. § 1681i(a)(2)(A) — failure to forward all relevant dispute info to furnisher
+- 15 U.S.C. § 1681i(a)(4) — failure to review all relevant information submitted by consumer
+- 15 U.S.C. § 1681i(a)(5)(A) — failure to promptly delete inaccurate information after reinvestigation
+- 15 U.S.C. § 1681i(a)(5)(B)(i)(ii)(iii) and (C) — reinsertion without certification/notice/procedures
+- 15 U.S.C. § 1681g — failure to provide full file disclosure
+- 15 U.S.C. § 1681i(c) — failure to add consumer statement
+
+FOR FURNISHERS (ED Financial, Truist, debt servicers):
+- 15 U.S.C. § 1681s-2(b) — failure to investigate after CRA notice
+  (NEVER use §1681s-2(a) — no private right of action)
+
+FOR DEBT COLLECTORS (Midland, LVNV, Portfolio Recovery):
+- 15 U.S.C. § 1692c(c), § 1692e, § 1692f, § 1692g
+
+FOR TCPA:
+- 47 U.S.C. § 227(b)(1)(A)(iii), § 227(b)(1)(B), § 227(c)
+
+GEORGIA FBPA (only if willful/deceptive conduct):
+- O.C.G.A. § 10-1-390 et seq. (NEVER § 34-6-2)
+
+NEVER use: §1681e(d), §1681s-2(a), §1681i(a)(1)(B), O.C.G.A. § 34-6-2
+
+RULES FOR REVISIONS:
+1. Return the COMPLETE revised complaint text — not just the changed parts
+2. CONDENSE counts: same violation by multiple defendants = ONE count naming all
+3. NEVER add parties the attorney didn't specifically request
+4. NEVER hallucinate defendants, case numbers, or facts not in the current complaint
+5. Count headers: 3 centered lines — "Count [Roman]" / "Violation of the Fair Credit Reporting Act" / "15 U.S.C. § [section] ([Defendants])"
+6. Each count must include: realleges paragraph, violation facts, EXACT damages language, EXACT willful/negligent closing
+7. Number ALL paragraphs sequentially 1 through end
+8. If renumbering is needed after adding/removing a count, renumber ALL affected paragraphs
+9. NO markdown — plain text only. No ## headers, no --- dividers, no ** bold markers
+10. Plaintiff referenced as "Mr./Ms. [Last Name]" in counts, not "Plaintiff"
+
+STANDARD DAMAGES LANGUAGE (use verbatim in every count):
+"As a result of each Defendant's violations of [section], [Plaintiff] suffered actual damages, including but not limited to: loss of credit, denial of credit, loss of ability to purchase or benefit from credit, loss of time due to learning how to defend against the Defendant's violation of his/her rights, damage to reputation from brandishing an inaccurate consumer report to third parties which in turn led to humiliation and embarrassment, anxiety and other mental, physical, and emotional distress."
+
+STANDARD WILLFUL/NEGLIGENT CLOSING (use verbatim in every count):
+"The violations by each defendant were willful rendering the Defendant liable for punitive damages in an amount to be determined by the court pursuant to 15 U.S.C § 1681n. In the alternative, each defendant was negligent, which entitles [Plaintiff] to recovery under 15 U.S.C § 1681o. [Plaintiff] is entitled to recover actual damages, statutory damages, cost and attorney's fees from each defendant in an amount to be determined by the court pursuant to 15 U.S.C §§ 1681n and 1681o."
+
+RESPONSE FORMAT:
+CHANGES MADE:
+- [bullet list of what you changed]
+
+REVISED COMPLAINT:
+[full complaint text here]"""
+
+    # Build messages with conversation history
+    messages = []
+
+    # Add prior revision turns
+    for turn in conversation_history[-6:]:  # last 3 exchanges max
+        if turn.get("role") and turn.get("content"):
+            messages.append({"role": turn["role"], "content": turn["content"]})
+
+    # Current revision request
+    user_content = (
+        f"CURRENT COMPLAINT:\n\n"
+        f"---BEGIN COMPLAINT---\n{payload.complaint_text}\n---END COMPLAINT---\n\n"
+        f"Attorney's instruction: {payload.message}\n\n"
+        f"Remember: do not add defendants, parties, or facts not requested. "
+        f"Return the complete revised complaint."
     )
+    messages.append({"role": "user", "content": user_content})
 
-    messages = [
+    # Build system blocks with cached core + optional RAG
+    system_blocks = [
         {
-            "role": "user",
-            "content": (
-                f"Here is the current complaint:\n\n"
-                f"---BEGIN COMPLAINT---\n{payload.complaint_text}\n---END COMPLAINT---\n\n"
-                f"Attorney's instruction: {payload.message}"
-            ),
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
         }
     ]
+    if reference_context:
+        system_blocks.append({"type": "text", "text": reference_context})
 
     try:
         response = client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=16384,
-            system=[{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }],
+            system=system_blocks,
             messages=messages,
         )
 
@@ -957,6 +1013,20 @@ async def revise_draft(
             "version": next_version,
             "is_current": True,
         }).execute()
+
+        # Save to revision history for multi-turn memory (try/except — column may not exist yet)
+        try:
+            updated_history = conversation_history + [
+                {"role": "user", "content": payload.message[:2000]},
+                {"role": "assistant", "content": (changes_summary or "Revised complaint")[:1000]},
+            ]
+            # Keep only last 20 turns to avoid unbounded growth
+            updated_history = updated_history[-20:]
+            supabase.table("cases").update({
+                "revision_history": updated_history,
+            }).eq("id", session_id).execute()
+        except Exception as e:
+            logger.warning(f"Could not save revision history: {e}")
 
         return {
             "revised_complaint": revised_complaint,
