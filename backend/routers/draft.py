@@ -401,9 +401,28 @@ async def draft_status(session_id: str, authorization: str = Header(...)):
     else:
         overall = "pending"
 
+    # If status is still approved_for_processing after 15 seconds,
+    # something probably went wrong before the orchestrator could start
+    if case_status == "approved_for_processing" and complete_count == 0:
+        created = case.get("created_at", "")
+        if created:
+            try:
+                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - created_dt).total_seconds()
+                if age > 15:
+                    overall = "error"
+            except Exception:
+                pass
+
     progress_percent = int((complete_count / len(AGENT_ORDER)) * 100)
     if overall == "complete":
         progress_percent = 100
+
+    # Surface any pipeline error stored in the case record
+    pipeline_error = None
+    revision_notes = case.get("revision_notes") or ""
+    if revision_notes.startswith("PIPELINE ERROR:"):
+        pipeline_error = revision_notes.replace("PIPELINE ERROR: ", "")
 
     return {
         "session_id": session_id,
@@ -411,6 +430,7 @@ async def draft_status(session_id: str, authorization: str = Header(...)):
         "progress_percent": progress_percent,
         "case_status": case_status,
         "agents": agents_payload,
+        "pipeline_error": pipeline_error,
     }
 
 

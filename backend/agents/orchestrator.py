@@ -463,22 +463,14 @@ async def run_pipeline(case_id: str) -> dict:
                 "Failed to update case status to 'error' for case %s", case_id
             )
 
-        # Record the error in a pipeline-level agent_output row
+        # Store the error in the case record itself so the status
+        # endpoint can surface it even if agent_outputs insert fails.
         try:
-            supabase.table("agent_outputs").insert(
-                {
-                    "case_id": case_id,
-                    "agent_name": "orchestrator",
-                    "status": "error",
-                    "error_message": error_msg,
-                    "started_at": pipeline_start,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ).execute()
+            supabase.table("cases").update(
+                {"revision_notes": f"PIPELINE ERROR: {error_msg}"}
+            ).eq("id", case_id).execute()
         except Exception:
-            logger.exception(
-                "Failed to record orchestrator error for case %s", case_id
-            )
+            pass
 
         pipeline_result["final_status"] = "error"
         pipeline_result["error"] = error_msg

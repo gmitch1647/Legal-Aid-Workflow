@@ -281,11 +281,12 @@ export default function DraftComplaint() {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
           const failed = status.agents.find((a) => a.status === 'error');
-          setPipelineError(
-            failed
+          const errorMsg =
+            status.pipeline_error ||
+            (failed
               ? `${failed.display_name} failed: ${failed.error_message || 'unknown error'}`
-              : 'Pipeline encountered an error'
-          );
+              : 'Pipeline encountered an error. Check Railway logs for details.');
+          setPipelineError(errorMsg);
           setOutputState('error');
         }
       } catch (err) {
