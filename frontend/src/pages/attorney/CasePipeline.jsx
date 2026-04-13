@@ -14,7 +14,7 @@ import {
   Trash2,
   GripVertical,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -64,6 +64,9 @@ export default function CasePipeline() {
   // Add pipeline inline
   const [showAddPipeline, setShowAddPipeline] = useState(false);
   const [newPipelineName, setNewPipelineName] = useState('');
+
+  // Edit mode — drag columns to reorder
+  const [editMode, setEditMode] = useState(false);
 
   async function handleAddStage() {
     if (!newStageName.trim() || addingStage) return;
@@ -204,7 +207,8 @@ export default function CasePipeline() {
   }, [filteredCases]);
 
   // Drag end handler
-  const handleDragEnd = useCallback(
+  // Drag handler for CASES (normal mode)
+  const handleCaseDragEnd = useCallback(
     async (result) => {
       const { source, destination, draggableId } = result;
       if (!destination) return;
@@ -214,7 +218,6 @@ export default function CasePipeline() {
       const newStatus = destination.droppableId;
       const oldStatus = source.droppableId;
 
-      // Optimistic update
       setCases((prev) =>
         prev.map((c) => (c.id === caseId ? { ...c, status: newStatus, updated_at: new Date().toISOString() } : c))
       );
@@ -224,7 +227,6 @@ export default function CasePipeline() {
         await updateCaseStatus(caseId, newStatus);
       } catch (err) {
         console.error('Status update failed:', err);
-        // Revert on failure
         setCases((prev) =>
           prev.map((c) => (c.id === caseId ? { ...c, status: oldStatus } : c))
         );
@@ -235,6 +237,32 @@ export default function CasePipeline() {
       }
     },
     []
+  );
+
+  // Drag handler for COLUMNS (edit mode)
+  const handleColumnDragEnd = useCallback(
+    async (result) => {
+      const { source, destination } = result;
+      if (!destination) return;
+      if (source.index === destination.index) return;
+
+      // Reorder columns locally
+      const newColumns = Array.from(columns);
+      const [moved] = newColumns.splice(source.index, 1);
+      newColumns.splice(destination.index, 0, moved);
+      setColumns(newColumns);
+
+      // Save to backend
+      const stageIds = newColumns.filter((c) => c.id).map((c) => c.id);
+      try {
+        await reorderPipelineStages(stageIds);
+      } catch (err) {
+        console.error('Reorder failed:', err);
+        setError('Failed to save column order');
+        await fetchData();
+      }
+    },
+    [columns, fetchData]
   );
 
   const clearFilters = () => {
@@ -267,7 +295,24 @@ export default function CasePipeline() {
             {filteredCases.length} case{filteredCases.length !== 1 ? 's' : ''} total
           </p>
         </div>
+        <button
+          onClick={() => setEditMode(!editMode)}
+          className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition ${
+            editMode
+              ? 'bg-purple-100 text-purple-700 border border-purple-300'
+              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+          {editMode ? 'Done Editing' : 'Reorder Columns'}
+        </button>
       </div>
+
+      {editMode && (
+        <div className="rounded-lg bg-purple-50 border border-purple-200 px-4 py-2 text-xs text-purple-700">
+          Drag columns to reorder them. Click "Done Editing" when finished.
+        </div>
+      )}
 
       {/* Pipeline Tabs */}
       {pipelines.length > 0 && (
@@ -413,15 +458,40 @@ export default function CasePipeline() {
       )}
 
       {/* Kanban Board */}
-      <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {columns.map((col) => {
+      <DragDropContext onDragEnd={editMode ? handleColumnDragEnd : handleCaseDragEnd}>
+        <Droppable droppableId="columns-droppable" direction="horizontal" isDropDisabled={!editMode} type="COLUMN">
+          {(columnsProvided) => (
+        <div
+          ref={columnsProvided.innerRef}
+          {...columnsProvided.droppableProps}
+          className="flex gap-4 overflow-x-auto pb-4"
+        >
+          {columns.map((col, colIndex) => {
             const columnCases = grouped[col.key] || [];
             return (
-              <div key={col.key} className="flex w-72 shrink-0 flex-col">
+              <Draggable
+                key={col.key}
+                draggableId={`col-${col.key}`}
+                index={colIndex}
+                isDragDisabled={!editMode}
+              >
+                {(colDragProvided, colDragSnapshot) => (
+              <div
+                ref={colDragProvided.innerRef}
+                {...colDragProvided.draggableProps}
+                className={`flex w-72 shrink-0 flex-col ${colDragSnapshot.isDragging ? 'opacity-80 shadow-2xl' : ''}`}
+              >
                 {/* Column Header */}
-                <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 group">
+                <div
+                  {...(editMode ? colDragProvided.dragHandleProps : {})}
+                  className={`mb-3 flex items-center justify-between rounded-lg border px-3 py-2.5 group transition ${
+                    editMode
+                      ? 'border-purple-300 bg-purple-50 cursor-grab active:cursor-grabbing'
+                      : 'border-slate-200 bg-slate-50'
+                  }`}
+                >
                   <div className="flex items-center gap-2">
+                    {editMode && <GripVertical className="w-3.5 h-3.5 text-purple-400" />}
                     <div
                       className="h-2.5 w-2.5 rounded-full"
                       style={{ background: `var(--color-${col.color}-500, #64748b)` }}
@@ -445,7 +515,7 @@ export default function CasePipeline() {
                 </div>
 
                 {/* Droppable Area */}
-                <Droppable droppableId={col.key}>
+                <Droppable droppableId={col.key} type="CASE" isDropDisabled={editMode}>
                   {(provided, snapshot) => (
                     <div
                       ref={provided.innerRef}
@@ -485,8 +555,11 @@ export default function CasePipeline() {
                   )}
                 </Droppable>
               </div>
+                )}
+              </Draggable>
             );
           })}
+          {columnsProvided.placeholder}
 
           {/* Add Stage Column */}
           <div className="flex w-60 shrink-0 flex-col">
@@ -529,6 +602,8 @@ export default function CasePipeline() {
             )}
           </div>
         </div>
+          )}
+        </Droppable>
       </DragDropContext>
     </div>
   );
