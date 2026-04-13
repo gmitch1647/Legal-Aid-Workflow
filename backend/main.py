@@ -99,6 +99,7 @@ async def root():
             "SUPABASE_SERVICE_KEY": "set" if os.environ.get("SUPABASE_SERVICE_KEY") else "MISSING",
             "SUPABASE_ANON_KEY": "set" if os.environ.get("SUPABASE_ANON_KEY") else "MISSING",
             "ANTHROPIC_API_KEY": "set" if os.environ.get("ANTHROPIC_API_KEY") else "MISSING",
+            "VOYAGE_API_KEY": "set" if os.environ.get("VOYAGE_API_KEY") else "MISSING",
         },
     }
 
