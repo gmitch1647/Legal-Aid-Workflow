@@ -116,9 +116,30 @@ async def debug_files():
     import os
     from pathlib import Path
 
+    # Check voyage
+    voyage_key = os.environ.get("VOYAGE_API_KEY", "")
+    voyage_set = bool(voyage_key)
+    voyage_len = len(voyage_key) if voyage_key else 0
+
+    try:
+        import voyageai
+        voyage_installed = True
+    except ImportError:
+        voyage_installed = False
+
+    try:
+        from utils.embeddings import is_configured
+        embeddings_configured = is_configured()
+    except Exception as e:
+        embeddings_configured = f"ERROR: {e}"
+
     cwd = str(Path.cwd())
     results = {
         "cwd": cwd,
+        "voyage_env_set": voyage_set,
+        "voyage_key_length": voyage_len,
+        "voyage_package_installed": voyage_installed,
+        "embeddings_is_configured": embeddings_configured,
         "cwd_contents": [],
         "reference_cases_found": False,
         "paths_checked": [],
