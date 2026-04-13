@@ -110,6 +110,49 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/files", tags=["Health"])
+async def debug_files():
+    """Show filesystem info to debug reference case paths."""
+    import os
+    from pathlib import Path
+
+    cwd = str(Path.cwd())
+    results = {
+        "cwd": cwd,
+        "cwd_contents": [],
+        "reference_cases_found": False,
+        "paths_checked": [],
+    }
+
+    # List current working directory
+    try:
+        results["cwd_contents"] = os.listdir(cwd)[:30]
+    except Exception as e:
+        results["cwd_contents"] = [f"ERROR: {e}"]
+
+    # Check multiple possible paths
+    check_paths = [
+        Path.cwd() / "reference_cases",
+        Path.cwd() / "backend" / "reference_cases",
+        Path("/app") / "reference_cases",
+        Path("/app") / "backend" / "reference_cases",
+        Path(__file__).resolve().parent / "reference_cases",
+    ]
+
+    for p in check_paths:
+        entry = {"path": str(p), "exists": p.exists(), "files": []}
+        if p.exists():
+            try:
+                entry["files"] = [f.name for f in p.iterdir()][:20]
+                if any(f.name.endswith('.docx') for f in p.iterdir()):
+                    results["reference_cases_found"] = True
+            except Exception as e:
+                entry["files"] = [f"ERROR: {e}"]
+        results["paths_checked"].append(entry)
+
+    return results
+
+
 @app.get("/me", tags=["Health"])
 async def whoami(authorization: str = None):
     """Diagnostic: show what the backend sees for the current auth user."""
