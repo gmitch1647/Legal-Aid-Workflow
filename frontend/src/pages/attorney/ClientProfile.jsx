@@ -19,8 +19,11 @@ import {
   ChevronRight,
   CheckCircle,
   XCircle,
+  Plus,
+  Upload,
+  X,
 } from 'lucide-react';
-import { getCases, getDocuments } from '../../lib/api';
+import { getCases, getDocuments, uploadDocument } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
 // ---------------------------------------------------------------------------
@@ -333,6 +336,12 @@ export default function ClientProfile() {
                 <Briefcase className="h-5 w-5 text-slate-400" />
                 Cases ({clientCases.length})
               </h2>
+              <button
+                onClick={() => navigate(`/attorney/draft?client_id=${id}&plaintiff_name=${encodeURIComponent(client.full_name || '')}&plaintiff_county=${encodeURIComponent(client.county || '')}`)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
+              >
+                <Plus className="h-3.5 w-3.5" /> New Case
+              </button>
             </div>
 
             {sortedCases.length === 0 ? (
@@ -442,38 +451,11 @@ export default function ClientProfile() {
         {/* Right Column - 1/3 */}
         <div className="space-y-6">
           {/* Documents */}
-          <div className="card">
-            <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-              <FileText className="h-5 w-5 text-slate-400" />
-              Documents ({documents.length})
-            </h3>
-            <div className="mt-4 space-y-2">
-              {documents.length > 0 ? (
-                documents.map((doc) => (
-                  <a
-                    key={doc.id}
-                    href={doc.url || doc.file_url || '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50"
-                  >
-                    <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-700">
-                        {doc.file_name || doc.name || doc.filename || 'Document'}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {doc.case_name || 'Case'} &middot; {doc.category || doc.type || 'File'}
-                      </p>
-                    </div>
-                    <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-                  </a>
-                ))
-              ) : (
-                <p className="py-4 text-center text-sm text-slate-400">No documents uploaded.</p>
-              )}
-            </div>
-          </div>
+          <DocumentsSection
+            documents={documents}
+            clientCases={clientCases}
+            onUploadComplete={fetchData}
+          />
 
           {/* Attorney Notes */}
           <div className="card">
@@ -516,6 +498,142 @@ export default function ClientProfile() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Documents Section with Upload
+// ---------------------------------------------------------------------------
+
+function DocumentsSection({ documents, clientCases, onUploadComplete }) {
+  const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [selectedCaseId, setSelectedCaseId] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('other');
+  const fileInputRef = React.useRef(null);
+
+  const categories = [
+    { value: 'credit_report', label: 'Credit Report' },
+    { value: 'dispute_letter', label: 'Dispute Letter' },
+    { value: 'bureau_response', label: 'Bureau Response' },
+    { value: 'collection_notice', label: 'Collection Notice' },
+    { value: 'call_log', label: 'Call Log' },
+    { value: 'other', label: 'Other' },
+  ];
+
+  async function handleFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+    if (!selectedCaseId) {
+      alert('Select a case first to attach documents to.');
+      return;
+    }
+    setUploading(true);
+    for (const file of Array.from(fileList)) {
+      try {
+        await uploadDocument(selectedCaseId, file, selectedCategory);
+      } catch (err) {
+        console.error('Upload failed:', err);
+      }
+    }
+    setUploading(false);
+    if (onUploadComplete) onUploadComplete();
+  }
+
+  return (
+    <div className="card">
+      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+        <FileText className="h-5 w-5 text-slate-400" />
+        Documents ({documents.length})
+      </h3>
+
+      {/* Upload Section */}
+      <div className="mt-4 space-y-3 border-b border-slate-100 pb-4">
+        <div className="grid grid-cols-1 gap-2">
+          <select
+            value={selectedCaseId}
+            onChange={(e) => setSelectedCaseId(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="">— Select case to upload to —</option>
+            {clientCases.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.plaintiff_name || c.client_name || 'Case'} — {c.status}
+              </option>
+            ))}
+          </select>
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            {categories.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+        <div
+          onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragLeave={(e) => { e.preventDefault(); setDragActive(false); }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setDragActive(false);
+            handleFiles(e.dataTransfer.files);
+          }}
+          onClick={() => fileInputRef.current?.click()}
+          className={`border-2 border-dashed rounded-lg p-4 text-center cursor-pointer transition ${
+            dragActive
+              ? 'border-emerald-500 bg-emerald-50'
+              : 'border-slate-300 hover:border-slate-400'
+          } ${!selectedCaseId ? 'opacity-50 pointer-events-none' : ''}`}
+        >
+          <Upload className="w-5 h-5 text-slate-400 mx-auto mb-1" />
+          <div className="text-xs text-slate-600 font-medium">
+            {uploading ? 'Uploading...' : 'Click or drag files'}
+          </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            PDF, DOCX, TXT, PNG, JPG
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+            onChange={(e) => handleFiles(e.target.files)}
+            className="hidden"
+          />
+        </div>
+      </div>
+
+      {/* Document list */}
+      <div className="mt-4 space-y-2">
+        {documents.length > 0 ? (
+          documents.map((doc) => (
+            <a
+              key={doc.id}
+              href={doc.url || doc.file_url || '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50"
+            >
+              <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-700">
+                  {doc.file_name || doc.name || doc.filename || 'Document'}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {doc.case_name || 'Case'} · {(doc.document_category || doc.category || doc.type || 'File').replace('_', ' ')}
+                </p>
+              </div>
+              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+            </a>
+          ))
+        ) : (
+          <p className="py-4 text-center text-sm text-slate-400">No documents uploaded.</p>
+        )}
       </div>
     </div>
   );
