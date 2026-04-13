@@ -9,8 +9,12 @@ import {
   AlertCircle,
   X,
   ChevronDown,
+  Plus,
+  Check,
+  Trash2,
+  GripVertical,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, createPipelineStage, deletePipelineStage } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +54,36 @@ export default function CasePipeline() {
   const [dateTo, setDateTo] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  // Add stage inline
+  const [showAddStage, setShowAddStage] = useState(false);
+  const [newStageName, setNewStageName] = useState('');
+  const [addingStage, setAddingStage] = useState(false);
+
+  async function handleAddStage() {
+    if (!newStageName.trim() || addingStage) return;
+    setAddingStage(true);
+    try {
+      await createPipelineStage({ name: newStageName.trim(), color: 'slate' });
+      setNewStageName('');
+      setShowAddStage(false);
+      await fetchData();
+    } catch (err) {
+      setError(err.message || 'Failed to add stage');
+    } finally {
+      setAddingStage(false);
+    }
+  }
+
+  async function handleDeleteStage(stageId, stageName) {
+    if (!window.confirm(`Delete the "${stageName}" column? Cases in this stage must be moved first.`)) return;
+    try {
+      await deletePipelineStage(stageId);
+      await fetchData();
+    } catch (err) {
+      setError(err.message || 'Failed to delete stage');
+    }
+  }
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
@@ -65,9 +99,11 @@ export default function CasePipeline() {
       if (stagesData && stagesData.length > 0) {
         setColumns(
           stagesData.map((s) => ({
+            id: s.id,
             key: s.slug,
             label: s.name,
             color: s.color || 'slate',
+            is_system: s.is_system,
           }))
         );
       }
@@ -298,7 +334,7 @@ export default function CasePipeline() {
             return (
               <div key={col.key} className="flex w-72 shrink-0 flex-col">
                 {/* Column Header */}
-                <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 group">
                   <div className="flex items-center gap-2">
                     <div
                       className="h-2.5 w-2.5 rounded-full"
@@ -306,9 +342,20 @@ export default function CasePipeline() {
                     />
                     <h3 className="text-sm font-semibold text-slate-800">{col.label}</h3>
                   </div>
-                  <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-white px-2 text-xs font-bold text-slate-600 shadow-sm">
-                    {columnCases.length}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-white px-2 text-xs font-bold text-slate-600 shadow-sm">
+                      {columnCases.length}
+                    </span>
+                    {!col.is_system && col.id && (
+                      <button
+                        onClick={() => handleDeleteStage(col.id, col.label)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition"
+                        title="Delete this stage"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Droppable Area */}
@@ -354,6 +401,47 @@ export default function CasePipeline() {
               </div>
             );
           })}
+
+          {/* Add Stage Column */}
+          <div className="flex w-60 shrink-0 flex-col">
+            {showAddStage ? (
+              <div className="rounded-lg border-2 border-dashed border-emerald-300 bg-emerald-50 p-3">
+                <input
+                  value={newStageName}
+                  onChange={(e) => setNewStageName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddStage();
+                    if (e.key === 'Escape') { setShowAddStage(false); setNewStageName(''); }
+                  }}
+                  placeholder="Stage name..."
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-2"
+                  autoFocus
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleAddStage}
+                    disabled={!newStageName.trim() || addingStage}
+                    className="flex items-center gap-1 px-3 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    <Check className="w-3 h-3" /> {addingStage ? 'Adding...' : 'Add'}
+                  </button>
+                  <button
+                    onClick={() => { setShowAddStage(false); setNewStageName(''); }}
+                    className="px-3 py-1 text-xs text-slate-600 hover:text-slate-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowAddStage(true)}
+                className="flex items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-300 py-3 text-sm text-slate-500 hover:border-emerald-400 hover:text-emerald-600 hover:bg-emerald-50/50 transition"
+              >
+                <Plus className="w-4 h-4" /> Add Stage
+              </button>
+            )}
+          </div>
         </div>
       </DragDropContext>
     </div>
