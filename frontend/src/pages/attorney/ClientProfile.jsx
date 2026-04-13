@@ -22,8 +22,18 @@ import {
   Plus,
   Upload,
   X,
+  Send,
+  MessageSquare,
 } from 'lucide-react';
-import { getCases, getDocuments, uploadDocument } from '../../lib/api';
+import {
+  getCases,
+  getDocuments,
+  uploadDocument,
+  getCommsConfig,
+  getCommsHistory,
+  sendClientEmail,
+  sendClientSMS,
+} from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
 // ---------------------------------------------------------------------------
@@ -450,6 +460,15 @@ export default function ClientProfile() {
 
         {/* Right Column - 1/3 */}
         <div className="space-y-6">
+          {/* Communications */}
+          <CommunicationsPanel
+            clientId={id}
+            clientEmail={client.email}
+            clientPhone={client.phone}
+            clientName={client.full_name}
+            clientCases={clientCases}
+          />
+
           {/* Documents */}
           <DocumentsSection
             documents={documents}
@@ -635,6 +654,252 @@ function DocumentsSection({ documents, clientCases, onUploadComplete }) {
           <p className="py-4 text-center text-sm text-slate-400">No documents uploaded.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Communications Panel — Email + SMS
+// ---------------------------------------------------------------------------
+
+function CommunicationsPanel({ clientId, clientEmail, clientPhone, clientName, clientCases }) {
+  const [tab, setTab] = useState('email');
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Email fields
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+
+  // SMS fields
+  const [smsBody, setSmsBody] = useState('');
+
+  // Selected case (optional)
+  const [selectedCase, setSelectedCase] = useState('');
+
+  useEffect(() => {
+    loadHistory();
+  }, [clientId]);
+
+  async function loadHistory() {
+    try {
+      setLoading(true);
+      const data = await getCommsHistory(clientId);
+      setHistory(data || []);
+    } catch (err) {
+      console.error('Failed to load comms history:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSendEmail() {
+    if (!emailSubject.trim() || !emailBody.trim()) return;
+    setSending(true);
+    setError(null);
+    setSent(false);
+    try {
+      const result = await sendClientEmail({
+        client_id: clientId,
+        to_email: clientEmail,
+        subject: emailSubject,
+        body: emailBody,
+        case_id: selectedCase || null,
+      });
+      if (result.status === 'sent') {
+        setSent(true);
+        setEmailSubject('');
+        setEmailBody('');
+        await loadHistory();
+      } else {
+        setError(result.error || 'Failed to send email');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to send email');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleSendSMS() {
+    if (!smsBody.trim()) return;
+    setSending(true);
+    setError(null);
+    setSent(false);
+    try {
+      const result = await sendClientSMS({
+        client_id: clientId,
+        to_phone: clientPhone,
+        body: smsBody,
+        case_id: selectedCase || null,
+      });
+      if (result.status === 'sent') {
+        setSent(true);
+        setSmsBody('');
+        await loadHistory();
+      } else {
+        setError(result.error || 'Failed to send SMS');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to send SMS');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function formatTime(dateStr) {
+    if (!dateStr) return '';
+    return new Date(dateStr).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  }
+
+  const emailHistory = history.filter((h) => h.channel === 'email');
+  const smsHistory = history.filter((h) => h.channel === 'sms');
+  const currentHistory = tab === 'email' ? emailHistory : smsHistory;
+
+  return (
+    <div className="card">
+      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900 mb-3">
+        <MessageSquare className="h-5 w-5 text-slate-400" />
+        Communications
+      </h3>
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-4 bg-slate-100 rounded-lg p-1">
+        <button
+          onClick={() => { setTab('email'); setSent(false); setError(null); }}
+          className={`flex-1 py-1.5 rounded-md text-xs font-medium transition ${
+            tab === 'email' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          <Mail className="w-3 h-3 inline mr-1" />
+          Email {emailHistory.length > 0 ? `(${emailHistory.length})` : ''}
+        </button>
+        <button
+          onClick={() => { setTab('sms'); setSent(false); setError(null); }}
+          className={`flex-1 py-1.5 rounded-md text-xs font-medium transition ${
+            tab === 'sms' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          <Phone className="w-3 h-3 inline mr-1" />
+          Text {smsHistory.length > 0 ? `(${smsHistory.length})` : ''}
+        </button>
+      </div>
+
+      {/* Case selector */}
+      {clientCases.length > 0 && (
+        <select
+          value={selectedCase}
+          onChange={(e) => setSelectedCase(e.target.value)}
+          className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs mb-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        >
+          <option value="">General (no case)</option>
+          {clientCases.map((c) => (
+            <option key={c.id} value={c.id}>Re: {c.plaintiff_name || 'Case'} — {c.status}</option>
+          ))}
+        </select>
+      )}
+
+      {/* Compose */}
+      {tab === 'email' ? (
+        <div className="space-y-2">
+          <div className="text-xs text-slate-500">
+            To: <span className="font-medium text-slate-700">{clientEmail || 'No email on file'}</span>
+          </div>
+          <input
+            value={emailSubject}
+            onChange={(e) => setEmailSubject(e.target.value)}
+            placeholder="Subject"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          <textarea
+            value={emailBody}
+            onChange={(e) => setEmailBody(e.target.value)}
+            placeholder={`Hi ${(clientName || '').split(' ')[0] || 'there'},\n\n`}
+            rows={4}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+          />
+          <button
+            onClick={handleSendEmail}
+            disabled={sending || !emailSubject.trim() || !emailBody.trim() || !clientEmail}
+            className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
+          >
+            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {sending ? 'Sending...' : 'Send Email'}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-xs text-slate-500">
+            To: <span className="font-medium text-slate-700">{clientPhone || 'No phone on file'}</span>
+          </div>
+          <textarea
+            value={smsBody}
+            onChange={(e) => setSmsBody(e.target.value)}
+            placeholder="Type your message..."
+            rows={3}
+            maxLength={1600}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+          />
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-400">{smsBody.length}/1600</span>
+            <button
+              onClick={handleSendSMS}
+              disabled={sending || !smsBody.trim() || !clientPhone}
+              className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
+            >
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {sending ? 'Sending...' : 'Send Text'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Status messages */}
+      {sent && (
+        <div className="mt-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-700 flex items-center gap-1.5">
+          <CheckCircle className="w-3.5 h-3.5" /> Sent successfully
+        </div>
+      )}
+      {error && (
+        <div className="mt-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 flex items-center gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5" /> {error}
+        </div>
+      )}
+
+      {/* History */}
+      {currentHistory.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-slate-100">
+          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+            History
+          </div>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {currentHistory.map((item) => (
+              <div key={item.id} className="rounded-lg border border-slate-100 p-2.5">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-medium text-slate-500">
+                    {item.direction === 'outbound' ? '→ Sent' : '← Received'}
+                    {item.subject ? `: ${item.subject}` : ''}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                    item.status === 'sent' || item.status === 'delivered'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-red-100 text-red-700'
+                  }`}>
+                    {item.status}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 line-clamp-2">{item.body}</p>
+                <p className="text-[10px] text-slate-400 mt-1">{formatTime(item.created_at)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

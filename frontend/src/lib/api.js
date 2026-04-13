@@ -348,6 +348,32 @@ export async function getReindexStatus() {
 }
 
 // ---------------------------------------------------------------------------
+// Communications (Email + SMS)
+// ---------------------------------------------------------------------------
+
+export async function getCommsConfig() {
+  return request('/communications/config');
+}
+
+export async function getCommsHistory(clientId) {
+  return request(`/communications/history/${clientId}`);
+}
+
+export async function sendClientEmail(data) {
+  return request('/communications/email', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function sendClientSMS(data) {
+  return request('/communications/sms', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline Stages
 // ---------------------------------------------------------------------------
 
