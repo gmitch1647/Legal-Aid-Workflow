@@ -800,8 +800,9 @@ async def reindex_status(authorization: str = Header(...)):
     _require_attorney(profile)
 
     try:
-        from utils.reference_indexer import iter_reference_files, count_indexed_chunks
+        from utils.reference_indexer import iter_reference_files, count_indexed_chunks, _get_reference_dir
         from utils.embeddings import is_configured
+        from pathlib import Path
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Indexer unavailable: {e}")
 
@@ -828,6 +829,8 @@ async def reindex_status(authorization: str = Header(...)):
         "files_indexed": indexed_files,
         "total_chunks": count_indexed_chunks(supabase),
         "missing_from_index": [f for f in disk_files if f not in indexed_files],
+        "reference_dir": str(_get_reference_dir()),
+        "cwd": str(Path.cwd()),
     }
 
 

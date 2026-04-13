@@ -27,6 +27,24 @@ logger = logging.getLogger(__name__)
 
 REFERENCE_DIR = Path(__file__).resolve().parent.parent / "reference_cases"
 
+# Fallback paths in case the working directory differs on Railway
+_FALLBACK_DIRS = [
+    REFERENCE_DIR,
+    Path.cwd() / "reference_cases",
+    Path.cwd() / "backend" / "reference_cases",
+    Path("/app") / "reference_cases",
+    Path("/app") / "backend" / "reference_cases",
+]
+
+def _get_reference_dir() -> Path:
+    """Find the reference_cases directory, trying multiple paths."""
+    for d in _FALLBACK_DIRS:
+        if d.exists() and any(d.glob("*.docx")):
+            logger.info(f"Found reference_cases at: {d}")
+            return d
+    logger.warning(f"reference_cases not found. Tried: {[str(d) for d in _FALLBACK_DIRS]}")
+    return REFERENCE_DIR
+
 # Chunking config
 MIN_CHUNK_WORDS = 40        # merge shorter paragraphs upward
 TARGET_CHUNK_WORDS = 200    # ideal chunk size
@@ -231,10 +249,12 @@ def _chunk_paragraphs(paragraphs: List[str]) -> List[str]:
 
 
 def iter_reference_files() -> Iterable[Path]:
-    """Yield every .docx file under backend/reference_cases/ (recursively)."""
-    if not REFERENCE_DIR.exists():
+    """Yield every .docx file under the reference_cases directory (recursively)."""
+    ref_dir = _get_reference_dir()
+    if not ref_dir.exists():
+        logger.warning(f"Reference directory does not exist: {ref_dir}")
         return
-    for path in sorted(REFERENCE_DIR.rglob("*.docx")):
+    for path in sorted(ref_dir.rglob("*.docx")):
         if path.name.startswith("~$"):
             continue  # skip Word lock files
         yield path
