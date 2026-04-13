@@ -14,8 +14,9 @@ import {
   X,
   Check,
 } from 'lucide-react';
-import { getCases, registerClient } from '../../lib/api';
+import { getCases, registerClient, getCommsHistory } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
+import { MessageSquare, Send } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -239,6 +240,7 @@ export default function ClientList() {
 
   const [clients, setClients] = useState([]);
   const [cases, setCases] = useState([]);
+  const [commsMap, setCommsMap] = useState({}); // { clientId: [comms] }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
@@ -312,6 +314,26 @@ export default function ClientList() {
   }, [fetchData]);
 
   // Enrich clients with case stats
+  // Load comms for all clients (batch after initial load)
+  useEffect(() => {
+    if (clients.length === 0) return;
+    async function loadComms() {
+      const map = {};
+      for (const client of clients.slice(0, 50)) {
+        try {
+          const history = await getCommsHistory(client.id);
+          if (history && history.length > 0) {
+            map[client.id] = history;
+          }
+        } catch {
+          // ignore individual failures
+        }
+      }
+      setCommsMap(map);
+    }
+    loadComms();
+  }, [clients]);
+
   const enrichedClients = useMemo(() => {
     return clients.map((client) => {
       const clientCases = cases.filter(
@@ -323,13 +345,17 @@ export default function ClientList() {
       const latestCase = clientCases.sort(
         (a, b) => new Date(b.created_at) - new Date(a.created_at)
       )[0];
+      const comms = commsMap[client.id] || [];
+      const lastComm = comms[0] || null;
       return {
         ...client,
         case_count: clientCases.length,
         latest_case_status: latestCase?.status || null,
+        comms_count: comms.length,
+        last_comm: lastComm,
       };
     });
-  }, [clients, cases]);
+  }, [clients, cases, commsMap]);
 
   // Filter
   const filteredClients = useMemo(() => {
@@ -425,6 +451,9 @@ export default function ClientList() {
                   Latest Status
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Last Contact
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Joined
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -435,7 +464,7 @@ export default function ClientList() {
             <tbody className="divide-y divide-slate-100">
               {paginatedClients.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
+                  <td colSpan={7} className="px-6 py-12 text-center">
                     <Users className="mx-auto h-8 w-8 text-slate-300" />
                     <p className="mt-2 text-sm text-slate-500">
                       {search ? 'No clients match your search.' : 'No clients found.'}
@@ -493,6 +522,35 @@ export default function ClientList() {
                         </span>
                       ) : (
                         <span className="text-xs text-slate-400">No cases</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {client.last_comm ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            {client.last_comm.channel === 'email' ? (
+                              <Mail className="h-3.5 w-3.5 text-blue-400" />
+                            ) : (
+                              <MessageSquare className="h-3.5 w-3.5 text-green-400" />
+                            )}
+                            <span className="text-xs text-slate-600">
+                              {client.last_comm.channel === 'email' ? 'Email' : 'Text'}
+                            </span>
+                            <span className={`text-[10px] px-1 py-0.5 rounded ${
+                              client.last_comm.status === 'sent' || client.last_comm.status === 'delivered'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-red-100 text-red-700'
+                            }`}>
+                              {client.last_comm.status}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 truncate max-w-[150px]">
+                            {client.last_comm.subject || client.last_comm.body?.slice(0, 40) || ''}
+                          </p>
+                          <p className="text-[10px] text-slate-400">{formatDate(client.last_comm.created_at)}</p>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">No contact yet</span>
                       )}
                     </td>
                     <td className="px-6 py-4">
