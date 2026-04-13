@@ -14,7 +14,7 @@ import {
   Trash2,
   GripVertical,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages, createPipelineStage, deletePipelineStage } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,8 @@ export default function CasePipeline() {
 
   const [cases, setCases] = useState([]);
   const [columns, setColumns] = useState(DEFAULT_COLUMNS);
+  const [pipelines, setPipelines] = useState([]);
+  const [activePipeline, setActivePipeline] = useState(null); // null = all
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [updating, setUpdating] = useState(null);
@@ -58,6 +60,10 @@ export default function CasePipeline() {
   const [showAddStage, setShowAddStage] = useState(false);
   const [newStageName, setNewStageName] = useState('');
   const [addingStage, setAddingStage] = useState(false);
+
+  // Add pipeline inline
+  const [showAddPipeline, setShowAddPipeline] = useState(false);
+  const [newPipelineName, setNewPipelineName] = useState('');
 
   async function handleAddStage() {
     if (!newStageName.trim() || addingStage) return;
@@ -89,11 +95,14 @@ export default function CasePipeline() {
       setLoading(true);
       setError(null);
 
-      // Load stages and cases in parallel
-      const [stagesData, casesData] = await Promise.all([
-        getPipelineStages().catch(() => null),
+      // Load pipelines, stages, and cases in parallel
+      const [pipelinesData, stagesData, casesData] = await Promise.all([
+        getPipelines().catch(() => []),
+        getPipelineStages(activePipeline).catch(() => null),
         getCases(),
       ]);
+
+      setPipelines(pipelinesData || []);
 
       // Use dynamic stages if available, otherwise fallback
       if (stagesData && stagesData.length > 0) {
@@ -104,11 +113,18 @@ export default function CasePipeline() {
             label: s.name,
             color: s.color || 'slate',
             is_system: s.is_system,
+            pipeline_id: s.pipeline_id,
           }))
         );
       }
 
-      const list = Array.isArray(casesData) ? casesData : casesData?.items ?? casesData?.cases ?? [];
+      let list = Array.isArray(casesData) ? casesData : casesData?.items ?? casesData?.cases ?? [];
+
+      // Filter cases by pipeline if one is selected
+      if (activePipeline && activePipeline !== 'all') {
+        list = list.filter((c) => c.pipeline_id === activePipeline || !c.pipeline_id);
+      }
+
       setCases(list);
     } catch (err) {
       console.error('Pipeline fetch error:', err);
@@ -116,11 +132,24 @@ export default function CasePipeline() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activePipeline]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  async function handleAddPipeline() {
+    if (!newPipelineName.trim()) return;
+    try {
+      const created = await createPipeline({ name: newPipelineName.trim() });
+      setNewPipelineName('');
+      setShowAddPipeline(false);
+      setActivePipeline(created.id);
+      await fetchData();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   // Filter cases
   const filteredCases = useMemo(() => {
@@ -239,6 +268,63 @@ export default function CasePipeline() {
           </p>
         </div>
       </div>
+
+      {/* Pipeline Tabs */}
+      {pipelines.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {pipelines.map((p) => {
+            const isActive = activePipeline === p.id || (!activePipeline && p.is_default);
+            return (
+              <button
+                key={p.id}
+                onClick={() => setActivePipeline(p.is_default ? null : p.id)}
+                className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  isActive
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {p.name}
+              </button>
+            );
+          })}
+          {showAddPipeline ? (
+            <div className="flex items-center gap-2 shrink-0">
+              <input
+                value={newPipelineName}
+                onChange={(e) => setNewPipelineName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAddPipeline();
+                  if (e.key === 'Escape') { setShowAddPipeline(false); setNewPipelineName(''); }
+                }}
+                placeholder="Pipeline name..."
+                className="w-36 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                autoFocus
+              />
+              <button
+                onClick={handleAddPipeline}
+                disabled={!newPipelineName.trim()}
+                className="px-3 py-2 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => { setShowAddPipeline(false); setNewPipelineName(''); }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAddPipeline(true)}
+              className="shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg border-2 border-dashed border-slate-300 text-xs text-slate-500 hover:border-emerald-400 hover:text-emerald-600 transition"
+            >
+              <Plus className="w-3.5 h-3.5" /> New Pipeline
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="card !p-4">

@@ -1,8 +1,9 @@
 """
 Pipeline Stages router.
 
-CRUD for customizable pipeline stages that define the Kanban board
-columns. Attorneys can add, remove, reorder, and rename stages.
+CRUD for customizable pipeline stages and pipelines. Attorneys can
+create multiple pipelines (e.g. FCRA, FDCPA, TCPA), each with their
+own stages. Stages with pipeline_id=NULL are shared across all pipelines.
 """
 
 import logging
@@ -43,6 +44,7 @@ class StageCreate(BaseModel):
     color: str = "slate"
     description: Optional[str] = None
     position: Optional[int] = None
+    pipeline_id: Optional[str] = None  # NULL = shared across all pipelines
 
 
 class StageUpdate(BaseModel):
@@ -51,22 +53,36 @@ class StageUpdate(BaseModel):
     color: Optional[str] = None
     description: Optional[str] = None
     position: Optional[int] = None
+    pipeline_id: Optional[str] = None
 
 
 class StageReorder(BaseModel):
-    stage_ids: list[str]  # ordered list of stage UUIDs
+    stage_ids: list[str]
+
+
+class PipelineCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    color: str = "blue"
+
+
+class PipelineUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# GET / — list all stages in order
+# PIPELINES — CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("")
-async def list_stages():
-    """Return all pipeline stages ordered by position."""
+@router.get("/pipelines")
+async def list_pipelines():
+    """Return all pipelines ordered by position."""
     supabase = get_supabase()
     result = (
-        supabase.table("pipeline_stages")
+        supabase.table("pipelines")
         .select("*")
         .order("position")
         .execute()
@@ -74,9 +90,122 @@ async def list_stages():
     return result.data or []
 
 
+@router.post("/pipelines", status_code=status.HTTP_201_CREATED)
+async def create_pipeline(
+    body: PipelineCreate,
+    authorization: str = Header(...),
+):
+    """Create a new pipeline (e.g. for a new case type)."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+    slug = body.slug or body.name.lower().replace(" ", "_").replace("-", "_")
+
+    existing = supabase.table("pipelines").select("id").eq("slug", slug).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail=f"Pipeline '{slug}' already exists.")
+
+    max_pos = (
+        supabase.table("pipelines")
+        .select("position")
+        .order("position", desc=True)
+        .limit(1)
+        .execute()
+    )
+    pos = (max_pos.data[0]["position"] + 1) if max_pos.data else 0
+
+    result = supabase.table("pipelines").insert({
+        "name": body.name,
+        "slug": slug,
+        "description": body.description,
+        "color": body.color,
+        "position": pos,
+    }).execute()
+
+    return result.data[0] if result.data else {}
+
+
+@router.patch("/pipelines/{pipeline_id}")
+async def update_pipeline(
+    pipeline_id: str,
+    body: PipelineUpdate,
+    authorization: str = Header(...),
+):
+    """Update a pipeline's name, color, or description."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+    update_data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    result = supabase.table("pipelines").update(update_data).eq("id", pipeline_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Pipeline not found.")
+    return result.data[0]
+
+
+@router.delete("/pipelines/{pipeline_id}")
+async def delete_pipeline(
+    pipeline_id: str,
+    authorization: str = Header(...),
+):
+    """Delete a pipeline. Cannot delete the default pipeline."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    pipeline = supabase.table("pipelines").select("*").eq("id", pipeline_id).limit(1).execute()
+    if not pipeline.data:
+        raise HTTPException(status_code=404, detail="Pipeline not found.")
+    if pipeline.data[0].get("is_default"):
+        raise HTTPException(status_code=400, detail="Cannot delete the default pipeline.")
+
+    supabase.table("pipelines").delete().eq("id", pipeline_id).execute()
+    return {"deleted": True}
+
+
 # ---------------------------------------------------------------------------
-# POST / — create a new stage
+# STAGES — CRUD (same as before but with pipeline_id support)
 # ---------------------------------------------------------------------------
+
+@router.get("")
+async def list_stages(pipeline_id: Optional[str] = None):
+    """Return pipeline stages. If pipeline_id is given, returns shared
+    stages (pipeline_id IS NULL) plus stages for that specific pipeline."""
+    supabase = get_supabase()
+
+    if pipeline_id and pipeline_id != "all":
+        # Get shared stages + pipeline-specific stages
+        shared = (
+            supabase.table("pipeline_stages")
+            .select("*")
+            .is_("pipeline_id", "null")
+            .order("position")
+            .execute()
+        )
+        specific = (
+            supabase.table("pipeline_stages")
+            .select("*")
+            .eq("pipeline_id", pipeline_id)
+            .order("position")
+            .execute()
+        )
+        all_stages = (shared.data or []) + (specific.data or [])
+        all_stages.sort(key=lambda s: s.get("position", 0))
+        return all_stages
+    else:
+        result = (
+            supabase.table("pipeline_stages")
+            .select("*")
+            .order("position")
+            .execute()
+        )
+        return result.data or []
+
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_stage(
@@ -88,21 +217,12 @@ async def create_stage(
     _require_attorney(profile)
 
     supabase = get_supabase()
-
-    # Auto-generate slug from name if not provided
     slug = body.slug or body.name.lower().replace(" ", "_").replace("-", "_")
 
-    # Check for duplicate slug
-    existing = (
-        supabase.table("pipeline_stages")
-        .select("id")
-        .eq("slug", slug)
-        .execute()
-    )
+    existing = supabase.table("pipeline_stages").select("id").eq("slug", slug).execute()
     if existing.data:
-        raise HTTPException(status_code=400, detail=f"Stage with slug '{slug}' already exists.")
+        raise HTTPException(status_code=400, detail=f"Stage '{slug}' already exists.")
 
-    # Default position = max + 1
     if body.position is None:
         max_pos = (
             supabase.table("pipeline_stages")
@@ -113,21 +233,20 @@ async def create_stage(
         )
         body.position = (max_pos.data[0]["position"] + 1) if max_pos.data else 0
 
-    result = supabase.table("pipeline_stages").insert({
+    insert_data = {
         "slug": slug,
         "name": body.name,
         "position": body.position,
         "color": body.color,
         "description": body.description,
         "is_system": False,
-    }).execute()
+    }
+    if body.pipeline_id:
+        insert_data["pipeline_id"] = body.pipeline_id
 
+    result = supabase.table("pipeline_stages").insert(insert_data).execute()
     return result.data[0] if result.data else {}
 
-
-# ---------------------------------------------------------------------------
-# PATCH /{stage_id} — update a stage
-# ---------------------------------------------------------------------------
 
 @router.patch("/{stage_id}")
 async def update_stage(
@@ -135,94 +254,59 @@ async def update_stage(
     body: StageUpdate,
     authorization: str = Header(...),
 ):
-    """Update a pipeline stage's name, color, description, or position."""
+    """Update a pipeline stage."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
     supabase = get_supabase()
-
     update_data = {k: v for k, v in body.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update.")
 
-    result = (
-        supabase.table("pipeline_stages")
-        .update(update_data)
-        .eq("id", stage_id)
-        .execute()
-    )
-
+    result = supabase.table("pipeline_stages").update(update_data).eq("id", stage_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Stage not found.")
-
     return result.data[0]
 
-
-# ---------------------------------------------------------------------------
-# DELETE /{stage_id} — delete a stage
-# ---------------------------------------------------------------------------
 
 @router.delete("/{stage_id}")
 async def delete_stage(
     stage_id: str,
     authorization: str = Header(...),
 ):
-    """Delete a pipeline stage. System stages cannot be deleted."""
+    """Delete a pipeline stage."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
     supabase = get_supabase()
 
-    # Check if it's a system stage
-    stage = (
-        supabase.table("pipeline_stages")
-        .select("*")
-        .eq("id", stage_id)
-        .limit(1)
-        .execute()
-    )
+    stage = supabase.table("pipeline_stages").select("*").eq("id", stage_id).limit(1).execute()
     if not stage.data:
         raise HTTPException(status_code=404, detail="Stage not found.")
-
     if stage.data[0].get("is_system"):
         raise HTTPException(status_code=400, detail="Cannot delete system stages.")
 
-    # Check if any cases are in this stage
     cases_in_stage = (
-        supabase.table("cases")
-        .select("id")
-        .eq("status", stage.data[0]["slug"])
-        .limit(1)
-        .execute()
+        supabase.table("cases").select("id").eq("status", stage.data[0]["slug"]).limit(1).execute()
     )
     if cases_in_stage.data:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete stage — there are cases in this stage. Move them first.",
-        )
+        raise HTTPException(status_code=400, detail="Cannot delete — cases exist in this stage.")
 
     supabase.table("pipeline_stages").delete().eq("id", stage_id).execute()
     return {"deleted": True}
 
-
-# ---------------------------------------------------------------------------
-# POST /reorder — reorder all stages
-# ---------------------------------------------------------------------------
 
 @router.post("/reorder")
 async def reorder_stages(
     body: StageReorder,
     authorization: str = Header(...),
 ):
-    """Reorder pipeline stages by providing an ordered list of stage IDs."""
+    """Reorder pipeline stages."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
     supabase = get_supabase()
-
     for i, stage_id in enumerate(body.stage_ids):
-        supabase.table("pipeline_stages").update(
-            {"position": i}
-        ).eq("id", stage_id).execute()
+        supabase.table("pipeline_stages").update({"position": i}).eq("id", stage_id).execute()
 
-    return {"reordered": True, "count": len(body.stage_ids)}
+    return {"reordered": True}

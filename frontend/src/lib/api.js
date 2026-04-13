@@ -351,8 +351,26 @@ export async function getReindexStatus() {
 // Pipeline Stages
 // ---------------------------------------------------------------------------
 
-export async function getPipelineStages() {
-  return request('/pipeline-stages');
+export async function getPipelineStages(pipelineId = null) {
+  const params = pipelineId ? `?pipeline_id=${pipelineId}` : '';
+  return request(`/pipeline-stages${params}`);
+}
+
+export async function getPipelines() {
+  return request('/pipeline-stages/pipelines');
+}
+
+export async function createPipeline(data) {
+  return request('/pipeline-stages/pipelines', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePipeline(id) {
+  return request(`/pipeline-stages/pipelines/${id}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function createPipelineStage(data) {
