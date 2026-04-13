@@ -71,7 +71,7 @@ def _create_pending_agent_outputs(supabase, case_id: str) -> dict:
             .select("id")
             .eq("case_id", case_id)
             .eq("agent_name", agent_name)
-            .order("created_at", desc=True)
+            .order("started_at", desc=True)
             .limit(1)
             .execute()
         )

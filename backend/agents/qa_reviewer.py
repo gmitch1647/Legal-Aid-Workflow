@@ -89,7 +89,7 @@ async def run(case_id: str, complaint_text: str, classification: dict) -> dict:
         .select("id")
         .eq("case_id", case_id)
         .eq("agent_name", AGENT_NAME)
-        .order("created_at", desc=True)
+        .order("started_at", desc=True)
         .limit(1)
         .execute()
     )
