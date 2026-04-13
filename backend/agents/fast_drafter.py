@@ -206,7 +206,7 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
 
         analysis_response = client.messages.create(
             model=ANALYSIS_MODEL,
-            max_tokens=8192,
+            max_tokens=4096,
             system=ANALYSIS_PROMPT,
             messages=[{
                 "role": "user",
@@ -278,7 +278,7 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
 
         draft_response = client.messages.create(
             model=DRAFTING_MODEL,
-            max_tokens=16384,
+            max_tokens=8192,
             system=system_blocks,
             messages=[{
                 "role": "user",
