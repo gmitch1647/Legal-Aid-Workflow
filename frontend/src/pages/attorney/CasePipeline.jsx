@@ -10,22 +10,22 @@ import {
   X,
   ChevronDown,
 } from 'lucide-react';
-import { getCases, updateCaseStatus } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
-// Constants
+// Fallback columns (used if pipeline_stages table hasn't been set up)
 // ---------------------------------------------------------------------------
 
-const COLUMNS = [
-  { key: 'submitted', label: 'Submitted', color: 'bg-blue-500', headerBg: 'bg-blue-50', borderColor: 'border-blue-200' },
-  { key: 'approved_for_processing', label: 'Approved for Processing', color: 'bg-indigo-500', headerBg: 'bg-indigo-50', borderColor: 'border-indigo-200' },
-  { key: 'agents_processing', label: 'Agents Processing', color: 'bg-cyan-500', headerBg: 'bg-cyan-50', borderColor: 'border-cyan-200' },
-  { key: 'draft_ready', label: 'Draft Ready', color: 'bg-amber-500', headerBg: 'bg-amber-50', borderColor: 'border-amber-200' },
-  { key: 'attorney_review', label: 'Attorney Review', color: 'bg-purple-500', headerBg: 'bg-purple-50', borderColor: 'border-purple-200' },
-  { key: 'approved', label: 'Approved', color: 'bg-green-500', headerBg: 'bg-green-50', borderColor: 'border-green-200' },
-  { key: 'filed', label: 'Filed', color: 'bg-emerald-500', headerBg: 'bg-emerald-50', borderColor: 'border-emerald-200' },
-  { key: 'closed', label: 'Closed', color: 'bg-slate-500', headerBg: 'bg-slate-50', borderColor: 'border-slate-200' },
+const DEFAULT_COLUMNS = [
+  { key: 'submitted', label: 'Submitted', color: 'blue' },
+  { key: 'approved_for_processing', label: 'Approved for Processing', color: 'indigo' },
+  { key: 'agents_processing', label: 'Agents Processing', color: 'cyan' },
+  { key: 'draft_ready', label: 'Draft Ready', color: 'amber' },
+  { key: 'attorney_review', label: 'Attorney Review', color: 'purple' },
+  { key: 'approved', label: 'Approved', color: 'green' },
+  { key: 'filed', label: 'Filed', color: 'emerald' },
+  { key: 'closed', label: 'Closed', color: 'slate' },
 ];
 
 const CASE_TYPES = ['FCRA', 'FDCPA', 'TCPA'];
@@ -38,6 +38,7 @@ export default function CasePipeline() {
   const navigate = useNavigate();
 
   const [cases, setCases] = useState([]);
+  const [columns, setColumns] = useState(DEFAULT_COLUMNS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [updating, setUpdating] = useState(null);
@@ -49,12 +50,29 @@ export default function CasePipeline() {
   const [dateTo, setDateTo] = useState('');
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const fetchCases = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getCases();
-      const list = Array.isArray(data) ? data : data?.items ?? data?.cases ?? [];
+
+      // Load stages and cases in parallel
+      const [stagesData, casesData] = await Promise.all([
+        getPipelineStages().catch(() => null),
+        getCases(),
+      ]);
+
+      // Use dynamic stages if available, otherwise fallback
+      if (stagesData && stagesData.length > 0) {
+        setColumns(
+          stagesData.map((s) => ({
+            key: s.slug,
+            label: s.name,
+            color: s.color || 'slate',
+          }))
+        );
+      }
+
+      const list = Array.isArray(casesData) ? casesData : casesData?.items ?? casesData?.cases ?? [];
       setCases(list);
     } catch (err) {
       console.error('Pipeline fetch error:', err);
@@ -65,8 +83,8 @@ export default function CasePipeline() {
   }, []);
 
   useEffect(() => {
-    fetchCases();
-  }, [fetchCases]);
+    fetchData();
+  }, [fetchData]);
 
   // Filter cases
   const filteredCases = useMemo(() => {
@@ -108,7 +126,7 @@ export default function CasePipeline() {
   // Group by status
   const grouped = useMemo(() => {
     const map = {};
-    COLUMNS.forEach((col) => {
+    columns.forEach((col) => {
       map[col.key] = [];
     });
     filteredCases.forEach((c) => {
@@ -275,14 +293,17 @@ export default function CasePipeline() {
       {/* Kanban Board */}
       <DragDropContext onDragEnd={handleDragEnd}>
         <div className="flex gap-4 overflow-x-auto pb-4">
-          {COLUMNS.map((col) => {
+          {columns.map((col) => {
             const columnCases = grouped[col.key] || [];
             return (
               <div key={col.key} className="flex w-72 shrink-0 flex-col">
                 {/* Column Header */}
-                <div className={`mb-3 flex items-center justify-between rounded-lg border ${col.borderColor} ${col.headerBg} px-3 py-2.5`}>
+                <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                   <div className="flex items-center gap-2">
-                    <div className={`h-2.5 w-2.5 rounded-full ${col.color}`} />
+                    <div
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ background: `var(--color-${col.color}-500, #64748b)` }}
+                    />
                     <h3 className="text-sm font-semibold text-slate-800">{col.label}</h3>
                   </div>
                   <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-white px-2 text-xs font-bold text-slate-600 shadow-sm">

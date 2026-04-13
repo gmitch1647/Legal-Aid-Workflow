@@ -348,6 +348,41 @@ export async function getReindexStatus() {
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline Stages
+// ---------------------------------------------------------------------------
+
+export async function getPipelineStages() {
+  return request('/pipeline-stages');
+}
+
+export async function createPipelineStage(data) {
+  return request('/pipeline-stages', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updatePipelineStage(id, data) {
+  return request(`/pipeline-stages/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePipelineStage(id) {
+  return request(`/pipeline-stages/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function reorderPipelineStages(stageIds) {
+  return request('/pipeline-stages/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ stage_ids: stageIds }),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Auth / Registration
 // ---------------------------------------------------------------------------
 

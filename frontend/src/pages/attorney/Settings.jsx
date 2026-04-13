@@ -28,6 +28,11 @@ import {
   updateDefendant,
   reindexReferenceCases,
   getReindexStatus,
+  getPipelineStages,
+  createPipelineStage,
+  updatePipelineStage,
+  deletePipelineStage,
+  reorderPipelineStages,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -37,6 +42,7 @@ import { supabase } from '../../lib/supabase';
 
 const TABS = [
   { key: 'profile', label: 'Attorney Profile', icon: User },
+  { key: 'pipeline', label: 'Pipeline Stages', icon: RefreshCw },
   { key: 'defendants', label: 'Defendant Database', icon: Database },
   { key: 'reference_cases', label: 'Reference Cases', icon: BookOpen },
   { key: 'notifications', label: 'Notifications', icon: Bell },
@@ -849,6 +855,283 @@ function BrandingTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline Stages Tab — manage Kanban columns
+// ---------------------------------------------------------------------------
+
+const STAGE_COLORS = [
+  'blue', 'indigo', 'cyan', 'amber', 'purple', 'green', 'emerald', 'slate',
+  'red', 'orange', 'teal', 'pink', 'violet', 'lime', 'sky',
+];
+
+function PipelineStagesTab() {
+  const [stages, setStages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newColor, setNewColor] = useState('slate');
+  const [newDesc, setNewDesc] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('');
+
+  const loadStages = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await getPipelineStages();
+      setStages(data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadStages(); }, [loadStages]);
+
+  async function handleAdd() {
+    if (!newName.trim()) return;
+    setSaving(true);
+    try {
+      await createPipelineStage({ name: newName, color: newColor, description: newDesc });
+      setNewName('');
+      setNewColor('slate');
+      setNewDesc('');
+      setShowAdd(false);
+      await loadStages();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(id) {
+    if (!window.confirm('Delete this pipeline stage?')) return;
+    try {
+      await deletePipelineStage(id);
+      await loadStages();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleSaveEdit(id) {
+    try {
+      await updatePipelineStage(id, { name: editName, color: editColor });
+      setEditingId(null);
+      await loadStages();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleMoveUp(index) {
+    if (index === 0) return;
+    const newOrder = [...stages];
+    [newOrder[index - 1], newOrder[index]] = [newOrder[index], newOrder[index - 1]];
+    setStages(newOrder);
+    try {
+      await reorderPipelineStages(newOrder.map((s) => s.id));
+    } catch (err) {
+      setError(err.message);
+      await loadStages();
+    }
+  }
+
+  async function handleMoveDown(index) {
+    if (index === stages.length - 1) return;
+    const newOrder = [...stages];
+    [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
+    setStages(newOrder);
+    try {
+      await reorderPipelineStages(newOrder.map((s) => s.id));
+    } catch (err) {
+      setError(err.message);
+      await loadStages();
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-600">
+        Customize your case pipeline columns. Drag stages up/down to reorder.
+        System stages (needed for the agent pipeline) cannot be deleted.
+      </p>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          {error}
+          <button onClick={() => setError(null)} className="ml-auto"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
+      {/* Stages list */}
+      <div className="space-y-2">
+        {stages.map((stage, i) => (
+          <div
+            key={stage.id}
+            className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"
+          >
+            {/* Position arrows */}
+            <div className="flex flex-col gap-0.5">
+              <button
+                onClick={() => handleMoveUp(i)}
+                disabled={i === 0}
+                className="text-slate-400 hover:text-slate-700 disabled:opacity-30"
+              >
+                <ChevronRight className="w-4 h-4 -rotate-90" />
+              </button>
+              <button
+                onClick={() => handleMoveDown(i)}
+                disabled={i === stages.length - 1}
+                className="text-slate-400 hover:text-slate-700 disabled:opacity-30"
+              >
+                <ChevronRight className="w-4 h-4 rotate-90" />
+              </button>
+            </div>
+
+            {/* Color dot */}
+            <div
+              className="w-3 h-3 rounded-full shrink-0"
+              style={{ background: `var(--color-${stage.color}-500, #64748b)` }}
+            />
+
+            {/* Name + slug */}
+            {editingId === stage.id ? (
+              <div className="flex-1 flex items-center gap-2">
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
+                  autoFocus
+                />
+                <select
+                  value={editColor}
+                  onChange={(e) => setEditColor(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs"
+                >
+                  {STAGE_COLORS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => handleSaveEdit(stage.id)}
+                  className="text-emerald-600 hover:text-emerald-700"
+                >
+                  <Check className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setEditingId(null)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-slate-900">{stage.name}</div>
+                <div className="text-xs text-slate-400">{stage.slug}{stage.description ? ` — ${stage.description}` : ''}</div>
+              </div>
+            )}
+
+            {/* Actions */}
+            {editingId !== stage.id && (
+              <div className="flex items-center gap-1">
+                {stage.is_system && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">system</span>
+                )}
+                <button
+                  onClick={() => {
+                    setEditingId(stage.id);
+                    setEditName(stage.name);
+                    setEditColor(stage.color);
+                  }}
+                  className="p-1 text-slate-400 hover:text-slate-700"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                </button>
+                {!stage.is_system && (
+                  <button
+                    onClick={() => handleDelete(stage.id)}
+                    className="p-1 text-slate-400 hover:text-red-500"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Add new stage */}
+      {showAdd ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3">
+          <div className="text-sm font-semibold text-emerald-900">Add New Stage</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Stage name (e.g. Negotiation)"
+              className="col-span-2 rounded border border-slate-300 px-3 py-2 text-sm"
+              autoFocus
+            />
+            <select
+              value={newColor}
+              onChange={(e) => setNewColor(e.target.value)}
+              className="rounded border border-slate-300 px-3 py-2 text-sm"
+            >
+              {STAGE_COLORS.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+          <input
+            value={newDesc}
+            onChange={(e) => setNewDesc(e.target.value)}
+            placeholder="Description (optional)"
+            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={handleAdd}
+              disabled={saving || !newName.trim()}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {saving ? 'Adding...' : 'Add Stage'}
+            </button>
+            <button
+              onClick={() => setShowAdd(false)}
+              className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 hover:text-emerald-700"
+        >
+          <Plus className="w-4 h-4" /> Add Stage
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Reference Cases Tab — RAG index management
 // ---------------------------------------------------------------------------
 
@@ -1151,6 +1434,8 @@ export default function Settings() {
         return <ProfileTab />;
       case 'defendants':
         return <DefendantsTab />;
+      case 'pipeline':
+        return <PipelineStagesTab />;
       case 'reference_cases':
         return <ReferenceCasesTab />;
       case 'notifications':
