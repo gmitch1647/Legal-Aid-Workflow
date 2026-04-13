@@ -22,7 +22,7 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 ANALYSIS_MODEL = "claude-haiku-4-5"
-DRAFTING_MODEL = "claude-sonnet-4-5"
+DRAFTING_MODEL = "claude-haiku-4-5"  # Haiku for speed (~8s); revision chat uses Sonnet for polish
 
 # ---------------------------------------------------------------------------
 # Call 1 — Analysis (Haiku)
