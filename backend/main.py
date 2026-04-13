@@ -104,6 +104,18 @@ async def root():
     }
 
 
+@app.get("/debug/reindex", tags=["Health"])
+async def debug_reindex():
+    """Trigger reindex without auth — temporary for setup."""
+    try:
+        from utils.reference_indexer import index_all_reference_cases
+        result = index_all_reference_cases(force=True)
+        return {"status": "done", **result}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "type": type(e).__name__, "traceback": traceback.format_exc()}
+
+
 @app.get("/health", tags=["Health"])
 async def health():
     """Railway healthcheck endpoint."""
