@@ -82,6 +82,7 @@ export default function DraftComplaint() {
   const [damages, setDamages] = useState('');
   const [juryDemand, setJuryDemand] = useState(true);
   const [gaClaims, setGaClaims] = useState('include');
+  const [draftMode, setDraftMode] = useState('fast'); // 'fast' (~15s) or 'thorough' (~90s)
   const [uploadedDocs, setUploadedDocs] = useState([]); // { name, storage_path }
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -243,6 +244,7 @@ export default function DraftComplaint() {
       jury_demand: juryDemand,
       georgia_claims: gaClaims,
       document_urls: uploadedDocs.map((d) => d.storage_path),
+      mode: draftMode,
     };
 
     try {
@@ -523,8 +525,35 @@ export default function DraftComplaint() {
             )}
           </Card>
 
-          {/* Options */}
+          {/* Draft Mode */}
           <Card>
+            <SectionLabel>DRAFTING MODE</SectionLabel>
+            <div className="flex gap-3 mb-4">
+              <button
+                onClick={() => setDraftMode('fast')}
+                className={`flex-1 rounded-lg border-2 p-3 text-left transition ${
+                  draftMode === 'fast'
+                    ? 'border-emerald-500 bg-emerald-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="text-sm font-semibold text-slate-900">⚡ Fast Draft</div>
+                <div className="text-xs text-slate-500 mt-0.5">~15 seconds · 2 API calls · best for most cases</div>
+              </button>
+              <button
+                onClick={() => setDraftMode('thorough')}
+                className={`flex-1 rounded-lg border-2 p-3 text-left transition ${
+                  draftMode === 'thorough'
+                    ? 'border-purple-500 bg-purple-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="text-sm font-semibold text-slate-900">🔍 Thorough</div>
+                <div className="text-xs text-slate-500 mt-0.5">~90 seconds · 7 specialized agents · complex cases</div>
+              </button>
+            </div>
+
+            {/* Options */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <SectionLabel>JURY DEMAND</SectionLabel>

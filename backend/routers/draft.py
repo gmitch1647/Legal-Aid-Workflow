@@ -82,6 +82,7 @@ class DraftStartPayload(BaseModel):
     jury_demand: bool = True
     georgia_claims: str = "include"  # include | federal_only | agent_decides
     document_urls: list[str] = []
+    mode: str = "fast"  # "fast" (2-call, ~15s) or "thorough" (7-agent, ~90s)
 
 
 # ---------------------------------------------------------------------------
@@ -227,19 +228,21 @@ async def start_draft(
         except Exception as e:
             logger.warning(f"Could not attach document {doc_url}: {e}")
 
-    # Launch the pipeline as an asyncio task so it runs in the
-    # background without blocking the response.  We wrap it in a
-    # _safe_run helper so that any exception is caught and logged
-    # (asyncio.create_task swallows exceptions silently otherwise).
-    async def _safe_pipeline(cid: str) -> None:
+    # Launch the pipeline as an asyncio background task.
+    async def _safe_pipeline(cid: str, mode: str, facts: str, dmg: str) -> None:
         try:
-            logger.info(f"Pipeline background task starting for case {cid}")
-            from agents.orchestrator import run_pipeline
-            await run_pipeline(cid)
-            logger.info(f"Pipeline background task finished for case {cid}")
+            if mode == "fast":
+                logger.info(f"Fast draft starting for case {cid}")
+                from agents.fast_drafter import run_fast_draft
+                await run_fast_draft(cid, facts, dmg)
+                logger.info(f"Fast draft finished for case {cid}")
+            else:
+                logger.info(f"Thorough pipeline starting for case {cid}")
+                from agents.orchestrator import run_pipeline
+                await run_pipeline(cid)
+                logger.info(f"Thorough pipeline finished for case {cid}")
         except Exception as e:
-            logger.exception(f"Pipeline background task CRASHED for case {cid}: {e}")
-            # Try to mark the case as errored
+            logger.exception(f"Pipeline CRASHED for case {cid}: {e}")
             try:
                 sb = get_supabase()
                 sb.table("cases").update({
@@ -249,7 +252,7 @@ async def start_draft(
             except Exception:
                 pass
 
-    asyncio.create_task(_safe_pipeline(case_id))
+    asyncio.create_task(_safe_pipeline(case_id, payload.mode, case_facts, payload.damages_description))
 
     logger.info(f"Draft session started for case {case_id} by {profile.get('email')}")
 
