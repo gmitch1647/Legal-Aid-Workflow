@@ -933,6 +933,91 @@ class RevisePayload(BaseModel):
     attachment_paths: list[str] = []  # Supabase storage paths to analyze
 
 
+# ---------------------------------------------------------------------------
+# GET /{session_id}/versions — list all complaint versions
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{session_id}/versions")
+async def list_versions(session_id: str, authorization: str = Header(default=None)):
+    """Return all complaint versions for a session."""
+    supabase = get_supabase()
+    resp = (
+        supabase.table("complaints")
+        .select("id, version, complaint_text, is_current, created_at")
+        .eq("case_id", session_id)
+        .order("version", desc=True)
+        .execute()
+    )
+    rows = resp.data or []
+    # Add preview + length for each version
+    for r in rows:
+        text = r.get("complaint_text") or ""
+        r["length"] = len(text)
+        r["preview"] = text[:200]
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# POST /{session_id}/restore-version — make an old version current
+# ---------------------------------------------------------------------------
+
+
+class RestoreVersionPayload(BaseModel):
+    version: int
+
+
+@router.post("/{session_id}/restore-version")
+async def restore_version(
+    session_id: str,
+    payload: RestoreVersionPayload,
+    authorization: str = Header(default=None),
+):
+    """Restore a previous complaint version to be the current one."""
+    supabase = get_supabase()
+
+    # Find the target version
+    target = (
+        supabase.table("complaints")
+        .select("id, complaint_text")
+        .eq("case_id", session_id)
+        .eq("version", payload.version)
+        .limit(1)
+        .execute()
+    )
+    if not target.data:
+        raise HTTPException(status_code=404, detail=f"Version {payload.version} not found")
+
+    # Mark all other versions as not current
+    supabase.table("complaints").update(
+        {"is_current": False}
+    ).eq("case_id", session_id).execute()
+
+    # Create a new version that is a copy of the target (preserves history)
+    max_ver = (
+        supabase.table("complaints")
+        .select("version")
+        .eq("case_id", session_id)
+        .order("version", desc=True)
+        .limit(1)
+        .execute()
+    )
+    new_version = (max_ver.data[0]["version"] + 1) if max_ver.data else 1
+
+    supabase.table("complaints").insert({
+        "case_id": session_id,
+        "complaint_text": target.data[0]["complaint_text"],
+        "version": new_version,
+        "is_current": True,
+    }).execute()
+
+    return {
+        "restored_from_version": payload.version,
+        "new_version": new_version,
+        "complaint_text": target.data[0]["complaint_text"],
+    }
+
+
 @router.post("/{session_id}/revise")
 async def revise_draft(
     session_id: str,
@@ -1101,18 +1186,81 @@ REVISED COMPLAINT:
         assistant_text = response.content[0].text
 
         # Try to extract the revised complaint from the response
-        revised_complaint = assistant_text
+        revised_complaint = None
+        changes_summary = ""
+
         if "REVISED COMPLAINT:" in assistant_text:
             parts = assistant_text.split("REVISED COMPLAINT:", 1)
-            changes_summary = parts[0].strip()
-            revised_complaint = parts[1].strip()
+            changes_summary = parts[0].replace("CHANGES MADE:", "").strip()
+            candidate = parts[1].strip()
+            if len(candidate) > 500:  # must look like an actual complaint
+                revised_complaint = candidate
         elif "---BEGIN COMPLAINT---" in assistant_text:
-            start = assistant_text.index("---BEGIN COMPLAINT---") + len("---BEGIN COMPLAINT---")
-            end = assistant_text.index("---END COMPLAINT---") if "---END COMPLAINT---" in assistant_text else len(assistant_text)
-            revised_complaint = assistant_text[start:end].strip()
-            changes_summary = assistant_text[:assistant_text.index("---BEGIN COMPLAINT---")].strip()
-        else:
-            changes_summary = ""
+            try:
+                start = assistant_text.index("---BEGIN COMPLAINT---") + len("---BEGIN COMPLAINT---")
+                end = assistant_text.index("---END COMPLAINT---") if "---END COMPLAINT---" in assistant_text else len(assistant_text)
+                candidate = assistant_text[start:end].strip()
+                if len(candidate) > 500:
+                    revised_complaint = candidate
+                changes_summary = assistant_text[:assistant_text.index("---BEGIN COMPLAINT---")].strip()
+            except Exception:
+                pass
+
+        # Validate: a real revised complaint should have typical markers
+        if revised_complaint:
+            markers_present = sum(
+                1 for m in ["Plaintiff", "Defendant", "Count", "1681", "1692", "227", "Jurisdiction", "Prayer"]
+                if m in revised_complaint
+            )
+            if markers_present < 3 or len(revised_complaint) < 1000:
+                # Claude returned something that doesn't look like a complaint —
+                # treat it as a chat response, DON'T save as a new version
+                revised_complaint = None
+
+        # If we don't have a valid revised complaint, treat this as a chat-only reply
+        # and keep the existing complaint unchanged
+        if not revised_complaint:
+            chat_reply = assistant_text.strip()
+            # Trim any leading "CHANGES MADE:" header
+            if chat_reply.startswith("CHANGES MADE:"):
+                chat_reply = chat_reply[len("CHANGES MADE:"):].strip()
+
+            # Save conversation history only
+            try:
+                updated_history = conversation_history + [
+                    {"role": "user", "content": payload.message[:2000]},
+                    {"role": "assistant", "content": chat_reply[:2000]},
+                ]
+                updated_history = updated_history[-20:]
+                supabase.table("cases").update({
+                    "revision_history": updated_history,
+                }).eq("id", session_id).execute()
+            except Exception:
+                pass
+
+            # Get current version to return unchanged
+            current_ver = 1
+            try:
+                v = (
+                    supabase.table("complaints")
+                    .select("version")
+                    .eq("case_id", session_id)
+                    .eq("is_current", True)
+                    .limit(1)
+                    .execute()
+                )
+                if v.data:
+                    current_ver = v.data[0].get("version", 1)
+            except Exception:
+                pass
+
+            return {
+                "revised_complaint": payload.complaint_text,  # unchanged
+                "changes_summary": chat_reply,
+                "version": current_ver,
+                "full_response": assistant_text,
+                "was_revised": False,
+            }
 
         # Save the revised complaint as a new version
         version_query = (

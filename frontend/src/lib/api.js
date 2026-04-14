@@ -299,6 +299,17 @@ export async function getDraftResult(sessionId) {
  * Send a revision instruction for a drafted complaint.
  * Returns { revised_complaint, changes_summary, version }.
  */
+export async function listDraftVersions(sessionId) {
+  return request(`/draft/${sessionId}/versions`);
+}
+
+export async function restoreDraftVersion(sessionId, version) {
+  return request(`/draft/${sessionId}/restore-version`, {
+    method: 'POST',
+    body: JSON.stringify({ version }),
+  });
+}
+
 export async function reviseDraft(sessionId, message, complaintText, attachmentPaths = []) {
   return request(`/draft/${sessionId}/revise`, {
     method: 'POST',

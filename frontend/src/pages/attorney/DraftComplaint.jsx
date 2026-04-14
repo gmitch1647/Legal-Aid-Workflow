@@ -24,6 +24,8 @@ import {
   reviseDraft,
   downloadDraftDocx,
   listDrafts,
+  listDraftVersions,
+  restoreDraftVersion,
 } from '../../lib/api';
 
 // ---------------------------------------------------------------------------
@@ -930,7 +932,16 @@ function OutputPanel({
                 Draft Complete {complaintResult.version > 1 ? `(v${complaintResult.version})` : ''}
               </span>
             </div>
-            <DownloadDocxButton sessionId={sessionId} version={complaintResult.version} />
+            <div className="flex items-center gap-2">
+              <VersionHistoryButton
+                sessionId={sessionId}
+                currentVersion={complaintResult.version}
+                onRestore={(text, version) => {
+                  if (onComplaintUpdate) onComplaintUpdate(text, version);
+                }}
+              />
+              <DownloadDocxButton sessionId={sessionId} version={complaintResult.version} />
+            </div>
           </div>
 
           <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[500px] overflow-y-auto mb-4">
@@ -1074,6 +1085,111 @@ function AgentRow({ number, display, desc, status, elapsed, logMessages }) {
 }
 
 // ---------------------------------------------------------------------------
+// Version History button — list/restore previous complaint versions
+// ---------------------------------------------------------------------------
+
+function VersionHistoryButton({ sessionId, currentVersion, onRestore }) {
+  const [open, setOpen] = useState(false);
+  const [versions, setVersions] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  async function loadVersions() {
+    setLoading(true);
+    try {
+      const data = await listDraftVersions(sessionId);
+      setVersions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load versions:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRestore(version) {
+    if (!window.confirm(`Restore version ${version}? This will replace the current complaint (but keep all versions in history).`)) return;
+    try {
+      const result = await restoreDraftVersion(sessionId, version);
+      if (onRestore && result.complaint_text) {
+        onRestore(result.complaint_text, result.new_version);
+      }
+      setOpen(false);
+    } catch (err) {
+      alert('Restore failed: ' + (err.message || 'Unknown error'));
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => { setOpen(true); loadVersions(); }}
+        className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs font-medium hover:bg-slate-50 transition"
+        title="View version history"
+      >
+        <RefreshCw className="w-3.5 h-3.5" />
+        v{currentVersion || 1}
+      </button>
+      {open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">Version History</h2>
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-2">
+              {loading ? (
+                <div className="text-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-slate-400 mx-auto" />
+                </div>
+              ) : versions.length === 0 ? (
+                <div className="text-center py-8 text-slate-400">No versions found.</div>
+              ) : (
+                versions.map((v) => (
+                  <div
+                    key={v.id}
+                    className={`p-3 border-b border-slate-100 hover:bg-slate-50 ${
+                      v.is_current ? 'bg-emerald-50/30' : ''
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div>
+                        <div className="font-semibold text-sm text-slate-900 flex items-center gap-2">
+                          Version {v.version}
+                          {v.is_current && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-bold uppercase">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {v.created_at ? new Date(v.created_at).toLocaleString() : ''} · {v.length} chars
+                        </div>
+                      </div>
+                      {!v.is_current && (
+                        <button
+                          onClick={() => handleRestore(v.version)}
+                          className="px-3 py-1 bg-slate-900 text-white rounded text-xs font-medium hover:bg-slate-700"
+                        >
+                          Restore
+                        </button>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 font-serif line-clamp-3">
+                      {v.preview}...
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Download .docx button — generates formatted Word doc from current complaint
 // ---------------------------------------------------------------------------
 
@@ -1188,13 +1304,18 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
         currentAttachments.map((a) => a.storage_path),
       );
 
-      const assistantMsg = result.changes_summary
-        ? `${result.changes_summary}\n\n✅ Complaint updated to v${result.version}`
-        : `✅ Complaint revised (v${result.version})`;
+      // If the backend indicates it was NOT revised (chat-only reply),
+      // don't update the complaint and just show the reply
+      const wasRevised = result.was_revised !== false;
+      const assistantMsg = wasRevised
+        ? (result.changes_summary
+            ? `${result.changes_summary}\n\n✅ Complaint updated to v${result.version}`
+            : `✅ Complaint revised (v${result.version})`)
+        : (result.changes_summary || 'Reply received. Complaint unchanged.');
 
       setMessages((prev) => [...prev, { role: 'assistant', content: assistantMsg }]);
 
-      if (result.revised_complaint && onComplaintUpdate) {
+      if (wasRevised && result.revised_complaint && onComplaintUpdate) {
         onComplaintUpdate(result.revised_complaint, result.version);
       }
     } catch (err) {
