@@ -1129,24 +1129,64 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState([]); // { name, storage_path }
+  const [uploading, setUploading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  async function handleSend() {
-    if (!input.trim() || sending) return;
+  async function handleFileSelect(e) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setUploading(true);
+    for (const file of files) {
+      try {
+        const result = await uploadDraftDocument(file);
+        setAttachments((prev) => [
+          ...prev,
+          { name: file.name, storage_path: result.storage_path },
+        ]);
+      } catch (err) {
+        console.error('Upload failed:', err);
+      }
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
 
-    const userMsg = input.trim();
+  function removeAttachment(idx) {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function handleSend() {
+    if ((!input.trim() && attachments.length === 0) || sending) return;
+
+    const userMsg = input.trim() || `(Analyze ${attachments.length} attached file${attachments.length > 1 ? 's' : ''})`;
+    const currentAttachments = attachments;
     setInput('');
+    setAttachments([]);
     setSending(true);
 
-    setMessages((prev) => [...prev, { role: 'user', content: userMsg }]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'user',
+        content: userMsg,
+        attachments: currentAttachments.map((a) => a.name),
+      },
+    ]);
 
     try {
-      const result = await reviseDraft(sessionId, userMsg, complaintText);
+      const result = await reviseDraft(
+        sessionId,
+        userMsg,
+        complaintText,
+        currentAttachments.map((a) => a.storage_path),
+      );
 
       const assistantMsg = result.changes_summary
         ? `${result.changes_summary}\n\n✅ Complaint updated to v${result.version}`
@@ -1218,6 +1258,16 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
                 {msg.role === 'user' ? 'You' : 'Drafter'}
               </div>
               <div className="whitespace-pre-wrap">{msg.content}</div>
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {msg.attachments.map((name, i) => (
+                    <span key={i} className="text-[9px] bg-white/60 rounded px-1.5 py-0.5 flex items-center gap-1">
+                      <FileText className="w-2.5 h-2.5" />
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
 
@@ -1233,20 +1283,61 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
         </div>
       )}
 
+      {/* Attachment pills */}
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {attachments.map((a, i) => (
+            <div key={i} className="flex items-center gap-1.5 px-2 py-1 bg-purple-50 border border-purple-200 rounded-full text-xs">
+              <FileText className="w-3 h-3 text-purple-500" />
+              <span className="max-w-[150px] truncate text-purple-900">{a.name}</span>
+              <button
+                onClick={() => removeAttachment(i)}
+                className="text-purple-400 hover:text-red-500"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+          {uploading && (
+            <div className="flex items-center gap-1 px-2 py-1 text-xs text-slate-500">
+              <Loader2 className="w-3 h-3 animate-spin" /> Uploading...
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+          onChange={handleFileSelect}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending || uploading}
+          title="Attach files for the drafter to analyze"
+          className="shrink-0 p-2.5 border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50 transition disabled:opacity-50"
+        >
+          <Upload className="w-4 h-4" />
+        </button>
         <textarea
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Tell the drafter what to change... (Enter to send)"
+          placeholder={attachments.length > 0
+            ? "Add context (or send to analyze the attachment)..."
+            : "Tell the drafter what to change... (attach files with the 📎 button)"}
           rows={2}
           disabled={sending}
           className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:opacity-60"
         />
         <button
           onClick={handleSend}
-          disabled={!input.trim() || sending}
+          disabled={(!input.trim() && attachments.length === 0) || sending}
           className="shrink-0 bg-purple-600 text-white p-2.5 rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Send className="w-4 h-4" />

@@ -930,6 +930,7 @@ async def reindex_status(authorization: str = Header(default=None)):
 class RevisePayload(BaseModel):
     message: str
     complaint_text: str  # the current complaint text to revise
+    attachment_paths: list[str] = []  # Supabase storage paths to analyze
 
 
 @router.post("/{session_id}/revise")
@@ -962,6 +963,30 @@ async def revise_draft(
 
     # Retrieve relevant reference chunks via RAG
     reference_context = ""
+
+    # Read any uploaded attachments
+    attachment_text = ""
+    if payload.attachment_paths:
+        try:
+            from utils.document_reader import read_document
+            attachment_parts = []
+            for path in payload.attachment_paths:
+                try:
+                    file_type = path.split(".")[-1].lower() if "." in path else "bin"
+                    text = read_document(path, file_type)
+                    if text:
+                        file_name = path.split("/")[-1]
+                        # Truncate very long documents
+                        if len(text) > 8000:
+                            text = text[:8000] + "\n\n[...document truncated, showing first 8000 chars]"
+                        attachment_parts.append(f"\n=== ATTACHMENT: {file_name} ===\n{text}\n=== END {file_name} ===\n")
+                except Exception as e:
+                    logger.warning(f"Could not read attachment {path}: {e}")
+                    attachment_parts.append(f"\n[Failed to read {path}: {e}]\n")
+            attachment_text = "\n".join(attachment_parts)
+            logger.info(f"[revise] Attached {len(payload.attachment_paths)} files ({len(attachment_text)} chars)")
+        except Exception as e:
+            logger.error(f"[revise] Attachment processing failed: {e}")
     try:
         from utils.rag_retrieval import retrieve_relevant_chunks, format_retrieved_context
         from utils.embeddings import is_configured
@@ -1038,13 +1063,20 @@ REVISED COMPLAINT:
             messages.append({"role": turn["role"], "content": turn["content"]})
 
     # Current revision request
-    user_content = (
+    user_content_parts = [
         f"CURRENT COMPLAINT:\n\n"
-        f"---BEGIN COMPLAINT---\n{payload.complaint_text}\n---END COMPLAINT---\n\n"
-        f"Attorney's instruction: {payload.message}\n\n"
+        f"---BEGIN COMPLAINT---\n{payload.complaint_text}\n---END COMPLAINT---",
+    ]
+    if attachment_text:
+        user_content_parts.append(
+            f"\nATTACHMENTS (the attorney uploaded these for you to analyze):\n{attachment_text}"
+        )
+    user_content_parts.append(
+        f"\nAttorney's instruction: {payload.message}\n\n"
         f"Remember: do not add defendants, parties, or facts not requested. "
         f"Return the complete revised complaint."
     )
+    user_content = "\n".join(user_content_parts)
     messages.append({"role": "user", "content": user_content})
 
     # Build system blocks with cached core + optional RAG
