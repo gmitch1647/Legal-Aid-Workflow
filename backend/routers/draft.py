@@ -755,9 +755,10 @@ async def download_complaint_docx(
         font.name = "Times New Roman"
         font.size = Pt(12)
         pf = style.paragraph_format
-        pf.line_spacing_rule = WD_LINE_SPACING.DOUBLE
-        pf.space_before = Pt(0)
-        pf.space_after = Pt(0)
+        pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        pf.line_spacing = Pt(24)
+        pf.space_before = Pt(12)
+        pf.space_after = Pt(12)
 
         # Parse complaint text into paragraphs and apply formatting
         lines = complaint_text.split("\n")
@@ -769,7 +770,10 @@ async def download_complaint_docx(
                 continue
 
             p = doc.add_paragraph()
-            p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
+            p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+            p.paragraph_format.line_spacing = Pt(24)
+            p.paragraph_format.space_before = Pt(12)
+            p.paragraph_format.space_after = Pt(12)
 
             # Detect headers and center/bold them
             upper = stripped.upper()
