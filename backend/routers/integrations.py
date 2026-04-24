@@ -183,90 +183,137 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
 # ---------------------------------------------------------------------------
 
 @router.post("/suitedash/webhook", status_code=status.HTTP_201_CREATED)
-async def suitedash_webhook(body: SuiteDashWebhook, request: Request):
-    """Receive a case submission from SuiteDash.
+async def suitedash_webhook(request: Request):
+    """Receive a case submission from SuiteDash via Zapier.
 
-    Creates a client profile and case record in LegalFlow.
-    SuiteDash should be configured to POST to this URL when
-    a new intake form is submitted.
+    Accepts any JSON or form-encoded payload. Handles null values,
+    empty strings, and missing fields gracefully.
     """
     # Verify webhook secret if configured
     if not _verify_webhook(request):
         raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
+    # Parse body — accept JSON or form data
+    try:
+        content_type = request.headers.get("content-type", "")
+        if "json" in content_type:
+            raw = await request.json()
+        elif "form" in content_type:
+            form = await request.form()
+            raw = {k: v for k, v in form.items() if k and v}
+        else:
+            raw = await request.json()
+    except Exception:
+        try:
+            body = await request.body()
+            import json
+            raw = json.loads(body)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not parse request body")
+
+    # Clean the data — remove nulls, empty strings, and empty keys
+    def clean(val):
+        if val is None:
+            return ""
+        if isinstance(val, str):
+            return val.strip()
+        return val
+
+    data = {}
+    for k, v in raw.items():
+        key = str(k).strip() if k else ""
+        if not key:
+            continue  # skip empty keys
+        cleaned = clean(v)
+        if cleaned != "" and cleaned is not None:
+            data[key] = cleaned
+
+    logger.info(f"SuiteDash webhook received: {list(data.keys())}")
+
     supabase = get_supabase()
 
-    # Parse client name
+    # Parse client name — try many field names
     name = (
-        body.full_name or
-        body.name or
-        f"{body.first_name or ''} {body.last_name or ''}".strip() or
-        "Unknown Client"
+        data.get("full_name") or
+        data.get("name") or
+        data.get("client_name") or
+        data.get("contact_name") or
+        ""
     )
+    if not name:
+        first = data.get("first_name") or data.get("firstname") or ""
+        last = data.get("last_name") or data.get("lastname") or ""
+        name = f"{first} {last}".strip()
+    if not name:
+        name = "Unknown Client"
 
-    # Parse case facts from various possible fields
+    email = data.get("email") or data.get("client_email") or data.get("contact_email") or ""
+    phone = data.get("phone") or data.get("client_phone") or data.get("phone_number") or ""
+
+    # Address
+    address = data.get("address") or data.get("street_address") or ""
+    city = data.get("city") or ""
+    state = data.get("state") or "Georgia"
+    county = data.get("county") or ""
+    zip_code = data.get("zip_code") or data.get("zip") or data.get("postal_code") or ""
+    full_address = ", ".join(p for p in [address, city, state, zip_code] if p)
+
+    # Case facts
     facts = (
-        body.case_facts or
-        body.case_description or
-        body.what_happened or
-        body.description or
-        body.details or
+        data.get("case_facts") or
+        data.get("case_description") or
+        data.get("what_happened") or
+        data.get("description") or
+        data.get("details") or
+        data.get("message") or
+        data.get("notes") or
         ""
     )
 
-    # Parse damages
-    damages = body.damages or body.damages_description or body.harm or ""
+    damages = data.get("damages") or data.get("damages_description") or data.get("harm") or ""
 
-    # Parse defendants
+    # Defendants
     defendant_list = []
-    if body.defendant_names:
-        defendant_list = body.defendant_names
-    elif body.defendants:
-        defendant_list = [d.strip() for d in body.defendants.split(",") if d.strip()]
-    elif body.defendant_name:
-        defendant_list = [body.defendant_name]
+    if data.get("defendant_names") and isinstance(data["defendant_names"], list):
+        defendant_list = data["defendant_names"]
+    elif data.get("defendants"):
+        defendant_list = [d.strip() for d in str(data["defendants"]).split(",") if d.strip()]
+    elif data.get("defendant_name"):
+        defendant_list = [str(data["defendant_name"])]
 
-    # Parse documents
-    doc_urls = body.document_urls or body.attachments or []
-    if body.files:
-        for f in body.files:
-            if isinstance(f, dict) and f.get("url"):
-                doc_urls.append(f["url"])
-
-    # Build address
-    address_parts = [body.address or ""]
-    if body.city:
-        address_parts.append(body.city)
-    if body.state:
-        address_parts.append(body.state)
-    if body.zip_code:
-        address_parts.append(body.zip_code)
-    address = ", ".join(p for p in address_parts if p)
+    # Documents
+    doc_urls = []
+    for key in ["document_urls", "attachments", "files", "documents", "file_url"]:
+        val = data.get(key)
+        if val:
+            if isinstance(val, list):
+                doc_urls.extend([str(u) for u in val if u])
+            elif isinstance(val, str) and val.startswith("http"):
+                doc_urls.append(val)
 
     # 1. Find or create client
     client_id = _find_or_create_client(
         supabase,
         name=name,
-        email=body.email or "",
-        phone=body.phone or "",
-        address=address,
-        county=body.county or "",
-        state=body.state or "Georgia",
+        email=email,
+        phone=phone,
+        address=full_address,
+        county=county,
+        state=state,
     )
 
     # 2. Create case record
     now = datetime.now(timezone.utc).isoformat()
 
-    # Build structured case_facts with plaintiff header
     structured_facts = (
         f"=== PLAINTIFF ===\n"
         f"Name: {name}\n"
-        f"County of Residence: {body.county or 'Unknown'}, {body.state or 'Georgia'}\n\n"
+        f"County of Residence: {county or 'Unknown'}, {state}\n\n"
         f"=== SOURCE ===\n"
-        f"Submitted via: SuiteDash\n"
-        f"Form: {body.form_name or 'intake'}\n"
-        f"Submission ID: {body.submission_id or 'N/A'}\n"
-        f"Submitted at: {body.submitted_at or now}\n\n"
+        f"Submitted via: SuiteDash/Zapier\n"
+        f"Form: {data.get('form_name') or data.get('form') or 'intake'}\n"
+        f"Submission ID: {data.get('submission_id') or 'N/A'}\n"
+        f"Submitted at: {data.get('submitted_at') or now}\n\n"
         f"=== CASE FACTS ===\n{facts}\n\n"
         f"=== DAMAGES DESCRIBED ===\n{damages}"
     )
@@ -357,23 +404,9 @@ async def suitedash_webhook(body: SuiteDashWebhook, request: Request):
 # ---------------------------------------------------------------------------
 
 @router.post("/webhook", status_code=status.HTTP_201_CREATED)
-async def generic_webhook(body: GenericWebhook, request: Request):
+async def generic_webhook(request: Request):
     """Generic webhook for any integration platform (Zapier, Make, etc.)."""
-    if not _verify_webhook(request):
-        raise HTTPException(status_code=401, detail="Invalid webhook secret")
-
-    # Convert to SuiteDash format and reuse
-    sd = SuiteDashWebhook(
-        full_name=body.client_name,
-        email=body.client_email,
-        phone=body.client_phone,
-        case_facts=body.case_facts,
-        damages=body.damages,
-        defendant_names=body.defendants,
-        document_urls=body.documents,
-        source=body.source or "webhook",
-    )
-    return await suitedash_webhook(sd, request)
+    return await suitedash_webhook(request)
 
 
 # ---------------------------------------------------------------------------
