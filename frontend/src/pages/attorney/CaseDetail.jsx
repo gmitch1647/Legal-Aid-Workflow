@@ -417,10 +417,33 @@ export default function CaseDetail() {
       await approveComplaint(id);
       setApproveModal(false);
       await fetchCase();
+      // Reload to show the new Complaint with Exhibits section
     } catch (err) {
       setError(err.message || 'Failed to approve complaint');
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleDownloadApprovedComplaint = async () => {
+    try {
+      const result = await downloadComplaint(id);
+      if (result?.url) {
+        window.open(result.url, '_blank');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to download complaint');
+    }
+  };
+
+  const handleDownloadMemo = async () => {
+    try {
+      const result = await downloadMemo(id);
+      if (result?.url) {
+        window.open(result.url, '_blank');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to download memo');
     }
   };
 
@@ -733,6 +756,98 @@ export default function CaseDetail() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Complaint with Exhibits — shown after approval */}
+          {(status === 'approved' || status === 'filed' || status === 'closed') && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-green-600" />
+                  Complaint with Exhibits
+                </h2>
+                <span className="badge bg-green-100 text-green-700 border border-green-200">
+                  <CheckCircle className="mr-1 h-3 w-3" />
+                  Approved
+                </span>
+              </div>
+
+              {/* Download buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <button
+                  onClick={handleDownloadApprovedComplaint}
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 hover:bg-slate-50 transition"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100">
+                    <Download className="h-5 w-5 text-emerald-600" />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-sm font-semibold text-slate-900">Complaint.docx</div>
+                    <div className="text-xs text-slate-500">Court-ready Word document</div>
+                  </div>
+                </button>
+                <button
+                  onClick={handleDownloadMemo}
+                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 hover:bg-slate-50 transition"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
+                    <Download className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-sm font-semibold text-slate-900">Strategy Memo.docx</div>
+                    <div className="text-xs text-slate-500">Case strategy document</div>
+                  </div>
+                </button>
+              </div>
+
+              {/* Exhibit list */}
+              {documents && documents.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-2">
+                    Exhibits
+                  </h3>
+                  <div className="space-y-2">
+                    {documents.map((doc, i) => (
+                      <div
+                        key={doc.id || i}
+                        className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3"
+                      >
+                        <div className="flex h-8 w-8 items-center justify-center rounded bg-slate-200 text-xs font-bold text-slate-600">
+                          {String.fromCharCode(65 + i)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-900 truncate">
+                            {doc.file_name || doc.name || 'Document'}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {(doc.document_category || doc.category || 'other').replace(/_/g, ' ')}
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase">
+                          Exhibit {String.fromCharCode(65 + i)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Complaint text preview */}
+              {complaintText && (
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <details>
+                    <summary className="cursor-pointer text-sm font-medium text-slate-700 hover:text-slate-900">
+                      View complaint text
+                    </summary>
+                    <div className="mt-3 max-h-[400px] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4">
+                      <pre className="text-xs text-slate-800 whitespace-pre-wrap font-serif leading-relaxed">
+                        {complaintText}
+                      </pre>
+                    </div>
+                  </details>
+                </div>
+              )}
             </div>
           )}
 

@@ -533,6 +533,53 @@ async def approve_complaint(
         "updated_at": now_iso,
     }).eq("id", case_id).execute()
 
+    # Generate the approved .docx and upload to Supabase Storage
+    docx_url = None
+    try:
+        from utils.docx_formatter import generate_complaint_docx
+
+        # Get plaintiff + defendant info for the caption
+        plaintiff_name = ""
+        defendant_names = []
+        jury_demand = case.get("jury_demand", True)
+        facts = case.get("case_facts", "") or ""
+        if "=== PLAINTIFF ===" in facts:
+            for line in facts.split("\n"):
+                if line.startswith("Name:"):
+                    plaintiff_name = line.replace("Name:", "").strip()
+                    break
+
+        cd_resp = supabase.table("case_defendants").select("defendant_id").eq("case_id", case_id).execute()
+        for row in cd_resp.data or []:
+            d = supabase.table("defendants").select("name").eq("id", row["defendant_id"]).limit(1).execute()
+            if d.data:
+                defendant_names.append(d.data[0]["name"])
+
+        buffer = generate_complaint_docx(
+            complaint_text=complaint.get("complaint_text", ""),
+            plaintiff_name=plaintiff_name,
+            defendant_names=defendant_names,
+            jury_demand=jury_demand,
+        )
+
+        # Upload to Supabase Storage
+        storage_path = f"cases/{case_id}/approved_complaint_v{complaint.get('version', 1)}.docx"
+        supabase.storage.from_("documents").upload(
+            storage_path,
+            buffer.read(),
+            {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"},
+        )
+
+        # Save URL to complaints table
+        supabase.table("complaints").update({
+            "complaint_docx_url": storage_path,
+        }).eq("id", complaint["id"]).execute()
+
+        docx_url = storage_path
+        logger.info(f"Approved complaint .docx generated and uploaded for case {case_id}")
+    except Exception as e:
+        logger.exception(f"Failed to generate approved .docx for case {case_id}: {e}")
+
     # Notify client (in-app)
     notify_client_complaint_approved(
         client_id=case["client_id"],
