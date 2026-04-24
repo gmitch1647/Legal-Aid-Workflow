@@ -116,6 +116,7 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
                             address: str = "", county: str = "", state: str = "") -> str:
     """Find existing client by email or create a new one. Returns profile ID."""
 
+    # Check if client profile already exists
     if email:
         try:
             existing = (
@@ -131,9 +132,56 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
         except Exception as e:
             logger.warning(f"Profile lookup failed: {e}")
 
-    # Create new profile with a generated UUID
-    profile_id = str(uuid.uuid4())
+    # Must create auth.users row FIRST because profiles.id references auth.users
+    import secrets
+    import string
+    temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
 
+    profile_id = None
+
+    if email:
+        try:
+            # Use Supabase auth admin to create user
+            auth_resp = supabase.auth.admin.create_user({
+                "email": email,
+                "password": temp_password,
+                "email_confirm": True,
+                "user_metadata": {"full_name": name},
+            })
+            if auth_resp and hasattr(auth_resp, 'user') and auth_resp.user:
+                profile_id = str(auth_resp.user.id)
+                logger.info(f"Created auth user for {email}: {profile_id}")
+        except Exception as e:
+            error_str = str(e)
+            logger.warning(f"Auth user creation failed: {error_str}")
+            # If user already exists in auth, find their ID
+            if "already" in error_str.lower() or "duplicate" in error_str.lower():
+                try:
+                    # Query auth users by email
+                    users_resp = supabase.auth.admin.list_users()
+                    if hasattr(users_resp, '__iter__'):
+                        for u in users_resp:
+                            user_obj = u if hasattr(u, 'email') else None
+                            if user_obj and user_obj.email == email:
+                                profile_id = str(user_obj.id)
+                                logger.info(f"Found existing auth user: {profile_id}")
+                                break
+                except Exception as e2:
+                    logger.warning(f"Could not list auth users: {e2}")
+
+    if not profile_id:
+        # If we still don't have an ID, use the attorney's ID as a fallback
+        # This means the case will be under the attorney until reassigned
+        try:
+            attorney = supabase.table("profiles").select("id").eq("role", "attorney").limit(1).execute()
+            if attorney.data:
+                logger.warning(f"Using attorney profile as fallback for {email}")
+                return attorney.data[0]["id"]
+        except Exception:
+            pass
+        raise ValueError(f"Could not create or find user for {email}")
+
+    # Now create the profile row (linked to the auth user)
     try:
         supabase.table("profiles").insert({
             "id": profile_id,
@@ -147,15 +195,8 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
         }).execute()
         logger.info(f"Created client profile: {name} ({email})")
     except Exception as e:
-        logger.warning(f"Could not create profile: {e}")
-        # Try to find by email again in case of race condition
-        if email:
-            try:
-                existing = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
-                if existing.data:
-                    return existing.data[0]["id"]
-            except Exception:
-                pass
+        # Profile might already exist
+        logger.warning(f"Could not create profile (may already exist): {e}")
 
     return profile_id
 
