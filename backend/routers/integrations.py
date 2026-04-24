@@ -117,45 +117,23 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
     """Find existing client by email or create a new one. Returns profile ID."""
 
     if email:
-        # Check if client already exists
-        existing = (
-            supabase.table("profiles")
-            .select("id")
-            .eq("email", email)
-            .limit(1)
-            .execute()
-        )
-        if existing.data:
-            logger.info(f"Found existing client: {email}")
-            return existing.data[0]["id"]
+        try:
+            existing = (
+                supabase.table("profiles")
+                .select("id")
+                .eq("email", email)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                logger.info(f"Found existing client: {email}")
+                return existing.data[0]["id"]
+        except Exception as e:
+            logger.warning(f"Profile lookup failed: {e}")
 
-    # Create new client profile
-    # First create auth user (or skip if no email)
+    # Create new profile with a generated UUID
     profile_id = str(uuid.uuid4())
 
-    if email:
-        try:
-            # Try to create Supabase auth user
-            auth_resp = supabase.auth.admin.create_user({
-                "email": email,
-                "email_confirm": True,
-                "user_metadata": {"full_name": name},
-            })
-            if auth_resp and auth_resp.user:
-                profile_id = str(auth_resp.user.id)
-        except Exception as e:
-            logger.warning(f"Could not create auth user for {email}: {e}")
-            # Check if user already exists in auth
-            try:
-                users = supabase.auth.admin.list_users()
-                for u in users:
-                    if hasattr(u, 'email') and u.email == email:
-                        profile_id = str(u.id)
-                        break
-            except Exception:
-                pass
-
-    # Create profile row
     try:
         supabase.table("profiles").insert({
             "id": profile_id,
@@ -169,11 +147,15 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
         }).execute()
         logger.info(f"Created client profile: {name} ({email})")
     except Exception as e:
-        # Profile might already exist (race condition)
-        logger.warning(f"Could not create profile for {email}: {e}")
-        existing = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
-        if existing.data:
-            profile_id = existing.data[0]["id"]
+        logger.warning(f"Could not create profile: {e}")
+        # Try to find by email again in case of race condition
+        if email:
+            try:
+                existing = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
+                if existing.data:
+                    return existing.data[0]["id"]
+            except Exception:
+                pass
 
     return profile_id
 
@@ -230,173 +212,107 @@ async def suitedash_webhook(request: Request):
 
     logger.info(f"SuiteDash webhook received: {list(data.keys())}")
 
-    supabase = get_supabase()
-
-    # Parse client name — try many field names
-    name = (
-        data.get("full_name") or
-        data.get("name") or
-        data.get("client_name") or
-        data.get("contact_name") or
-        ""
-    )
-    if not name:
-        first = data.get("first_name") or data.get("firstname") or ""
-        last = data.get("last_name") or data.get("lastname") or ""
-        name = f"{first} {last}".strip()
-    if not name:
-        name = "Unknown Client"
-
-    email = data.get("email") or data.get("client_email") or data.get("contact_email") or ""
-    phone = data.get("phone") or data.get("client_phone") or data.get("phone_number") or ""
-
-    # Address
-    address = data.get("address") or data.get("street_address") or ""
-    city = data.get("city") or ""
-    state = data.get("state") or "Georgia"
-    county = data.get("county") or ""
-    zip_code = data.get("zip_code") or data.get("zip") or data.get("postal_code") or ""
-    full_address = ", ".join(p for p in [address, city, state, zip_code] if p)
-
-    # Case facts
-    facts = (
-        data.get("case_facts") or
-        data.get("case_description") or
-        data.get("what_happened") or
-        data.get("description") or
-        data.get("details") or
-        data.get("message") or
-        data.get("notes") or
-        ""
-    )
-
-    damages = data.get("damages") or data.get("damages_description") or data.get("harm") or ""
-
-    # Defendants
-    defendant_list = []
-    if data.get("defendant_names") and isinstance(data["defendant_names"], list):
-        defendant_list = data["defendant_names"]
-    elif data.get("defendants"):
-        defendant_list = [d.strip() for d in str(data["defendants"]).split(",") if d.strip()]
-    elif data.get("defendant_name"):
-        defendant_list = [str(data["defendant_name"])]
-
-    # Documents
-    doc_urls = []
-    for key in ["document_urls", "attachments", "files", "documents", "file_url"]:
-        val = data.get(key)
-        if val:
-            if isinstance(val, list):
-                doc_urls.extend([str(u) for u in val if u])
-            elif isinstance(val, str) and val.startswith("http"):
-                doc_urls.append(val)
-
-    # 1. Find or create client
-    client_id = _find_or_create_client(
-        supabase,
-        name=name,
-        email=email,
-        phone=phone,
-        address=full_address,
-        county=county,
-        state=state,
-    )
-
-    # 2. Create case record
-    now = datetime.now(timezone.utc).isoformat()
-
-    structured_facts = (
-        f"=== PLAINTIFF ===\n"
-        f"Name: {name}\n"
-        f"County of Residence: {county or 'Unknown'}, {state}\n\n"
-        f"=== SOURCE ===\n"
-        f"Submitted via: SuiteDash/Zapier\n"
-        f"Form: {data.get('form_name') or data.get('form') or 'intake'}\n"
-        f"Submission ID: {data.get('submission_id') or 'N/A'}\n"
-        f"Submitted at: {data.get('submitted_at') or now}\n\n"
-        f"=== CASE FACTS ===\n{facts}\n\n"
-        f"=== DAMAGES DESCRIBED ===\n{damages}"
-    )
-
-    case_resp = supabase.table("cases").insert({
-        "client_id": client_id,
-        "status": "submitted",
-        "case_facts": structured_facts,
-        "damages_description": damages,
-        "created_at": now,
-        "updated_at": now,
-    }).execute()
-
-    if not case_resp.data:
-        raise HTTPException(status_code=500, detail="Failed to create case")
-
-    case_id = case_resp.data[0]["id"]
-
-    # 3. Link defendants
-    for dname in defendant_list:
-        try:
-            # Check if defendant exists
-            d = supabase.table("defendants").select("id").ilike("name", dname.strip()).limit(1).execute()
-            if d.data:
-                def_id = d.data[0]["id"]
-            else:
-                # Create custom defendant
-                ins = supabase.table("defendants").insert({
-                    "name": dname.strip(),
-                    "is_custom": True,
-                }).execute()
-                def_id = ins.data[0]["id"] if ins.data else None
-
-            if def_id:
-                supabase.table("case_defendants").insert({
-                    "case_id": case_id,
-                    "defendant_id": def_id,
-                }).execute()
-        except Exception as e:
-            logger.warning(f"Could not link defendant {dname}: {e}")
-
-    # 4. Download and attach documents
-    for doc_url in doc_urls:
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(doc_url, follow_redirects=True, timeout=30)
-                if resp.status_code == 200:
-                    filename = doc_url.split("/")[-1].split("?")[0] or "document"
-                    storage_path = f"cases/{case_id}/{filename}"
-                    supabase.storage.from_("documents").upload(
-                        storage_path,
-                        resp.content,
-                        {"content-type": resp.headers.get("content-type", "application/octet-stream")},
-                    )
-                    supabase.table("case_documents").insert({
-                        "case_id": case_id,
-                        "file_name": filename,
-                        "file_type": filename.split(".")[-1] if "." in filename else "bin",
-                        "storage_path": storage_path,
-                        "document_category": "other",
-                        "uploaded_by": client_id,
-                    }).execute()
-        except Exception as e:
-            logger.warning(f"Could not download document {doc_url}: {e}")
-
-    # 5. Notify attorney
     try:
-        from utils.notifications import notify_attorney_new_submission
-        notify_attorney_new_submission(case_id=case_id, client_name=name)
+        supabase = get_supabase()
+
+        # Parse client name
+        name = data.get("full_name") or data.get("name") or data.get("client_name") or data.get("contact_name") or ""
+        if not name:
+            first = data.get("first_name") or data.get("firstname") or ""
+            last = data.get("last_name") or data.get("lastname") or ""
+            name = f"{first} {last}".strip()
+        if not name:
+            name = "Unknown Client"
+
+        email = data.get("email") or data.get("client_email") or data.get("contact_email") or ""
+        phone = data.get("phone") or data.get("client_phone") or data.get("phone_number") or ""
+        address = data.get("address") or data.get("street_address") or ""
+        city = data.get("city") or ""
+        state = data.get("state") or "Georgia"
+        county = data.get("county") or ""
+        zip_code = data.get("zip_code") or data.get("zip") or data.get("postal_code") or ""
+        full_address = ", ".join(p for p in [address, city, state, zip_code] if p)
+
+        facts = data.get("case_facts") or data.get("case_description") or data.get("what_happened") or data.get("description") or data.get("details") or data.get("message") or data.get("notes") or ""
+        damages = data.get("damages") or data.get("damages_description") or data.get("harm") or ""
+
+        defendant_list = []
+        if data.get("defendant_names") and isinstance(data["defendant_names"], list):
+            defendant_list = data["defendant_names"]
+        elif data.get("defendants"):
+            defendant_list = [d.strip() for d in str(data["defendants"]).split(",") if d.strip()]
+        elif data.get("defendant_name"):
+            defendant_list = [str(data["defendant_name"])]
+
+        doc_urls = []
+        for key in ["document_urls", "attachments", "files", "documents", "file_url"]:
+            val = data.get(key)
+            if val:
+                if isinstance(val, list):
+                    doc_urls.extend([str(u) for u in val if u])
+                elif isinstance(val, str) and val.startswith("http"):
+                    doc_urls.append(val)
+
+        # 1. Find or create client
+        client_id = _find_or_create_client(supabase, name=name, email=email, phone=phone, address=full_address, county=county, state=state)
+
+        # 2. Create case record
+        now = datetime.now(timezone.utc).isoformat()
+        structured_facts = f"=== PLAINTIFF ===\nName: {name}\nCounty of Residence: {county or 'Unknown'}, {state}\n\n=== SOURCE ===\nSubmitted via: SuiteDash/Zapier\nForm: {data.get('form_name') or data.get('form') or 'intake'}\nSubmitted at: {data.get('submitted_at') or now}\n\n=== CASE FACTS ===\n{facts}\n\n=== DAMAGES DESCRIBED ===\n{damages}"
+
+        case_resp = supabase.table("cases").insert({
+            "client_id": client_id,
+            "status": "submitted",
+            "case_facts": structured_facts,
+            "damages_description": damages,
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+
+        if not case_resp.data:
+            raise HTTPException(status_code=500, detail="Failed to create case")
+        case_id = case_resp.data[0]["id"]
+
+        # 3. Link defendants
+        for dname in defendant_list:
+            try:
+                d = supabase.table("defendants").select("id").ilike("name", dname.strip()).limit(1).execute()
+                if d.data:
+                    def_id = d.data[0]["id"]
+                else:
+                    ins = supabase.table("defendants").insert({"name": dname.strip(), "is_custom": True}).execute()
+                    def_id = ins.data[0]["id"] if ins.data else None
+                if def_id:
+                    supabase.table("case_defendants").insert({"case_id": case_id, "defendant_id": def_id}).execute()
+            except Exception as e:
+                logger.warning(f"Could not link defendant {dname}: {e}")
+
+        # 4. Notify attorney
+        try:
+            from utils.notifications import notify_attorney_new_submission
+            notify_attorney_new_submission(case_id=case_id, client_name=name)
+        except Exception as e:
+            logger.warning(f"Notification failed: {e}")
+
+        logger.info(f"SuiteDash webhook: created client {name} ({email}) + case {case_id}")
+
+        return {
+            "status": "success",
+            "client_id": client_id,
+            "case_id": case_id,
+            "client_name": name,
+            "defendants_linked": len(defendant_list),
+            "documents_attached": len(doc_urls),
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"Notification failed: {e}")
-
-    logger.info(f"SuiteDash webhook: created client {name} ({body.email}) + case {case_id}")
-
-    return {
-        "status": "success",
-        "client_id": client_id,
-        "case_id": case_id,
-        "client_name": name,
-        "defendants_linked": len(defendant_list),
-        "documents_attached": len(doc_urls),
-    }
+        logger.exception(f"Webhook processing failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Webhook processing failed: {type(e).__name__}: {str(e)[:500]}",
+        )
 
 
 # ---------------------------------------------------------------------------
