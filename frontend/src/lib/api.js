@@ -370,6 +370,38 @@ export async function getReindexStatus() {
 }
 
 // ---------------------------------------------------------------------------
+// Calendar
+// ---------------------------------------------------------------------------
+
+export async function getCalendarEvents(month = null, caseId = null) {
+  const params = new URLSearchParams();
+  if (month) params.append('month', month);
+  if (caseId) params.append('case_id', caseId);
+  const qs = params.toString();
+  return request(`/calendar${qs ? `?${qs}` : ''}`);
+}
+
+export async function createCalendarEvent(data) {
+  return request('/calendar', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateCalendarEvent(id, data) {
+  return request(`/calendar/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteCalendarEvent(id) {
+  return request(`/calendar/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Communications (Email + SMS)
 // ---------------------------------------------------------------------------
 
