@@ -88,6 +88,7 @@ export default function DraftComplaint() {
   const [juryDemand, setJuryDemand] = useState(true);
   const [gaClaims, setGaClaims] = useState('include');
   const [draftMode, setDraftMode] = useState('fast'); // 'fast' (~15s) or 'thorough' (~90s)
+  const [documentType, setDocumentType] = useState('complaint'); // complaint | motion | discovery | demand_letter
   const [uploadedDocs, setUploadedDocs] = useState([]); // { name, storage_path }
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -279,6 +280,7 @@ export default function DraftComplaint() {
       georgia_claims: gaClaims,
       document_urls: uploadedDocs.map((d) => d.storage_path),
       mode: draftMode,
+      document_type: documentType,
     };
 
     try {
@@ -372,9 +374,9 @@ export default function DraftComplaint() {
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-medium text-slate-900">Complaint Drafting Agent</h1>
+          <h1 className="text-2xl font-medium text-slate-900">Legal Document Drafter</h1>
           <p className="text-sm text-slate-500 mt-1">
-            FCRA · FDCPA · TCPA · Georgia & Federal Courts
+            Complaints · Motions · Discovery · Demand Letters
           </p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
@@ -468,6 +470,33 @@ export default function DraftComplaint() {
       <div className="grid grid-cols-1 lg:grid-cols-[55%_45%] gap-5">
         {/* ═════════════ LEFT COLUMN — FORM ═════════════ */}
         <div className="space-y-5">
+          {/* Document Type Selector */}
+          <Card>
+            <SectionLabel>DOCUMENT TYPE</SectionLabel>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[
+                { value: 'complaint', label: 'Complaint', icon: '📄', desc: 'Federal complaint' },
+                { value: 'motion', label: 'Motion', icon: '⚖️', desc: 'Motions & responses' },
+                { value: 'discovery', label: 'Discovery', icon: '🔍', desc: 'Interrogatories, RFPs, RFAs' },
+                { value: 'demand_letter', label: 'Demand Letter', icon: '✉️', desc: 'Pre-litigation demand' },
+              ].map((dt) => (
+                <button
+                  key={dt.value}
+                  onClick={() => setDocumentType(dt.value)}
+                  className={`rounded-lg border-2 p-3 text-left transition ${
+                    documentType === dt.value
+                      ? 'border-emerald-500 bg-emerald-50'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="text-lg mb-1">{dt.icon}</div>
+                  <div className="text-sm font-semibold text-slate-900">{dt.label}</div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">{dt.desc}</div>
+                </button>
+              ))}
+            </div>
+          </Card>
+
           {/* Plaintiff info */}
           <Card>
             <SectionLabel>PLAINTIFF INFORMATION</SectionLabel>

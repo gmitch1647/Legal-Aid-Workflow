@@ -83,6 +83,7 @@ class DraftStartPayload(BaseModel):
     georgia_claims: str = "include"  # include | federal_only | agent_decides
     document_urls: list[str] = []
     mode: str = "fast"  # "fast" (2-call, ~15s) or "thorough" (7-agent, ~90s)
+    document_type: str = "complaint"  # complaint | motion | discovery | demand_letter
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +321,12 @@ async def start_draft(
             logger.warning(f"Could not attach document {doc_url}: {e}")
 
     # Launch the pipeline as an asyncio background task.
-    async def _safe_pipeline(cid: str, mode: str, facts: str, dmg: str) -> None:
+    async def _safe_pipeline(cid: str, mode: str, facts: str, dmg: str, doc_type: str) -> None:
         try:
             if mode == "fast":
-                logger.info(f"Fast draft starting for case {cid}")
+                logger.info(f"Fast draft starting for case {cid} (type={doc_type})")
                 from agents.fast_drafter import run_fast_draft
-                await run_fast_draft(cid, facts, dmg)
+                await run_fast_draft(cid, facts, dmg, document_type=doc_type)
                 logger.info(f"Fast draft finished for case {cid}")
             else:
                 logger.info(f"Thorough pipeline starting for case {cid}")
@@ -343,7 +344,7 @@ async def start_draft(
             except Exception:
                 pass
 
-    asyncio.create_task(_safe_pipeline(case_id, payload.mode, case_facts, payload.damages_description))
+    asyncio.create_task(_safe_pipeline(case_id, payload.mode, case_facts, payload.damages_description, payload.document_type))
 
     logger.info(f"Draft session started for case {case_id} by {profile.get('email')}")
 
