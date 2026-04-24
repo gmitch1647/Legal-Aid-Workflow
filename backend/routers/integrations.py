@@ -251,6 +251,27 @@ async def suitedash_webhook(request: Request):
         if cleaned != "" and cleaned is not None:
             data[key] = cleaned
 
+    # Normalize field names — SuiteDash/Zapier sends "Data First Name" etc.
+    # Convert to lowercase snake_case and also strip "data " prefix
+    normalized = {}
+    for k, v in data.items():
+        # Original key
+        normalized[k] = v
+        # Lowercase version
+        lower = k.lower().strip()
+        normalized[lower] = v
+        # Strip "data " prefix
+        if lower.startswith("data "):
+            stripped = lower[5:].strip()
+            normalized[stripped] = v
+        # Convert spaces to underscores
+        snake = lower.replace(" ", "_").replace("-", "_")
+        normalized[snake] = v
+        if snake.startswith("data_"):
+            normalized[snake[5:]] = v
+
+    data = normalized
+
     logger.info(f"SuiteDash webhook received: {list(data.keys())}")
 
     try:
@@ -267,7 +288,7 @@ async def suitedash_webhook(request: Request):
 
         email = data.get("email") or data.get("client_email") or data.get("contact_email") or ""
         phone = data.get("phone") or data.get("client_phone") or data.get("phone_number") or ""
-        address = data.get("address") or data.get("street_address") or ""
+        address = data.get("address") or data.get("adress") or data.get("street_address") or ""
         city = data.get("city") or ""
         state = data.get("state") or "Georgia"
         county = data.get("county") or ""
