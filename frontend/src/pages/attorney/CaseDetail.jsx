@@ -326,6 +326,13 @@ export default function CaseDetail() {
 
   // Complaint editing
   const [editingComplaint, setEditingComplaint] = useState(false);
+
+  // Case info editing
+  const [editingCase, setEditingCase] = useState(false);
+  const [editCourt, setEditCourt] = useState('');
+  const [editFacts, setEditFacts] = useState('');
+  const [editDamages, setEditDamages] = useState('');
+  const [savingCase, setSavingCase] = useState(false);
   const [complaintText, setComplaintText] = useState('');
 
   // Notes
@@ -444,6 +451,35 @@ export default function CaseDetail() {
       }
     } catch (err) {
       setError(err.message || 'Failed to download memo');
+    }
+  };
+
+  const handleStartEditCase = () => {
+    setEditCourt(caseData.court || caseData.court_name || '');
+    setEditFacts(caseData.case_facts || caseData.facts || '');
+    setEditDamages(caseData.damages_description || caseData.damages || '');
+    setEditingCase(true);
+  };
+
+  const handleSaveCase = async () => {
+    try {
+      setSavingCase(true);
+      const { supabase } = await import('../../lib/supabase');
+      const { error: updateErr } = await supabase
+        .from('cases')
+        .update({
+          court: editCourt,
+          case_facts: editFacts,
+          damages_description: editDamages,
+        })
+        .eq('id', id);
+      if (updateErr) throw updateErr;
+      setEditingCase(false);
+      await fetchCase();
+    } catch (err) {
+      setError(err.message || 'Failed to save case');
+    } finally {
+      setSavingCase(false);
     }
   };
 
@@ -627,7 +663,34 @@ export default function CaseDetail() {
         <div className="space-y-6 lg:col-span-2">
           {/* Case Information */}
           <div className="card">
-            <h2 className="text-lg font-semibold text-slate-900">Case Information</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">Case Information</h2>
+              {!editingCase ? (
+                <button
+                  onClick={handleStartEditCase}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
+                >
+                  <Edit3 className="h-3.5 w-3.5" /> Edit
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setEditingCase(false)}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    <X className="h-3.5 w-3.5" /> Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveCase}
+                    disabled={savingCase}
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {savingCase ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="mt-4 space-y-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
@@ -636,7 +699,15 @@ export default function CaseDetail() {
                 </div>
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Court</p>
-                  <p className="mt-1 text-sm text-slate-900">{caseData.court || caseData.court_name || 'Not assigned'}</p>
+                  {editingCase ? (
+                    <input
+                      value={editCourt}
+                      onChange={(e) => setEditCourt(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-900">{caseData.court || caseData.court_name || 'Not assigned'}</p>
+                  )}
                 </div>
               </div>
 
@@ -669,23 +740,37 @@ export default function CaseDetail() {
                 </div>
               )}
 
-              {(caseData.case_facts || caseData.facts) && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Case Facts</p>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Case Facts</p>
+                {editingCase ? (
+                  <textarea
+                    value={editFacts}
+                    onChange={(e) => setEditFacts(e.target.value)}
+                    rows={8}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                  />
+                ) : (
                   <p className="mt-1 text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
-                    {caseData.case_facts || caseData.facts}
+                    {caseData.case_facts || caseData.facts || 'No facts entered'}
                   </p>
-                </div>
-              )}
+                )}
+              </div>
 
-              {(caseData.damages_description || caseData.damages) && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Damages Description</p>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Damages Description</p>
+                {editingCase ? (
+                  <textarea
+                    value={editDamages}
+                    onChange={(e) => setEditDamages(e.target.value)}
+                    rows={4}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                  />
+                ) : (
                   <p className="mt-1 text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
-                    {caseData.damages_description || caseData.damages}
+                    {caseData.damages_description || caseData.damages || 'No damages entered'}
                   </p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
 
