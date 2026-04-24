@@ -377,10 +377,26 @@ async def integration_status():
         "suitedash_webhook_url": "/integrations/suitedash/webhook",
         "generic_webhook_url": "/integrations/webhook",
         "webhook_secret_configured": bool(WEBHOOK_SECRET),
-        "instructions": (
-            "Configure SuiteDash to POST form submissions to: "
-            "https://[your-railway-url]/integrations/suitedash/webhook "
-            "When a client submits an intake form, their profile and case "
-            "will be automatically created in LegalFlow."
-        ),
+    }
+
+
+@router.post("/debug-webhook")
+async def debug_webhook(request: Request):
+    """Debug endpoint — just returns whatever data was sent so you
+    can see the exact field names Zapier is sending."""
+    try:
+        content_type = request.headers.get("content-type", "")
+        if "json" in content_type:
+            raw = await request.json()
+        else:
+            form = await request.form()
+            raw = dict(form)
+    except Exception:
+        body = await request.body()
+        raw = {"raw_body": body.decode("utf-8", errors="replace")}
+
+    return {
+        "received_fields": list(raw.keys()) if isinstance(raw, dict) else [],
+        "data": raw,
+        "content_type": content_type,
     }
