@@ -14,9 +14,11 @@ import {
   PlusCircle,
   FilePlus,
   Loader2,
+  CalendarDays,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../../App';
-import { getCases } from '../../lib/api';
+import { getCases, getCalendarEvents } from '../../lib/api';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -157,6 +159,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   const [cases, setCases] = useState([]);
+  const [calendarEvents, setCalendarEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -164,9 +167,13 @@ export default function Dashboard() {
     try {
       setLoading(true);
       setError(null);
-      const data = await getCases();
+      const [data, eventsData] = await Promise.all([
+        getCases(),
+        getCalendarEvents().catch(() => []),
+      ]);
       const list = Array.isArray(data) ? data : data?.items ?? data?.cases ?? [];
       setCases(list);
+      setCalendarEvents(Array.isArray(eventsData) ? eventsData : []);
     } catch (err) {
       console.error('Dashboard fetch error:', err);
       setError(err.message || 'Failed to load dashboard data');
@@ -369,7 +376,136 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Upcoming Calendar Events */}
+        <UpcomingEvents events={calendarEvents} navigate={navigate} />
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Upcoming Events Widget
+// ---------------------------------------------------------------------------
+
+const EVENT_TYPE_LABELS = {
+  deadline: 'Deadline', hearing: 'Hearing', filing: 'Filing',
+  discovery_cutoff: 'Discovery Cutoff', deposition: 'Deposition',
+  mediation: 'Mediation', trial: 'Trial', conference: 'Conference',
+  statute_of_limitations: 'SOL', reminder: 'Reminder', other: 'Event',
+};
+
+const EVENT_DOT_COLORS = {
+  red: 'bg-red-500', purple: 'bg-purple-500', blue: 'bg-blue-500',
+  amber: 'bg-amber-500', indigo: 'bg-indigo-500', teal: 'bg-teal-500',
+  cyan: 'bg-cyan-500', slate: 'bg-slate-400',
+};
+
+function UpcomingEvents({ events, navigate }) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const upcoming = events
+    .filter((e) => {
+      const d = new Date(e.event_date);
+      const diff = (d - today) / 86400000;
+      return diff >= -1 && diff <= 30 && !e.is_completed;
+    })
+    .sort((a, b) => new Date(a.event_date) - new Date(b.event_date))
+    .slice(0, 10);
+
+  return (
+    <div className="card">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+          <CalendarDays className="h-5 w-5 text-slate-400" />
+          Upcoming Events
+        </h2>
+        <button
+          onClick={() => navigate('/attorney/calendar')}
+          className="text-xs font-medium text-primary-600 hover:text-primary-700 flex items-center gap-1"
+        >
+          View Calendar <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
+
+      {upcoming.length === 0 ? (
+        <div className="py-8 text-center">
+          <CalendarDays className="mx-auto h-8 w-8 text-slate-300" />
+          <p className="mt-2 text-sm text-slate-400">No upcoming events</p>
+          <button
+            onClick={() => navigate('/attorney/calendar')}
+            className="mt-3 text-xs font-medium text-primary-600 hover:text-primary-700"
+          >
+            Add an event →
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {upcoming.map((e) => {
+            const d = new Date(e.event_date);
+            const diffDays = Math.ceil((d - today) / 86400000);
+            const isUrgent = diffDays <= 1;
+            const isSoon = diffDays <= 3;
+            return (
+              <div
+                key={e.id}
+                className={`flex items-start gap-3 p-3 rounded-lg border transition ${
+                  isUrgent
+                    ? 'border-red-200 bg-red-50'
+                    : isSoon
+                      ? 'border-amber-200 bg-amber-50'
+                      : 'border-slate-100 bg-white hover:bg-slate-50'
+                }`}
+              >
+                {/* Date badge */}
+                <div className={`shrink-0 w-12 text-center rounded-lg p-1.5 ${
+                  isUrgent ? 'bg-red-100' : isSoon ? 'bg-amber-100' : 'bg-slate-100'
+                }`}>
+                  <div className={`text-[10px] uppercase font-semibold ${
+                    isUrgent ? 'text-red-600' : isSoon ? 'text-amber-600' : 'text-slate-500'
+                  }`}>
+                    {d.toLocaleDateString('en-US', { month: 'short' })}
+                  </div>
+                  <div className={`text-lg font-bold ${
+                    isUrgent ? 'text-red-700' : isSoon ? 'text-amber-700' : 'text-slate-900'
+                  }`}>
+                    {d.getDate()}
+                  </div>
+                </div>
+
+                {/* Event info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${EVENT_DOT_COLORS[e.color] || EVENT_DOT_COLORS.blue}`} />
+                    <span className="text-sm font-semibold text-slate-900 truncate">{e.title}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                      isUrgent ? 'bg-red-200 text-red-800' : isSoon ? 'bg-amber-200 text-amber-800' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {diffDays === 0 ? 'Today' : diffDays === 1 ? 'Tomorrow' : `${diffDays} days`}
+                    </span>
+                    <span>{EVENT_TYPE_LABELS[e.event_type] || 'Event'}</span>
+                    {e.event_time && (
+                      <>
+                        <span>·</span>
+                        <Clock className="h-3 w-3" />
+                        <span>{e.event_time}</span>
+                      </>
+                    )}
+                  </div>
+                  {e.case_name && (
+                    <div className="mt-0.5 text-xs text-slate-400 flex items-center gap-1">
+                      <Briefcase className="h-3 w-3" /> {e.case_name}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
