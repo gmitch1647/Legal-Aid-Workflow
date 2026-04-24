@@ -334,6 +334,12 @@ export default function CaseDetail() {
   const [editFacts, setEditFacts] = useState('');
   const [editDamages, setEditDamages] = useState('');
   const [savingCase, setSavingCase] = useState(false);
+
+  // Assign to client
+  const [showAssignClient, setShowAssignClient] = useState(false);
+  const [clientsList, setClientsList] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [assigningClient, setAssigningClient] = useState(false);
   const [complaintText, setComplaintText] = useState('');
 
   // Notes
@@ -508,6 +514,51 @@ export default function CaseDetail() {
     }
   };
 
+  const handleOpenAssignClient = async () => {
+    setShowAssignClient(true);
+    try {
+      const { supabase } = await import('../../lib/supabase');
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('role', 'client')
+        .order('full_name');
+      setClientsList(data || []);
+    } catch {
+      // Also load attorneys as potential assignees (for draft cases)
+      try {
+        const { supabase } = await import('../../lib/supabase');
+        const { data } = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .order('full_name');
+        setClientsList(data || []);
+      } catch {
+        setClientsList([]);
+      }
+    }
+  };
+
+  const handleAssignClient = async () => {
+    if (!selectedClientId) return;
+    try {
+      setAssigningClient(true);
+      const { supabase } = await import('../../lib/supabase');
+      const { error: updateErr } = await supabase
+        .from('cases')
+        .update({ client_id: selectedClientId })
+        .eq('id', id);
+      if (updateErr) throw updateErr;
+      setShowAssignClient(false);
+      setSelectedClientId('');
+      await fetchCase();
+    } catch (err) {
+      setError(err.message || 'Failed to assign client');
+    } finally {
+      setAssigningClient(false);
+    }
+  };
+
   const handleRequestRevision = async (revisionNotes) => {
     try {
       setActionLoading(true);
@@ -660,14 +711,75 @@ export default function CaseDetail() {
             )}
           </div>
         </div>
-        <button
-          onClick={() => navigate('/attorney/draft')}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"
-        >
-          <FileText className="h-4 w-4" />
-          Draft Complaint
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleOpenAssignClient}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+          >
+            <User className="h-4 w-4" />
+            Assign Client
+          </button>
+          <button
+            onClick={() => navigate('/attorney/draft')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"
+          >
+            <FileText className="h-4 w-4" />
+            Draft Complaint
+          </button>
+        </div>
       </div>
+
+      {/* Assign Client Modal */}
+      {showAssignClient && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">Assign to Client</h2>
+              <button onClick={() => setShowAssignClient(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-slate-600">
+                Link this case to a client's profile so it appears on their dashboard.
+              </p>
+              <select
+                value={selectedClientId}
+                onChange={(e) => setSelectedClientId(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">— Select a client —</option>
+                {clientsList.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.full_name} ({c.email})
+                  </option>
+                ))}
+              </select>
+              {clientsList.length === 0 && (
+                <p className="text-xs text-slate-400">
+                  No clients found. Register a client first from the Clients page.
+                </p>
+              )}
+            </div>
+            <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                onClick={() => setShowAssignClient(false)}
+                className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAssignClient}
+                disabled={!selectedClientId || assigningClient}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {assigningClient ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <User className="h-3.5 w-3.5" />}
+                {assigningClient ? 'Assigning...' : 'Assign'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
