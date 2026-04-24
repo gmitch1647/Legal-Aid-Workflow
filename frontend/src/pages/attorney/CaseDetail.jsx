@@ -329,6 +329,7 @@ export default function CaseDetail() {
 
   // Case info editing
   const [editingCase, setEditingCase] = useState(false);
+  const [editPlaintiff, setEditPlaintiff] = useState('');
   const [editCourt, setEditCourt] = useState('');
   const [editFacts, setEditFacts] = useState('');
   const [editDamages, setEditDamages] = useState('');
@@ -455,6 +456,7 @@ export default function CaseDetail() {
   };
 
   const handleStartEditCase = () => {
+    setEditPlaintiff(clientName || '');
     setEditCourt(caseData.court || caseData.court_name || '');
     setEditFacts(caseData.case_facts || caseData.facts || '');
     setEditDamages(caseData.damages_description || caseData.damages || '');
@@ -465,15 +467,38 @@ export default function CaseDetail() {
     try {
       setSavingCase(true);
       const { supabase } = await import('../../lib/supabase');
+
+      // Update the plaintiff name in case_facts header if it exists
+      let updatedFacts = editFacts;
+      if (updatedFacts.includes('=== PLAINTIFF ===')) {
+        updatedFacts = updatedFacts.replace(
+          /Name:\s*.*/,
+          `Name: ${editPlaintiff}`
+        );
+      }
+
       const { error: updateErr } = await supabase
         .from('cases')
         .update({
           court: editCourt,
-          case_facts: editFacts,
+          case_facts: updatedFacts,
           damages_description: editDamages,
         })
         .eq('id', id);
       if (updateErr) throw updateErr;
+
+      // Also update the client profile name if this is a real client
+      if (caseData.client_id && editPlaintiff !== clientName) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({ full_name: editPlaintiff })
+            .eq('id', caseData.client_id);
+        } catch {
+          // Non-fatal — profile update is best-effort
+        }
+      }
+
       setEditingCase(false);
       await fetchCase();
     } catch (err) {
@@ -695,7 +720,15 @@ export default function CaseDetail() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Plaintiff</p>
-                  <p className="mt-1 text-sm text-slate-900">{clientName}</p>
+                  {editingCase ? (
+                    <input
+                      value={editPlaintiff}
+                      onChange={(e) => setEditPlaintiff(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-900">{clientName}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Court</p>
