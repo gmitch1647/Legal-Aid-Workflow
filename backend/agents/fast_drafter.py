@@ -388,6 +388,33 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             except Exception:
                 pass
 
+        # ── Read uploaded documents ─────────────────────────────────────
+        document_text = ""
+        try:
+            docs_resp = (
+                supabase.table("case_documents")
+                .select("file_name, file_type, storage_path")
+                .eq("case_id", case_id)
+                .execute()
+            )
+            if docs_resp.data:
+                from utils.document_reader import read_document
+                doc_parts = []
+                for doc in docs_resp.data:
+                    try:
+                        text = read_document(doc["storage_path"], doc.get("file_type", "txt"))
+                        if text:
+                            if len(text) > 6000:
+                                text = text[:6000] + "\n[...document truncated]"
+                            doc_parts.append(f"\n--- DOCUMENT: {doc['file_name']} ---\n{text}")
+                            logger.info(f"[fast_draft] Read document: {doc['file_name']} ({len(text)} chars)")
+                    except Exception as e:
+                        logger.warning(f"[fast_draft] Could not read {doc['file_name']}: {e}")
+                if doc_parts:
+                    document_text = "\n\nUPLOADED DOCUMENTS (read and analyze these):\n" + "\n".join(doc_parts)
+        except Exception as e:
+            logger.warning(f"[fast_draft] Could not load documents: {e}")
+
         # ── CALL 1: Analysis (Haiku) ────────────────────────────────────
         t1_start = datetime.now(timezone.utc)
         logger.info(f"[fast_draft] Call 1 (analysis) starting for case {case_id}")
@@ -398,7 +425,7 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             system=ANALYSIS_PROMPT,
             messages=[{
                 "role": "user",
-                "content": f"CASE FACTS:\n{case_facts}\n\nDAMAGES:\n{damages_description}",
+                "content": f"CASE FACTS:\n{case_facts}\n\nDAMAGES:\n{damages_description}{document_text}",
             }],
         )
 
