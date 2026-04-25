@@ -89,6 +89,44 @@ app.include_router(pipeline_stages.router,  prefix="/pipeline-stages",  tags=["P
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Background SuiteDash poller — runs automatically every 5 minutes
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+async def start_suitedash_poller():
+    """Launch the SuiteDash polling agent on app startup."""
+    import asyncio
+    from utils.suitedash_poller import is_configured
+
+    if not is_configured():
+        logger.info("SuiteDash not configured — poller disabled")
+        return
+
+    async def _poll_loop():
+        import asyncio
+        from utils.suitedash_poller import poll_and_create_cases
+
+        # Wait 30 seconds after startup before first poll
+        await asyncio.sleep(30)
+        logger.info("SuiteDash poller started — checking every 5 minutes")
+
+        while True:
+            try:
+                result = await poll_and_create_cases()
+                if result.get("cases_created", 0) > 0:
+                    logger.info(f"SuiteDash poll: created {result['cases_created']} new cases")
+                else:
+                    logger.debug(f"SuiteDash poll: no new contacts")
+            except Exception as e:
+                logger.error(f"SuiteDash poll error: {e}")
+
+            await asyncio.sleep(300)  # 5 minutes
+
+    asyncio.create_task(_poll_loop())
+    logger.info("SuiteDash auto-poller scheduled")
+
+
 @app.get("/", tags=["Health"])
 async def root():
     """Simple health check endpoint."""
