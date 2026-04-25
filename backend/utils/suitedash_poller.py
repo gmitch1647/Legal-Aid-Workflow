@@ -14,7 +14,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SUITEDASH_BASE = "https://app.suitedash.com/api/v1"
+SUITEDASH_BASE = "https://app.suitedash.com/secure-api"
 
 
 def _get_headers() -> dict:
@@ -44,11 +44,13 @@ async def test_connection() -> dict:
     results = {"configured": is_configured(), "tests": []}
 
     combos = [
-        ("https://app.suitedash.com/api/v1/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
-        ("https://app.suitedash.com/api/v1/contacts", {"X-Public-Key": public_key, "X-Secret-Key": secret_key}),
-        ("https://app.suitedash.com/api/v1/me", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
-        ("https://app.suitedash.com/api/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
-        ("https://app.suitedash.com/secure/api/v1/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/contacts", {"X-Public-Key": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/contacts", {"Public-ID": public_key, "Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/forms", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/me", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/clients", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure-api/leads", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
     ]
 
     async with httpx.AsyncClient(timeout=8) as client:
