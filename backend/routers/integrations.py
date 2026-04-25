@@ -410,6 +410,67 @@ async def test_suitedash():
     return await test_connection()
 
 
+@router.get("/suitedash/explore")
+async def explore_suitedash():
+    """Try to discover form submission and file endpoints."""
+    import httpx
+    public_key = os.environ.get("SUITEDASH_API_KEY", "")
+    secret_key = os.environ.get("SUITEDASH_SECRET_KEY", "")
+    form_id = os.environ.get("SUITEDASH_FORM_ID", "2thPYANdKPbjwpaK2")
+    headers = {"X-Public-ID": public_key, "X-Secret-Key": secret_key, "Accept": "application/json"}
+
+    # Get first contact UID for testing
+    from utils.suitedash_poller import fetch_all_contacts
+    contacts = await fetch_all_contacts()
+    contact_uid = contacts[0]["uid"] if contacts else "none"
+
+    endpoints = [
+        f"/forms",
+        f"/forms/{form_id}",
+        f"/forms/{form_id}/submissions",
+        f"/form-submissions",
+        f"/contacts/{contact_uid}/forms",
+        f"/contacts/{contact_uid}/forms/{form_id}",
+        f"/contacts/{contact_uid}/form-submissions",
+        f"/contacts/{contact_uid}/submissions",
+        f"/contacts/{contact_uid}/files",
+        f"/contacts/{contact_uid}/documents",
+        f"/contacts/{contact_uid}/notes",
+        f"/contacts/{contact_uid}/activities",
+        f"/files",
+        f"/documents",
+        f"/submissions",
+        f"/intake",
+        f"/intake-forms",
+    ]
+
+    results = []
+    async with httpx.AsyncClient(timeout=8) as client:
+        for ep in endpoints:
+            url = f"https://app.suitedash.com/secure-api{ep}"
+            try:
+                resp = await client.get(url, headers=headers)
+                entry = {"endpoint": ep, "status": resp.status_code}
+                if resp.status_code == 200:
+                    try:
+                        body = resp.json()
+                        if isinstance(body, dict):
+                            entry["keys"] = list(body.keys())[:10]
+                            data = body.get("data")
+                            if isinstance(data, list) and data:
+                                entry["first_item_keys"] = list(data[0].keys())[:15] if isinstance(data[0], dict) else []
+                                entry["count"] = len(data)
+                        elif isinstance(body, list):
+                            entry["count"] = len(body)
+                    except Exception:
+                        entry["preview"] = resp.text[:200]
+                results.append(entry)
+            except Exception as e:
+                results.append({"endpoint": ep, "error": str(e)[:80]})
+
+    return {"contact_uid": contact_uid, "form_id": form_id, "results": results}
+
+
 @router.post("/suitedash/poll")
 async def poll_suitedash(authorization: str = Header(default=None)):
     """Manually trigger a poll of SuiteDash for new contacts."""
