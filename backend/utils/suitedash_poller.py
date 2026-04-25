@@ -22,7 +22,7 @@ def _get_headers() -> dict:
     public_key = os.environ.get("SUITEDASH_API_KEY", "")
     secret_key = os.environ.get("SUITEDASH_SECRET_KEY", "")
     return {
-        "X-Public-Key": public_key,
+        "X-Public-ID": public_key,
         "X-Secret-Key": secret_key,
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -73,56 +73,64 @@ async def test_connection() -> dict:
     return results
 
 
-async def fetch_recent_contacts(since_minutes: int = 10) -> list[dict]:
-    """Fetch contacts created in the last N minutes from SuiteDash."""
+async def fetch_all_contacts() -> list[dict]:
+    """Fetch all contacts from SuiteDash."""
     headers = _get_headers()
+    all_contacts = []
+    page = 1
 
     async with httpx.AsyncClient(timeout=30) as client:
-        # Try the contacts endpoint with recent filter
-        url = f"{SUITEDASH_BASE}/contacts"
-        params = {
-            "per_page": 50,
-            "sort": "-created_at",
-        }
+        while True:
+            url = f"{SUITEDASH_BASE}/contacts"
+            params = {"page": page}
 
+            try:
+                resp = await client.get(url, headers=headers, params=params)
+                if resp.status_code != 200:
+                    logger.warning(f"SuiteDash API returned {resp.status_code}: {resp.text[:200]}")
+                    break
+
+                body = resp.json()
+                if not body.get("success"):
+                    break
+
+                contacts = body.get("data") or []
+                if not contacts:
+                    break
+
+                all_contacts.extend(contacts)
+                logger.info(f"Fetched page {page}: {len(contacts)} contacts")
+
+                # Check if there are more pages
+                meta = body.get("meta") or {}
+                total_pages = meta.get("last_page") or meta.get("total_pages") or 1
+                if page >= total_pages:
+                    break
+                page += 1
+
+                # Safety limit
+                if page > 20:
+                    break
+
+            except Exception as e:
+                logger.error(f"SuiteDash API error on page {page}: {e}")
+                break
+
+    return all_contacts
+
+
+async def fetch_contact_detail(contact_uid: str) -> dict:
+    """Fetch a single contact's full details from SuiteDash."""
+    headers = _get_headers()
+    async with httpx.AsyncClient(timeout=15) as client:
         try:
-            resp = await client.get(url, headers=headers, params=params)
-            if resp.status_code != 200:
-                logger.warning(f"SuiteDash contacts API returned {resp.status_code}: {resp.text[:200]}")
-                return []
-
-            body = resp.json()
-            contacts = []
-
-            # Handle different response formats
-            if isinstance(body, list):
-                contacts = body
-            elif isinstance(body, dict):
-                contacts = body.get("data") or body.get("contacts") or body.get("results") or []
-
-            # Filter to only recent contacts
-            cutoff = datetime.now(timezone.utc).timestamp() - (since_minutes * 60)
-            recent = []
-            for c in contacts:
-                created = c.get("created_at") or c.get("created") or c.get("date_created") or ""
-                if created:
-                    try:
-                        if isinstance(created, (int, float)):
-                            ts = created
-                        else:
-                            ts = datetime.fromisoformat(str(created).replace("Z", "+00:00")).timestamp()
-                        if ts >= cutoff:
-                            recent.append(c)
-                    except Exception:
-                        recent.append(c)  # Include if we can't parse the date
-                else:
-                    recent.append(c)  # Include if no date
-
-            return recent
-
+            resp = await client.get(f"{SUITEDASH_BASE}/contacts/{contact_uid}", headers=headers)
+            if resp.status_code == 200:
+                body = resp.json()
+                return body.get("data") or body
         except Exception as e:
-            logger.error(f"SuiteDash API error: {e}")
-            return []
+            logger.warning(f"Could not fetch contact {contact_uid}: {e}")
+    return {}
 
 
 async def poll_and_create_cases() -> dict:
@@ -133,7 +141,7 @@ async def poll_and_create_cases() -> dict:
     from utils.supabase_client import get_supabase
     supabase = get_supabase()
 
-    contacts = await fetch_recent_contacts(since_minutes=10)
+    contacts = await fetch_all_contacts()
     if not contacts:
         return {"status": "ok", "new_contacts": 0, "cases_created": 0}
 

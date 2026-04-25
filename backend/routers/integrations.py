@@ -417,6 +417,24 @@ async def poll_suitedash(authorization: str = Header(default=None)):
     return await poll_and_create_cases()
 
 
+@router.get("/suitedash/contacts")
+async def list_suitedash_contacts():
+    """Debug — show raw contacts from SuiteDash API."""
+    from utils.suitedash_poller import fetch_all_contacts
+    contacts = await fetch_all_contacts()
+    # Show field names from first contact + count
+    preview = []
+    for c in contacts[:3]:
+        preview.append({
+            "fields": list(c.keys()),
+            "data": {k: str(v)[:100] for k, v in c.items()},
+        })
+    return {
+        "total": len(contacts),
+        "preview": preview,
+    }
+
+
 @router.post("/debug-webhook")
 async def debug_webhook(request: Request):
     """Debug endpoint — just returns whatever data was sent so you
