@@ -295,23 +295,47 @@ async def suitedash_webhook(request: Request):
         zip_code = data.get("zip_code") or data.get("zip") or data.get("postal_code") or ""
         full_address = ", ".join(p for p in [address, city, state, zip_code] if p)
 
-        facts = data.get("case_facts") or data.get("case_description") or data.get("what_happened") or data.get("description") or data.get("details") or data.get("message") or data.get("notes") or ""
+        # Case facts — from brief description or other fields
+        brief_desc = data.get("case_facts") or data.get("brief_description") or data.get("case_description") or data.get("what_happened") or data.get("description") or data.get("details") or data.get("message") or data.get("notes") or ""
+
+        # SuiteDash form specific fields
+        case_type = data.get("case_type") or ""
+        violation_type = data.get("violation_type") or data.get("type_of_violation") or ""
+        specific_violation = data.get("specific_violation") or ""
+        affiliate_name = data.get("affiliate_name") or ""
+        dob = data.get("date_of_birth") or data.get("dob") or data.get("client_dob") or ""
+
+        # Build comprehensive case facts from all form fields
+        facts_parts = []
+        if case_type:
+            facts_parts.append(f"Case Type: {case_type}")
+        if violation_type:
+            facts_parts.append(f"Type of Violation: {violation_type}")
+        if specific_violation:
+            facts_parts.append(f"Specific Violation: {specific_violation}")
+        if brief_desc:
+            facts_parts.append(f"\nBrief Description:\n{brief_desc}")
+        facts = "\n".join(facts_parts) if facts_parts else brief_desc
+
         damages = data.get("damages") or data.get("damages_description") or data.get("harm") or ""
 
+        # Defendants — from adverse party field
         defendant_list = []
-        if data.get("defendant_names") and isinstance(data["defendant_names"], list):
+        adverse_party = data.get("defendant_name") or data.get("adverse_party") or ""
+        if adverse_party:
+            defendant_list = [d.strip() for d in str(adverse_party).split(",") if d.strip()]
+        elif data.get("defendant_names") and isinstance(data["defendant_names"], list):
             defendant_list = data["defendant_names"]
         elif data.get("defendants"):
             defendant_list = [d.strip() for d in str(data["defendants"]).split(",") if d.strip()]
-        elif data.get("defendant_name"):
-            defendant_list = [str(data["defendant_name"])]
 
+        # Documents
         doc_urls = []
-        for key in ["document_urls", "attachments", "files", "documents", "file_url"]:
+        for key in ["document_urls", "attachments", "files", "documents", "file_url", "supporting_documents"]:
             val = data.get(key)
             if val:
                 if isinstance(val, list):
-                    doc_urls.extend([str(u) for u in val if u])
+                    doc_urls.extend([str(u) for u in val if u and str(u).startswith("http")])
                 elif isinstance(val, str) and val.startswith("http"):
                     doc_urls.append(val)
 
@@ -320,7 +344,27 @@ async def suitedash_webhook(request: Request):
 
         # 2. Create case record
         now = datetime.now(timezone.utc).isoformat()
-        structured_facts = f"=== PLAINTIFF ===\nName: {name}\nCounty of Residence: {county or 'Unknown'}, {state}\n\n=== SOURCE ===\nSubmitted via: SuiteDash/Zapier\nForm: {data.get('form_name') or data.get('form') or 'intake'}\nSubmitted at: {data.get('submitted_at') or now}\n\n=== CASE FACTS ===\n{facts}\n\n=== DAMAGES DESCRIBED ===\n{damages}"
+        structured_facts = (
+            f"=== PLAINTIFF ===\n"
+            f"Name: {name}\n"
+            f"Date of Birth: {dob or 'N/A'}\n"
+            f"Address: {full_address}\n"
+            f"County of Residence: {county or 'Unknown'}, {state}\n"
+            f"Phone: {phone}\n"
+            f"Email: {email}\n\n"
+            f"=== CASE INFORMATION ===\n"
+            f"Case Type: {case_type or 'Not specified'}\n"
+            f"Type of Violation: {violation_type or 'Not specified'}\n"
+            f"Specific Violation: {specific_violation or 'Not specified'}\n"
+            f"Adverse Party: {', '.join(defendant_list) if defendant_list else 'Not specified'}\n"
+            f"Affiliate: {affiliate_name or 'N/A'}\n\n"
+            f"=== SOURCE ===\n"
+            f"Submitted via: SuiteDash/Zapier\n"
+            f"Form: {data.get('form_name') or data.get('form') or 'Case Referral'}\n"
+            f"Submitted at: {data.get('submitted_at') or now}\n\n"
+            f"=== CASE FACTS ===\n{brief_desc or 'Awaiting details'}\n\n"
+            f"=== DAMAGES DESCRIBED ===\n{damages}"
+        )
 
         case_resp = supabase.table("cases").insert({
             "client_id": client_id,
