@@ -87,6 +87,14 @@ export async function submitCase(data) {
   });
 }
 
+export async function deleteCase(id) {
+  return request(`/cases/${id}`, { method: 'DELETE' });
+}
+
+export async function deleteClient(id) {
+  return request(`/cases/clients/${id}`, { method: 'DELETE' });
+}
+
 export async function updateCaseStatus(id, newStatus) {
   return request(`/cases/${id}/status`, {
     method: 'PATCH',
@@ -483,6 +491,24 @@ export async function reorderPipelineStages(stageIds) {
 // ---------------------------------------------------------------------------
 // Auth / Registration
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Public Intake Form
+// ---------------------------------------------------------------------------
+
+export async function submitIntakeForm(formData) {
+  // This is a public endpoint — no auth needed
+  const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+  const response = await fetch(`${BASE}/intake/submit-with-files`, {
+    method: 'POST',
+    body: formData, // FormData with files
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Submission failed' }));
+    throw new Error(err.detail || 'Submission failed');
+  }
+  return response.json();
+}
 
 export async function registerClient(data) {
   return request('/auth/register', {

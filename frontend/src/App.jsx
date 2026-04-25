@@ -31,6 +31,7 @@ import { getNotifications, markNotificationRead } from './lib/api';
 // Lazy-loaded page components
 // ---------------------------------------------------------------------------
 const Login = React.lazy(() => import('./pages/Login'));
+const IntakeForm = React.lazy(() => import('./pages/IntakeForm'));
 
 // Attorney pages
 const AttorneyDashboard = React.lazy(() => import('./pages/attorney/Dashboard'));
@@ -495,6 +496,7 @@ export default function App() {
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
+          <Route path="/intake" element={<IntakeForm />} />
 
           {/* Attorney portal */}
           <Route

@@ -428,6 +428,76 @@ async def get_case_detail(case_id: str, authorization: str = Header(...)):
 
 
 # ---------------------------------------------------------------------------
+# DELETE /{case_id} -- delete a case
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/{case_id}")
+async def delete_case(case_id: str, authorization: str = Header(...)):
+    """Delete a case and all related records."""
+    profile = await get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    # Delete related records first (cascade should handle most, but be explicit)
+    try:
+        supabase.table("agent_outputs").delete().eq("case_id", case_id).execute()
+        supabase.table("complaints").delete().eq("case_id", case_id).execute()
+        supabase.table("case_defendants").delete().eq("case_id", case_id).execute()
+        supabase.table("case_documents").delete().eq("case_id", case_id).execute()
+        supabase.table("messages").delete().eq("case_id", case_id).execute()
+        supabase.table("calendar_events").delete().eq("case_id", case_id).execute()
+    except Exception as e:
+        logger.warning(f"Error cleaning up case {case_id}: {e}")
+
+    supabase.table("cases").delete().eq("id", case_id).execute()
+    return {"deleted": True, "case_id": case_id}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /clients/{client_id} -- delete a client
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/clients/{client_id}")
+async def delete_client(client_id: str, authorization: str = Header(...)):
+    """Delete a client profile and all their cases."""
+    profile = await get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    # Delete all cases belonging to this client
+    try:
+        cases_resp = supabase.table("cases").select("id").eq("client_id", client_id).execute()
+        for c in cases_resp.data or []:
+            try:
+                supabase.table("agent_outputs").delete().eq("case_id", c["id"]).execute()
+                supabase.table("complaints").delete().eq("case_id", c["id"]).execute()
+                supabase.table("case_defendants").delete().eq("case_id", c["id"]).execute()
+                supabase.table("case_documents").delete().eq("case_id", c["id"]).execute()
+                supabase.table("messages").delete().eq("case_id", c["id"]).execute()
+                supabase.table("calendar_events").delete().eq("case_id", c["id"]).execute()
+            except Exception:
+                pass
+        supabase.table("cases").delete().eq("client_id", client_id).execute()
+    except Exception as e:
+        logger.warning(f"Error deleting cases for client {client_id}: {e}")
+
+    # Delete communications
+    try:
+        supabase.table("communications").delete().eq("client_id", client_id).execute()
+    except Exception:
+        pass
+
+    # Delete profile
+    supabase.table("profiles").delete().eq("id", client_id).execute()
+
+    return {"deleted": True, "client_id": client_id}
+
+
+# ---------------------------------------------------------------------------
 # PATCH /{case_id}/status -- attorney updates case status
 # ---------------------------------------------------------------------------
 
