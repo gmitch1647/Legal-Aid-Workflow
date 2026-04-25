@@ -154,12 +154,20 @@ async def poll_and_create_cases() -> dict:
         if not email:
             continue
 
-        # Check if we already have this client
+        sd_uid = contact.get("uid") or ""
+
+        # Check if this contact was EVER imported (even if later deleted)
         try:
-            existing = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
-            if existing.data:
-                skipped += 1
-                continue  # Already imported
+            if sd_uid:
+                already = supabase.table("imported_contacts").select("id").eq("source_uid", sd_uid).eq("source", "suitedash").limit(1).execute()
+                if already.data:
+                    skipped += 1
+                    continue
+            if email:
+                already = supabase.table("imported_contacts").select("id").eq("email", email).limit(1).execute()
+                if already.data:
+                    skipped += 1
+                    continue
         except Exception:
             pass
 
@@ -190,7 +198,6 @@ async def poll_and_create_cases() -> dict:
         background = contact.get("background_info") or ""
         if background == "None":
             background = ""
-        sd_uid = contact.get("uid") or ""
 
         # Create client profile and case
         try:
@@ -226,6 +233,16 @@ async def poll_and_create_cases() -> dict:
             if case_resp.data:
                 cases_created += 1
                 logger.info(f"Created case for SuiteDash contact: {name} ({email})")
+
+                # Track this import so we never re-import even if deleted
+                try:
+                    supabase.table("imported_contacts").insert({
+                        "source": "suitedash",
+                        "source_uid": sd_uid or email,
+                        "email": email,
+                    }).execute()
+                except Exception:
+                    pass
 
                 try:
                     from utils.notifications import notify_attorney_new_submission
