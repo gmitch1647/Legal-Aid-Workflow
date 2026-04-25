@@ -37,89 +37,36 @@ def is_configured() -> bool:
 
 
 async def test_connection() -> dict:
-    """Test the SuiteDash API connection and discover available endpoints."""
+    """Quick test of SuiteDash API — tries the most likely combos only."""
     public_key = os.environ.get("SUITEDASH_API_KEY", "")
     secret_key = os.environ.get("SUITEDASH_SECRET_KEY", "")
 
-    results = {
-        "configured": is_configured(),
-        "tests": [],
-    }
+    results = {"configured": is_configured(), "tests": []}
 
-    # Try different base URLs
-    base_urls = [
-        "https://app.suitedash.com/api/v1",
-        "https://app.suitedash.com/api",
-        "https://app.suitedash.com/secure/api/v1",
-        "https://app.suitedash.com/secure/api",
+    combos = [
+        ("https://app.suitedash.com/api/v1/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/api/v1/contacts", {"X-Public-Key": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/api/v1/me", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/api/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
+        ("https://app.suitedash.com/secure/api/v1/contacts", {"X-Public-ID": public_key, "X-Secret-Key": secret_key}),
     ]
 
-    # Try different auth header formats
-    auth_variants = [
-        {"X-Public-Key": public_key, "X-Secret-Key": secret_key},
-        {"X-Public-ID": public_key, "X-Secret-Key": secret_key},
-        {"Public-ID": public_key, "Secret-Key": secret_key},
-        {"Authorization": f"Bearer {public_key}"},
-        {"Authorization": f"Bearer {secret_key}"},
-        {"x-api-key": public_key},
-        {"x-api-key": secret_key},
-    ]
-
-    endpoints = ["/contacts", "/forms", "/me", "/account", "/projects", "/clients"]
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        for base in base_urls:
-            for auth_headers in auth_variants:
-                headers = {**auth_headers, "Accept": "application/json"}
-                for endpoint in endpoints:
-                    url = f"{base}{endpoint}"
+    async with httpx.AsyncClient(timeout=8) as client:
+        for url, auth in combos:
+            try:
+                resp = await client.get(url, headers={**auth, "Accept": "application/json"})
+                entry = {"url": url, "auth": list(auth.keys()), "status": resp.status_code}
+                if resp.status_code == 200:
                     try:
-                        resp = await client.get(url, headers=headers)
-                        if resp.status_code in (200, 201):
-                            entry = {
-                                "url": url,
-                                "auth": list(auth_headers.keys()),
-                                "status": resp.status_code,
-                                "working": True,
-                            }
-                            try:
-                                body = resp.json()
-                                if isinstance(body, dict):
-                                    entry["keys"] = list(body.keys())[:15]
-                                elif isinstance(body, list):
-                                    entry["count"] = len(body)
-                                    if body and isinstance(body[0], dict):
-                                        entry["first_keys"] = list(body[0].keys())[:15]
-                            except Exception:
-                                entry["body_preview"] = resp.text[:300]
-                            results["tests"].append(entry)
-                            # Found a working combo — no need to test more auth for this base+endpoint
-                            break
+                        body = resp.json()
+                        entry["keys"] = list(body.keys())[:10] if isinstance(body, dict) else ["list", len(body)]
                     except Exception:
-                        pass
-                else:
-                    continue
-                break  # Found working auth for this base URL
-
-        # If nothing worked, report the last few attempts for debugging
-        if not results["tests"]:
-            # Try one more thing — just hit the base URLs directly
-            for base in base_urls:
-                for auth_headers in auth_variants[:3]:
-                    headers = {**auth_headers, "Accept": "application/json"}
-                    try:
-                        resp = await client.get(base, headers=headers)
-                        results["tests"].append({
-                            "url": base,
-                            "auth": list(auth_headers.keys()),
-                            "status": resp.status_code,
-                            "body_preview": resp.text[:300],
-                        })
-                    except Exception as e:
-                        results["tests"].append({
-                            "url": base,
-                            "error": str(e),
-                        })
+                        entry["preview"] = resp.text[:200]
+                elif resp.status_code in (401, 403):
+                    entry["preview"] = resp.text[:200]
+                results["tests"].append(entry)
+            except Exception as e:
+                results["tests"].append({"url": url, "error": str(e)[:100]})
 
     return results
 
