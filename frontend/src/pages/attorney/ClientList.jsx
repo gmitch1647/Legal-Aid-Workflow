@@ -14,9 +14,9 @@ import {
   X,
   Check,
 } from 'lucide-react';
-import { getCases, registerClient, getCommsHistory } from '../../lib/api';
+import { getCases, registerClient, getCommsHistory, deleteClient } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
-import { MessageSquare, Send } from 'lucide-react';
+import { MessageSquare, Send, Trash2 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -247,6 +247,16 @@ export default function ClientList() {
   const [showRegister, setShowRegister] = useState(false);
   const [page, setPage] = useState(1);
 
+  async function handleDeleteClient(clientId, clientName) {
+    if (!window.confirm(`Delete client "${clientName}" and all their cases? This cannot be undone.`)) return;
+    try {
+      await deleteClient(clientId);
+      setClients((prev) => prev.filter((c) => c.id !== clientId));
+    } catch (err) {
+      setError(err.message || 'Failed to delete client');
+    }
+  }
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
@@ -476,7 +486,7 @@ export default function ClientList() {
                   <tr
                     key={client.id}
                     onClick={() => navigate(`/attorney/clients/${client.id}`)}
-                    className="cursor-pointer transition-colors hover:bg-slate-50"
+                    className="group cursor-pointer transition-colors hover:bg-slate-50"
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -560,7 +570,19 @@ export default function ClientList() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <ChevronRight className="ml-auto h-4 w-4 text-slate-300" />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteClient(client.id, client.full_name);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition opacity-0 group-hover:opacity-100"
+                          title="Delete client"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                        <ChevronRight className="h-4 w-4 text-slate-300" />
+                      </div>
                     </td>
                   </tr>
                 ))

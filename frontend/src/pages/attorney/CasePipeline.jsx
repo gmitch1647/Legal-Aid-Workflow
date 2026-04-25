@@ -14,7 +14,7 @@ import {
   Trash2,
   GripVertical,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -67,6 +67,16 @@ export default function CasePipeline() {
 
   // Edit mode — drag columns to reorder
   const [editMode, setEditMode] = useState(false);
+
+  async function handleDeleteCase(caseId, caseName) {
+    if (!window.confirm(`Delete case "${caseName}"? This cannot be undone.`)) return;
+    try {
+      await deleteCase(caseId);
+      setCases((prev) => prev.filter((c) => c.id !== caseId));
+    } catch (err) {
+      setError(err.message || 'Failed to delete case');
+    }
+  }
 
   async function handleAddStage() {
     if (!newStageName.trim() || addingStage) return;
@@ -542,10 +552,22 @@ export default function CasePipeline() {
                                 dragSnapshot.isDragging ? 'shadow-lg ring-2 ring-primary-300' : ''
                               } ${updating === caseData.id ? 'opacity-60' : ''}`}
                             >
-                              <CaseCard
-                                caseData={caseData}
-                                onClick={() => navigate(`/attorney/cases/${caseData.id}`)}
-                              />
+                              <div className="group/card relative">
+                                <CaseCard
+                                  caseData={caseData}
+                                  onClick={() => navigate(`/attorney/cases/${caseData.id}`)}
+                                />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteCase(caseData.id, caseData.plaintiff_name || caseData.client_name || 'this case');
+                                  }}
+                                  className="absolute top-2 right-2 opacity-0 group-hover/card:opacity-100 p-1 bg-white rounded-full shadow-sm border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-300 transition"
+                                  title="Delete case"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
                           )}
                         </Draggable>
