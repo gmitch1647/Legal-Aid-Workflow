@@ -271,7 +271,16 @@ async def list_cases(
     # Enrich each case with client name and defendant info
     enriched: list[dict] = []
     for case in cases:
-        # Client name
+        # Extract plaintiff name from case_facts header (for draft cases)
+        plaintiff_name = ""
+        facts = case.get("case_facts") or ""
+        if "=== PLAINTIFF ===" in facts:
+            for line in facts.split("\n"):
+                if line.strip().startswith("Name:"):
+                    plaintiff_name = line.replace("Name:", "").strip()
+                    break
+
+        # Client name from profile
         client_resp = (
             supabase.table("profiles")
             .select("id, full_name, email")
@@ -279,7 +288,16 @@ async def list_cases(
             .limit(1)
             .execute()
         )
-        case["client"] = client_resp.data[0] if client_resp.data else None
+        client_profile = client_resp.data[0] if client_resp.data else None
+        case["client"] = client_profile
+
+        # Use plaintiff name from case_facts if available, otherwise profile name
+        case["plaintiff_name"] = (
+            plaintiff_name or
+            (client_profile.get("full_name") if client_profile else None) or
+            "Unknown Client"
+        )
+        case["client_name"] = case["plaintiff_name"]
 
         # Defendants
         cd_resp = (
@@ -328,7 +346,24 @@ async def get_case_detail(case_id: str, authorization: str = Header(...)):
         .limit(1)
         .execute()
     )
-    case["client"] = client_resp.data[0] if client_resp.data else None
+    client_profile = client_resp.data[0] if client_resp.data else None
+    case["client"] = client_profile
+
+    # Extract plaintiff name from case_facts header
+    plaintiff_name = ""
+    facts = case.get("case_facts") or ""
+    if "=== PLAINTIFF ===" in facts:
+        for line in facts.split("\n"):
+            if line.strip().startswith("Name:"):
+                plaintiff_name = line.replace("Name:", "").strip()
+                break
+
+    case["plaintiff_name"] = (
+        plaintiff_name or
+        (client_profile.get("full_name") if client_profile else None) or
+        "Unknown Client"
+    )
+    case["client_name"] = case["plaintiff_name"]
 
     # Defendants
     cd_resp = (
