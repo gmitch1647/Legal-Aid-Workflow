@@ -1,9 +1,6 @@
 """
-Public Intake Form router — no auth required.
-
-Accepts case submissions from the public intake form, creates the
-client profile and case in LegalFlow, and pushes the contact to
-SuiteDash via their API so the client exists in both systems.
+Public Intake Form router — no auth required for submissions.
+Also includes form management endpoints for attorneys.
 """
 
 import logging
@@ -11,7 +8,7 @@ import os
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from typing import Optional
 
@@ -20,6 +17,89 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Form Management (attorney-only)
+# ---------------------------------------------------------------------------
+
+async def _get_current_user(authorization: str) -> dict:
+    from routers.cases import get_current_user as _shared
+    return await _shared(authorization)
+
+
+@router.get("/forms")
+async def list_forms(authorization: str = Header(default=None)):
+    """List all intake forms."""
+    supabase = get_supabase()
+    result = supabase.table("intake_forms").select("*").order("created_at").execute()
+    return result.data or []
+
+
+@router.get("/forms/{form_slug}")
+async def get_form(form_slug: str):
+    """Get a single form by slug — public endpoint for rendering the form."""
+    supabase = get_supabase()
+    result = supabase.table("intake_forms").select("*").eq("slug", form_slug).limit(1).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Form not found")
+    return result.data[0]
+
+
+@router.post("/forms", status_code=status.HTTP_201_CREATED)
+async def create_form(body: dict, authorization: str = Header(...)):
+    """Create a new intake form."""
+    profile = await _get_current_user(authorization)
+
+    supabase = get_supabase()
+    name = body.get("name", "New Form")
+    slug = body.get("slug") or name.lower().replace(" ", "-").replace("_", "-")
+
+    existing = supabase.table("intake_forms").select("id").eq("slug", slug).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail=f"Form with slug '{slug}' already exists")
+
+    result = supabase.table("intake_forms").insert({
+        "name": name,
+        "slug": slug,
+        "description": body.get("description", ""),
+        "fields": body.get("fields", []),
+        "is_active": body.get("is_active", True),
+        "settings": body.get("settings", {}),
+        "created_by": profile["id"],
+    }).execute()
+
+    return result.data[0] if result.data else {}
+
+
+@router.patch("/forms/{form_id}")
+async def update_form(form_id: str, body: dict, authorization: str = Header(...)):
+    """Update an intake form."""
+    await _get_current_user(authorization)
+
+    supabase = get_supabase()
+    allowed = ["name", "description", "fields", "is_active", "settings", "slug"]
+    update_data = {k: v for k, v in body.items() if k in allowed}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    result = supabase.table("intake_forms").update(update_data).eq("id", form_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Form not found")
+    return result.data[0]
+
+
+@router.delete("/forms/{form_id}")
+async def delete_form(form_id: str, authorization: str = Header(...)):
+    """Delete an intake form."""
+    await _get_current_user(authorization)
+
+    supabase = get_supabase()
+    form = supabase.table("intake_forms").select("is_default").eq("id", form_id).limit(1).execute()
+    if form.data and form.data[0].get("is_default"):
+        raise HTTPException(status_code=400, detail="Cannot delete the default form")
+
+    supabase.table("intake_forms").delete().eq("id", form_id).execute()
+    return {"deleted": True}
 
 
 class IntakeSubmission(BaseModel):

@@ -43,6 +43,7 @@ const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
 const AgentChat = React.lazy(() => import('./pages/attorney/AgentChat'));
 const DraftComplaint = React.lazy(() => import('./pages/attorney/DraftComplaint'));
 const CalendarPage = React.lazy(() => import('./pages/attorney/Calendar'));
+const FormsPage = React.lazy(() => import('./pages/attorney/Forms'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -438,6 +439,7 @@ const attorneyLinks = [
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays },
+  { to: '/attorney/forms', label: 'Forms', icon: FileText },
   { to: '/attorney/clients', label: 'Clients', icon: Users },
   { to: '/attorney/settings', label: 'Settings', icon: Settings },
 ];
@@ -497,6 +499,7 @@ export default function App() {
           {/* Public */}
           <Route path="/login" element={<Login />} />
           <Route path="/intake" element={<IntakeForm />} />
+          <Route path="/intake/:slug" element={<IntakeForm />} />
 
           {/* Attorney portal */}
           <Route
@@ -514,6 +517,7 @@ export default function App() {
             <Route path="cases/:id" element={<CaseDetail />} />
             <Route path="agents" element={<AgentChat />} />
             <Route path="calendar" element={<CalendarPage />} />
+            <Route path="forms" element={<FormsPage />} />
             <Route path="clients" element={<ClientList />} />
             <Route path="clients/:id" element={<ClientProfile />} />
             <Route path="settings" element={<AttorneySettings />} />
