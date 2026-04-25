@@ -419,15 +419,21 @@ async def poll_suitedash(authorization: str = Header(default=None)):
 
 @router.get("/suitedash/contacts")
 async def list_suitedash_contacts():
-    """Debug — show raw contacts from SuiteDash API."""
-    from utils.suitedash_poller import fetch_all_contacts
+    """Debug — show raw contacts from SuiteDash API with full custom fields."""
+    from utils.suitedash_poller import fetch_all_contacts, fetch_contact_detail
     contacts = await fetch_all_contacts()
-    # Show field names from first contact + count
     preview = []
-    for c in contacts[:3]:
+    for c in contacts[:2]:
+        # Fetch full detail for each contact to see custom fields
+        detail = await fetch_contact_detail(c.get("uid", ""))
+        custom = detail.get("custom_fields") or c.get("custom_fields") or {}
+        target_custom = detail.get("target_custom_fields") or c.get("target_custom_fields") or {}
         preview.append({
-            "fields": list(c.keys()),
-            "data": {k: str(v)[:100] for k, v in c.items()},
+            "name": f"{c.get('first_name','')} {c.get('last_name','')}",
+            "email": c.get("email"),
+            "custom_fields": custom,
+            "target_custom_fields": target_custom,
+            "all_detail_keys": list(detail.keys()) if detail else [],
         })
     return {
         "total": len(contacts),
