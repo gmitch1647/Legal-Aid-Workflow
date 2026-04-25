@@ -394,11 +394,27 @@ async def generic_webhook(request: Request):
 @router.get("/status")
 async def integration_status():
     """Return the webhook URL and configuration status."""
+    from utils.suitedash_poller import is_configured as sd_configured
     return {
         "suitedash_webhook_url": "/integrations/suitedash/webhook",
         "generic_webhook_url": "/integrations/webhook",
         "webhook_secret_configured": bool(WEBHOOK_SECRET),
+        "suitedash_api_configured": sd_configured(),
     }
+
+
+@router.get("/suitedash/test")
+async def test_suitedash():
+    """Test the SuiteDash API connection and discover endpoints."""
+    from utils.suitedash_poller import test_connection
+    return await test_connection()
+
+
+@router.post("/suitedash/poll")
+async def poll_suitedash(authorization: str = Header(default=None)):
+    """Manually trigger a poll of SuiteDash for new contacts."""
+    from utils.suitedash_poller import poll_and_create_cases
+    return await poll_and_create_cases()
 
 
 @router.post("/debug-webhook")
