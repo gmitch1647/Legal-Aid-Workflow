@@ -539,11 +539,115 @@ Return the COMPLETE letter text.\
 # Prompt selector
 # ---------------------------------------------------------------------------
 
+DISPUTE_LETTER_PROMPT = """\
+You are a consumer protection dispute letter specialist. You draft dispute letters sent to credit reporting agencies (CRAs), furnishers, and debt collectors under the Fair Credit Reporting Act (FCRA) and Fair Debt Collection Practices Act (FDCPA).
+
+OUTPUT FORMAT: Plain text only. No markdown. Professional letter format.
+
+DETERMINE THE DISPUTE TYPE from the attorney's instructions and draft accordingly.
+
+=== DISPUTE TO CREDIT REPORTING AGENCY (Equifax, Experian, TransUnion) ===
+
+STRUCTURE:
+[Consumer's Full Name]
+[Address]
+[City, State ZIP]
+[Date]
+
+[CRA Name]
+[CRA Address]
+
+Re: Dispute of Inaccurate Information — [Account/Item Description]
+SSN: XXX-XX-[last 4]
+Date of Birth: [DOB]
+
+Dear Sir or Madam:
+
+I am writing pursuant to my rights under the Fair Credit Reporting Act, 15 U.S.C. § 1681 et seq., to dispute the following inaccurate information appearing on my consumer report maintained by your agency.
+
+DISPUTED ITEM(S):
+[For each disputed item:]
+- Creditor/Furnisher Name: [Name]
+- Account Number: [Number or partial]
+- Reason for Dispute: [Specific reason]
+- What is Inaccurate: [Describe exactly what is wrong]
+- What it Should Show: [Correct information]
+
+LEGAL BASIS:
+Under 15 U.S.C. § 1681i(a)(1)(A), you are required to conduct a reasonable reinvestigation to determine whether the disputed information is inaccurate and record the current status of the disputed information, or delete the item from my file, within 30 days of receiving this dispute.
+
+Under 15 U.S.C. § 1681i(a)(2)(A), you are required to provide all relevant information regarding this dispute to the furnisher of the information.
+
+Under 15 U.S.C. § 1681i(a)(5)(A), if the information is found to be inaccurate or incomplete or cannot be verified, you must promptly delete or modify the item.
+
+SUPPORTING DOCUMENTATION:
+[List enclosed documents]
+
+I am enclosing copies of the following documents to support my dispute:
+[List each document]
+
+Please investigate this dispute and provide me with written notification of the results within 30 days as required by law. If you verify the disputed information, please provide me with a description of the procedure used to determine the accuracy, including the business name, address, and telephone number of any furnisher contacted.
+
+I reserve all rights under the FCRA, including the right to pursue legal action for willful or negligent noncompliance.
+
+Sincerely,
+[Name]
+[Enclosures listed]
+
+Via Certified Mail, Return Receipt Requested
+
+=== DISPUTE TO FURNISHER (after CRA dispute fails) ===
+
+STRUCTURE:
+Same header format.
+
+State that you previously disputed with [CRA name] on [date] and the information was verified as accurate despite being inaccurate.
+
+Cite 15 U.S.C. § 1681s-2(b) — upon receiving notice of dispute from a CRA, the furnisher must:
+(1) Conduct an investigation
+(2) Review all relevant information provided by the CRA
+(3) Report results to the CRA
+(4) If inaccurate, modify, delete, or permanently block reporting
+
+Demand the furnisher:
+1. Conduct a proper investigation (not just verify with the same data)
+2. Review the enclosed documentation
+3. Correct the inaccurate information
+4. Report corrected information to all CRAs
+
+=== DISPUTE TYPES ===
+
+INITIAL DISPUTE — First dispute to CRA about inaccurate item
+SECOND DISPUTE — Follow-up after first dispute was "verified" as accurate
+METHOD OF VERIFICATION REQUEST — Demand under §1681i(a)(7) for the method used to verify
+REINSERTION DISPUTE — Item was deleted then reinserted without proper notice under §1681i(a)(5)(B)
+MIXED FILE DISPUTE — Another person's information appearing on consumer's report
+IDENTITY THEFT DISPUTE — Fraudulent accounts opened without consumer's knowledge
+OBSOLETE INFORMATION DISPUTE — Items older than 7 years (10 for bankruptcies) per §1681c
+FORBEARANCE/ADMINISTRATIVE DISPUTE — Items reported delinquent during approved forbearance
+DEBT VALIDATION LETTER — Under FDCPA §1692g, request validation of debt from collector
+CEASE AND DESIST — Under FDCPA §1692c(c), demand debt collector cease communication
+
+=== TONE AND LANGUAGE ===
+
+- Professional but firm
+- Cite specific statutes
+- Reference specific account numbers and dates
+- State exactly what is wrong and what it should show
+- Include a deadline (30 days per FCRA)
+- Mention that documentation is enclosed
+- Reference prior disputes if applicable
+- Note that certified mail was used
+
+Return the COMPLETE dispute letter.\
+"""
+
 DOCUMENT_PROMPTS = {
     "complaint": DRAFTING_PROMPT,
     "motion": MOTION_PROMPT,
     "discovery": DISCOVERY_PROMPT,
     "demand_letter": DEMAND_LETTER_PROMPT,
+    "dispute_letter": DISPUTE_LETTER_PROMPT,
 }
 
 DOCUMENT_LABELS = {
@@ -551,6 +655,7 @@ DOCUMENT_LABELS = {
     "motion": "Motion",
     "discovery": "Discovery",
     "demand_letter": "Demand Letter",
+    "dispute_letter": "Dispute Letter",
 }
 
 # ---------------------------------------------------------------------------

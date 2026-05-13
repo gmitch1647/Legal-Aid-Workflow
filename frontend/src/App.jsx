@@ -16,6 +16,7 @@ import {
   X,
   MessageSquare,
   CalendarDays,
+  Mail,
 } from 'lucide-react';
 import {
   supabase,
@@ -44,6 +45,7 @@ const AgentChat = React.lazy(() => import('./pages/attorney/AgentChat'));
 const DraftComplaint = React.lazy(() => import('./pages/attorney/DraftComplaint'));
 const CalendarPage = React.lazy(() => import('./pages/attorney/Calendar'));
 const FormsPage = React.lazy(() => import('./pages/attorney/Forms'));
+const DisputeLetters = React.lazy(() => import('./pages/attorney/DisputeLetters'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -436,6 +438,7 @@ function Sidebar({ links, open, onClose }) {
 const attorneyLinks = [
   { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit },
+  { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail },
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays },
@@ -513,6 +516,7 @@ export default function App() {
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<AttorneyDashboard />} />
             <Route path="draft" element={<DraftComplaint />} />
+            <Route path="disputes" element={<DisputeLetters />} />
             <Route path="pipeline" element={<CasePipeline />} />
             <Route path="cases/:id" element={<CaseDetail />} />
             <Route path="agents" element={<AgentChat />} />
