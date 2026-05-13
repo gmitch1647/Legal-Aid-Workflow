@@ -498,10 +498,10 @@ export default function DraftComplaint() {
 
           {/* Plaintiff info */}
           <Card>
-            <SectionLabel>PLAINTIFF INFORMATION</SectionLabel>
+            <SectionLabel>{documentType === 'demand_letter' ? 'CLIENT INFORMATION' : 'PLAINTIFF INFORMATION'}</SectionLabel>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-[10px]">
               <Input
-                label="Plaintiff full legal name"
+                label={documentType === 'demand_letter' ? 'Client full legal name' : 'Plaintiff full legal name'}
                 value={plaintiffName}
                 onChange={setPlaintiffName}
                 placeholder="John Smith"
@@ -579,10 +579,15 @@ export default function DraftComplaint() {
             </div>
           </Card>
 
-          {/* Case facts */}
+          {/* Case facts / instructions — changes based on document type */}
           <Card>
             <div className="flex items-center justify-between mb-1">
-              <SectionLabel>CASE FACTS</SectionLabel>
+              <SectionLabel>
+                {documentType === 'complaint' ? 'CASE FACTS' :
+                 documentType === 'motion' ? 'MOTION DETAILS' :
+                 documentType === 'discovery' ? 'DISCOVERY INSTRUCTIONS' :
+                 'DEMAND DETAILS'}
+              </SectionLabel>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold uppercase tracking-wide">
                 be thorough
               </span>
@@ -591,7 +596,15 @@ export default function DraftComplaint() {
               value={caseFacts}
               onChange={(e) => setCaseFacts(e.target.value)}
               rows={8}
-              placeholder="Describe the full facts: what the defendant did, key dates, disputes sent and when, responses received, how the plaintiff was harmed, any prior notices or letters, account details, forbearance or administrative protections, specific violations you want to plead..."
+              placeholder={
+                documentType === 'complaint'
+                  ? "Describe the full facts: what the defendant did, key dates, disputes sent and when, responses received, how the plaintiff was harmed, any prior notices or letters, account details, forbearance or administrative protections, specific violations you want to plead..."
+                  : documentType === 'motion'
+                    ? "What type of motion? (e.g. Motion to Compel, MSJ, MTD Response)\nWhat are the key arguments?\nWhat relief are you seeking?\nRelevant procedural history (deadlines, prior motions, court orders)..."
+                    : documentType === 'discovery'
+                      ? "What type of discovery? (Interrogatories, RFPs, RFAs, Subpoena)\nWhich defendant is this directed to?\nCase number (if filed):\nWhat specific information are you seeking?\nKey topics to cover (dispute procedures, account records, communication logs, training materials, Metro 2 data, e-OSCAR records)...\nAny specific time period to cover?"
+                      : "What are you demanding?\nWhat violations occurred?\nWhat is the deadline for response?\nSettlement amount (if any)?\nBrief factual background..."
+              }
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y ${
                 validationErrors.caseFacts ? 'border-red-400' : 'border-slate-300'
               }`}
@@ -601,7 +614,8 @@ export default function DraftComplaint() {
             )}
           </Card>
 
-          {/* Damages */}
+          {/* Damages — only show for complaints and demand letters */}
+          {(documentType === 'complaint' || documentType === 'demand_letter') && (
           <Card>
             <SectionLabel>DAMAGES SUFFERED</SectionLabel>
             <textarea
@@ -612,6 +626,7 @@ export default function DraftComplaint() {
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </Card>
+          )}
 
           {/* Documents */}
           <Card>
