@@ -15,7 +15,7 @@ async function getAccessToken() {
 /**
  * Core fetch wrapper that adds Authorization header and handles JSON.
  */
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const token = await getAccessToken();
 
   const headers = {
