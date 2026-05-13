@@ -87,8 +87,10 @@ export default function DraftComplaint() {
   const [damages, setDamages] = useState('');
   const [juryDemand, setJuryDemand] = useState(true);
   const [gaClaims, setGaClaims] = useState('include');
-  const [draftMode, setDraftMode] = useState('fast'); // 'fast' (~15s) or 'thorough' (~90s)
-  const [documentType, setDocumentType] = useState('complaint'); // complaint | motion | discovery | demand_letter
+  const [draftMode, setDraftMode] = useState('fast');
+  const [documentType, setDocumentType] = useState('complaint');
+  const [motionType, setMotionType] = useState('');
+  const [discoveryType, setDiscoveryType] = useState('');
   const [uploadedDocs, setUploadedDocs] = useState([]); // { name, storage_path }
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -274,7 +276,11 @@ export default function DraftComplaint() {
         })),
       court,
       statutes,
-      case_facts: caseFacts,
+      case_facts: (
+        (documentType === 'motion' && motionType ? `MOTION TYPE: ${motionType}\n\n` : '') +
+        (documentType === 'discovery' && discoveryType ? `DISCOVERY TYPE: ${discoveryType}\n\n` : '') +
+        caseFacts
+      ),
       damages_description: damages,
       jury_demand: juryDemand,
       georgia_claims: gaClaims,
@@ -592,6 +598,58 @@ export default function DraftComplaint() {
                 be thorough
               </span>
             </div>
+
+            {/* Motion type dropdown */}
+            {documentType === 'motion' && (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Type of Motion</label>
+                <select
+                  value={motionType}
+                  onChange={(e) => setMotionType(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="">— Select motion type —</option>
+                  <option value="Motion to Compel Discovery">Motion to Compel Discovery</option>
+                  <option value="Motion for Default Judgment">Motion for Default Judgment</option>
+                  <option value="Opposition to Motion to Dismiss">Opposition to Motion to Dismiss</option>
+                  <option value="Motion for Summary Judgment">Motion for Summary Judgment</option>
+                  <option value="Motion for Sanctions">Motion for Sanctions</option>
+                  <option value="Motion in Limine">Motion in Limine</option>
+                  <option value="Motion to Strike">Motion to Strike</option>
+                  <option value="Motion for Protective Order">Motion for Protective Order</option>
+                  <option value="Motion to Extend Deadline">Motion to Extend Deadline</option>
+                  <option value="Motion for Leave to Amend">Motion for Leave to Amend Complaint</option>
+                  <option value="Opposition to Summary Judgment">Opposition to Summary Judgment</option>
+                  <option value="Reply Brief">Reply Brief</option>
+                  <option value="Other">Other (specify below)</option>
+                </select>
+              </div>
+            )}
+
+            {/* Discovery type dropdown */}
+            {documentType === 'discovery' && (
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Type of Discovery</label>
+                <select
+                  value={discoveryType}
+                  onChange={(e) => setDiscoveryType(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="">— Select discovery type —</option>
+                  <option value="Interrogatories (First Set)">Interrogatories (First Set)</option>
+                  <option value="Requests for Production of Documents">Requests for Production of Documents</option>
+                  <option value="Requests for Admission">Requests for Admission</option>
+                  <option value="Interrogatories + RFPs (Combined)">Interrogatories + RFPs (Combined)</option>
+                  <option value="Subpoena Duces Tecum">Subpoena Duces Tecum</option>
+                  <option value="Deposition Notice">Deposition Notice</option>
+                  <option value="Responses to Interrogatories">Responses to Interrogatories</option>
+                  <option value="Responses to RFPs">Responses to Requests for Production</option>
+                  <option value="Responses to RFAs">Responses to Requests for Admission</option>
+                  <option value="Other">Other (specify below)</option>
+                </select>
+              </div>
+            )}
+
             <textarea
               value={caseFacts}
               onChange={(e) => setCaseFacts(e.target.value)}
@@ -600,9 +658,9 @@ export default function DraftComplaint() {
                 documentType === 'complaint'
                   ? "Describe the full facts: what the defendant did, key dates, disputes sent and when, responses received, how the plaintiff was harmed, any prior notices or letters, account details, forbearance or administrative protections, specific violations you want to plead..."
                   : documentType === 'motion'
-                    ? "What type of motion? (e.g. Motion to Compel, MSJ, MTD Response)\nWhat are the key arguments?\nWhat relief are you seeking?\nRelevant procedural history (deadlines, prior motions, court orders)..."
+                    ? "Case number:\nWhat are the key facts supporting this motion?\nWhat arguments do you want to make?\nWhat relief are you seeking?\nRelevant procedural history (deadlines, prior motions, court orders)...\nAny specific case law to cite?"
                     : documentType === 'discovery'
-                      ? "What type of discovery? (Interrogatories, RFPs, RFAs, Subpoena)\nWhich defendant is this directed to?\nCase number (if filed):\nWhat specific information are you seeking?\nKey topics to cover (dispute procedures, account records, communication logs, training materials, Metro 2 data, e-OSCAR records)...\nAny specific time period to cover?"
+                      ? "Which defendant is this directed to?\nCase number (if filed):\nWhat specific information are you seeking?\nKey topics to cover (dispute procedures, account records, communication logs, training materials, Metro 2 data, e-OSCAR records)...\nAny specific time period to cover?\nAny prior discovery issues?"
                       : "What are you demanding?\nWhat violations occurred?\nWhat is the deadline for response?\nSettlement amount (if any)?\nBrief factual background..."
               }
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y ${
