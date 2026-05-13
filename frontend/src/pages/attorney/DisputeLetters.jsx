@@ -1,12 +1,14 @@
 import React, { useState, useRef } from 'react';
 import {
   FileText, Send, Download, Copy, RefreshCw, Plus, X, Upload,
-  Loader2, CheckCircle2, AlertCircle, Scale, Mail,
+  Loader2, CheckCircle2, AlertCircle, Scale, Mail, User,
 } from 'lucide-react';
 import {
   getDefendants, startDraft, getDraftStatus, getDraftResult,
   uploadDraftDocument, downloadDraftDocx, reviseDraft,
+  getCases, getDocuments,
 } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 
 const DISPUTE_TYPES = [
   { value: 'initial_dispute', label: 'Initial Dispute', desc: 'First dispute to CRA about inaccurate item' },
@@ -32,6 +34,67 @@ const BUREAUS = [
 ];
 
 export default function DisputeLetters() {
+  // Client selection
+  const [clientMode, setClientMode] = useState(''); // 'existing' | 'new'
+  const [clients, setClients] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [clientDocs, setClientDocs] = useState([]);
+  const [clientCases, setClientCases] = useState([]);
+  const [loadingClients, setLoadingClients] = useState(false);
+
+  async function loadClients() {
+    setLoadingClients(true);
+    try {
+      const { data } = await supabase.from('profiles').select('*').eq('role', 'client').order('full_name');
+      setClients(data || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingClients(false);
+    }
+  }
+
+  async function handleSelectClient(clientId) {
+    setSelectedClientId(clientId);
+    if (!clientId) {
+      setSelectedClient(null);
+      setClientDocs([]);
+      setClientCases([]);
+      return;
+    }
+
+    const client = clients.find(c => c.id === clientId);
+    setSelectedClient(client);
+
+    // Auto-fill client info
+    if (client) {
+      setClientName(client.full_name || '');
+      setClientAddress([client.address, client.county, client.state].filter(Boolean).join(', '));
+    }
+
+    // Load client's cases and documents
+    try {
+      const casesData = await getCases({ client_id: clientId });
+      const casesList = Array.isArray(casesData) ? casesData : casesData?.data || [];
+      const clientSpecific = casesList.filter(c => c.client_id === clientId);
+      setClientCases(clientSpecific);
+
+      // Load docs from all cases
+      const allDocs = [];
+      for (const c of clientSpecific.slice(0, 10)) {
+        try {
+          const docs = await getDocuments(c.id);
+          const docList = Array.isArray(docs) ? docs : docs?.documents || [];
+          docList.forEach(d => allDocs.push({ ...d, case_id: c.id }));
+        } catch {}
+      }
+      setClientDocs(allDocs);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
   // Form state
   const [disputeType, setDisputeType] = useState('');
   const [sendTo, setSendTo] = useState('');
@@ -236,19 +299,126 @@ export default function DisputeLetters() {
             )}
           </div>
 
-          {/* Client Info */}
+          {/* Client Selection */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-2">CLIENT INFORMATION</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Client full name *"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input value={clientAddress} onChange={(e) => setClientAddress(e.target.value)} placeholder="Client address"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input value={clientSSNLast4} onChange={(e) => setClientSSNLast4(e.target.value)} placeholder="SSN last 4 digits" maxLength={4}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input type="date" value={clientDOB} onChange={(e) => setClientDOB(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-3">CLIENT</div>
+
+            {/* Mode selector */}
+            {!clientMode && (
+              <div className="flex gap-3">
+                <button onClick={() => { setClientMode('existing'); loadClients(); }}
+                  className="flex-1 flex items-center gap-2 justify-center rounded-lg border-2 border-slate-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition">
+                  <User className="w-5 h-5 text-blue-600" />
+                  <div className="text-left">
+                    <div className="text-sm font-semibold text-slate-900">Existing Client</div>
+                    <div className="text-[10px] text-slate-500">Pick from your client list</div>
+                  </div>
+                </button>
+                <button onClick={() => setClientMode('new')}
+                  className="flex-1 flex items-center gap-2 justify-center rounded-lg border-2 border-slate-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition">
+                  <Plus className="w-5 h-5 text-emerald-600" />
+                  <div className="text-left">
+                    <div className="text-sm font-semibold text-slate-900">New Client</div>
+                    <div className="text-[10px] text-slate-500">Enter info manually</div>
+                  </div>
+                </button>
+              </div>
+            )}
+
+            {/* Existing client picker */}
+            {clientMode === 'existing' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-slate-700">Select Client</label>
+                  <button onClick={() => { setClientMode(''); setSelectedClient(null); setClientDocs([]); setClientCases([]); }}
+                    className="text-xs text-slate-400 hover:text-slate-600">Change</button>
+                </div>
+                {loadingClients ? (
+                  <div className="flex items-center gap-2 py-4 justify-center text-slate-400 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading clients...</div>
+                ) : (
+                  <select value={selectedClientId} onChange={(e) => handleSelectClient(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">— Select a client —</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>
+                    ))}
+                  </select>
+                )}
+
+                {/* Selected client info card */}
+                {selectedClient && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                    <div className="text-sm font-semibold text-slate-900">{selectedClient.full_name}</div>
+                    <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+                      {selectedClient.email && <div>Email: {selectedClient.email}</div>}
+                      {selectedClient.phone && <div>Phone: {selectedClient.phone}</div>}
+                      {selectedClient.address && <div>Address: {selectedClient.address}</div>}
+                      {selectedClient.county && <div>County: {selectedClient.county}, {selectedClient.state}</div>}
+                    </div>
+
+                    {/* Client documents */}
+                    {clientDocs.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-blue-200">
+                        <div className="text-[10px] font-semibold uppercase text-blue-700 mb-1.5">Client Documents ({clientDocs.length})</div>
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                          {clientDocs.map((doc, i) => (
+                            <div key={doc.id || i} className="flex items-center gap-2 text-xs bg-white rounded p-1.5">
+                              <FileText className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span className="truncate flex-1 text-slate-700">{doc.file_name || doc.name}</span>
+                              <span className="text-[9px] text-slate-400">{(doc.document_category || 'other').replace(/_/g, ' ')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Client cases */}
+                    {clientCases.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-blue-200">
+                        <div className="text-[10px] font-semibold uppercase text-blue-700 mb-1.5">Cases ({clientCases.length})</div>
+                        <div className="space-y-1">
+                          {clientCases.slice(0, 5).map(c => (
+                            <div key={c.id} className="text-xs bg-white rounded p-1.5 text-slate-700">
+                              {c.plaintiff_name || c.client_name || 'Case'} — <span className="text-slate-400">{c.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Editable fields (pre-filled from client) */}
+                {selectedClient && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input value={clientSSNLast4} onChange={(e) => setClientSSNLast4(e.target.value)} placeholder="SSN last 4 digits" maxLength={4}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input type="date" value={clientDOB} onChange={(e) => setClientDOB(e.target.value)}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* New client form */}
+            {clientMode === 'new' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-slate-700">New Client</label>
+                  <button onClick={() => setClientMode('')} className="text-xs text-slate-400 hover:text-slate-600">Change</button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Client full name *"
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input value={clientAddress} onChange={(e) => setClientAddress(e.target.value)} placeholder="Client address"
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input value={clientSSNLast4} onChange={(e) => setClientSSNLast4(e.target.value)} placeholder="SSN last 4 digits" maxLength={4}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input type="date" value={clientDOB} onChange={(e) => setClientDOB(e.target.value)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Disputed Item */}
