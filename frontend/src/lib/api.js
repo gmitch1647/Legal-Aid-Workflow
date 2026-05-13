@@ -15,7 +15,7 @@ async function getAccessToken() {
 /**
  * Core fetch wrapper that adds Authorization header and handles JSON.
  */
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const token = await getAccessToken();
 
   const headers = {
@@ -258,10 +258,6 @@ export async function archiveConversation(id) {
 // Draft (attorney complaint drafting tool)
 // ---------------------------------------------------------------------------
 
-/**
- * Upload a single file to the backend for use in a draft session.
- * Returns { storage_path, file_name, size }.
- */
 export async function uploadDraftDocument(file) {
   const formData = new FormData();
   formData.append('file', file);
@@ -271,10 +267,6 @@ export async function uploadDraftDocument(file) {
   });
 }
 
-/**
- * Start a new draft session. Triggers the full 7-agent pipeline.
- * Returns { session_id, status }.
- */
 export async function startDraft(payload) {
   return request('/draft/start', {
     method: 'POST',
@@ -282,31 +274,18 @@ export async function startDraft(payload) {
   });
 }
 
-/**
- * List all draft sessions.
- */
 export async function listDrafts() {
   return request('/draft/list');
 }
 
-/**
- * Poll the status of a draft session.
- */
 export async function getDraftStatus(sessionId) {
   return request(`/draft/${sessionId}/status`);
 }
 
-/**
- * Fetch the completed draft result (complaint text + download URLs).
- */
 export async function getDraftResult(sessionId) {
   return request(`/draft/${sessionId}/result`);
 }
 
-/**
- * Send a revision instruction for a drafted complaint.
- * Returns { revised_complaint, changes_summary, version }.
- */
 export async function listDraftVersions(sessionId) {
   return request(`/draft/${sessionId}/versions`);
 }
@@ -329,10 +308,6 @@ export async function reviseDraft(sessionId, message, complaintText, attachmentP
   });
 }
 
-/**
- * Download the current complaint as a formatted Word document.
- * Returns a Blob that can be saved via URL.createObjectURL.
- */
 export async function downloadDraftDocx(sessionId) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/draft/${sessionId}/download`, {
@@ -349,9 +324,6 @@ export async function downloadDraftDocx(sessionId) {
   return response.blob();
 }
 
-/**
- * Save a draft session to an existing client case (or reassign).
- */
 export async function saveDraftToCase(sessionId, clientId = null) {
   return request(`/draft/${sessionId}/save`, {
     method: 'POST',
@@ -359,10 +331,6 @@ export async function saveDraftToCase(sessionId, clientId = null) {
   });
 }
 
-/**
- * Rebuild the RAG reference index from backend/reference_cases/.
- * Pass force=true to wipe and fully re-index.
- */
 export async function reindexReferenceCases(force = false) {
   return request('/draft/reindex', {
     method: 'POST',
@@ -370,9 +338,6 @@ export async function reindexReferenceCases(force = false) {
   });
 }
 
-/**
- * Return the current state of the RAG reference index.
- */
 export async function getReindexStatus() {
   return request('/draft/reindex/status');
 }
@@ -489,19 +454,14 @@ export async function reorderPipelineStages(stageIds) {
 }
 
 // ---------------------------------------------------------------------------
-// Auth / Registration
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Public Intake Form
 // ---------------------------------------------------------------------------
 
 export async function submitIntakeForm(formData) {
-  // This is a public endpoint — no auth needed
   const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
   const response = await fetch(`${BASE}/intake/submit-with-files`, {
     method: 'POST',
-    body: formData, // FormData with files
+    body: formData,
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: 'Submission failed' }));
@@ -509,6 +469,10 @@ export async function submitIntakeForm(formData) {
   }
   return response.json();
 }
+
+// ---------------------------------------------------------------------------
+// Auth / Registration
+// ---------------------------------------------------------------------------
 
 export async function registerClient(data) {
   return request('/auth/register', {
