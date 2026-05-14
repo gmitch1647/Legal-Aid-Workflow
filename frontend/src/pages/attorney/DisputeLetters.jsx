@@ -179,6 +179,35 @@ export default function DisputeLetters() {
     ));
   }
 
+  // Re-analyze an account's negative findings
+  function reanalyzeAccount(id) {
+    setAccounts(prev => prev.map(a => {
+      if (a.id !== id) return a;
+      return { ...a, negativeFindings: analyzeAccount(a) };
+    }));
+  }
+
+  // Regenerate consumer statement for an account
+  function regenerateStatementForAccount(id) {
+    setAccounts(prev => prev.map(a => {
+      if (a.id !== id) return a;
+      const stmt = regenerateStatement(a);
+      return { ...a, consumerStatement: stmt, consumerStatementSeed: Date.now().toString() };
+    }));
+  }
+
+  // Regenerate all consumer statements
+  function regenerateAllStatements() {
+    setAccounts(prev => prev.map(a => {
+      if (!a.includeConsumerStatement) return a;
+      const stmt = regenerateStatement(a);
+      return { ...a, consumerStatement: stmt, consumerStatementSeed: Date.now().toString() };
+    }));
+  }
+
+  // Mailing modal state
+  const [showMailingModal, setShowMailingModal] = useState(null); // bureau id
+
   // Letter generation via AI
   async function generateLetters() {
     setGeneratingLetters(true);
@@ -533,6 +562,8 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
                       onDelete={() => deleteAccount(account.id)}
                       onAddFinding={(f) => addCustomFinding(account.id, f)}
                       onRemoveFinding={(i) => removeCustomFinding(account.id, i)}
+                      onReanalyze={() => reanalyzeAccount(account.id)}
+                      onRegenerateStatement={() => regenerateStatementForAccount(account.id)}
                     />
                   ))}
                 </div>
@@ -583,14 +614,25 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
                     {BUREAUS.find(b => b.id === activeLetterTab)?.label} Letter
                   </span>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <button onClick={() => copyLetter(activeLetterTab)}
                     className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium hover:bg-slate-50">
                     <Copy className="w-3.5 h-3.5" /> Copy
                   </button>
                   <button onClick={() => downloadLetter(activeLetterTab)}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
-                    <Download className="w-3.5 h-3.5" /> Download .txt
+                    className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium hover:bg-slate-50">
+                    <Download className="w-3.5 h-3.5" /> .txt
+                  </button>
+                  {letters[activeLetterTab]?.sessionId && (
+                    <DownloadDocxBtn sessionId={letters[activeLetterTab].sessionId} version={letters[activeLetterTab].version} />
+                  )}
+                  <button onClick={() => setShowMailingModal(activeLetterTab)}
+                    className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium hover:bg-slate-50">
+                    <Mail className="w-3.5 h-3.5" /> Mailing Info
+                  </button>
+                  <button onClick={regenerateAllStatements}
+                    className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium hover:bg-slate-50">
+                    <RefreshCw className="w-3.5 h-3.5" /> Regenerate Statements
                   </button>
                 </div>
               </div>
@@ -601,11 +643,11 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
                 </pre>
               </div>
 
-              {/* Mailing info */}
-              <div className="bg-blue-50 rounded-lg border border-blue-200 p-3 text-xs text-blue-800">
-                <strong>Mail to:</strong> {BUREAUS.find(b => b.id === activeLetterTab)?.address}<br/>
-                <strong>Send via:</strong> Certified Mail, Return Receipt Requested<br/>
-                <em className="text-blue-600">Review every detail before mailing. Bureaus have 30 days to respond. Keep copies of everything.</em>
+              {/* UI-only disclaimer (not part of the mailed letter) */}
+              <div className="bg-amber-50 rounded-lg border border-amber-200 p-3 text-xs text-amber-800">
+                <Shield className="w-3.5 h-3.5 inline mr-1" />
+                Review every detail before mailing. Send certified mail with return receipt.
+                Bureaus have 30 days to respond under FCRA § 1681i. Keep copies of everything.
               </div>
             </div>
           )}
@@ -619,7 +661,66 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
           </div>
         </div>
       )}
+      {/* Mailing Address Modal */}
+      {showMailingModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">Mailing Instructions</h2>
+              <button onClick={() => setShowMailingModal(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-blue-50 rounded-lg p-4">
+                <div className="text-xs font-bold uppercase text-blue-700 mb-2">Mail To:</div>
+                <div className="text-sm text-slate-900 font-medium">{BUREAUS.find(b => b.id === showMailingModal)?.label}</div>
+                <div className="text-sm text-slate-700 mt-1">{BUREAUS.find(b => b.id === showMailingModal)?.address || 'Enter address manually'}</div>
+              </div>
+              <div className="space-y-2 text-sm text-slate-700">
+                <h3 className="font-semibold text-slate-900">Certified Mail Checklist:</h3>
+                {['Print and sign the letter', 'Make a photocopy for records', 'Include copies of supporting documents (NOT originals)', 'Include copy of government-issued ID', 'Include copy of proof of address (utility bill)', 'Send via CERTIFIED MAIL with Return Receipt Requested', 'Save the receipt and tracking number', 'Bureau has 30 days from receipt to respond (§ 1681i)'].map((item, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center shrink-0">{i+1}</span>
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="p-5 border-t border-slate-200">
+              <button onClick={() => setShowMailingModal(null)} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Got It</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// .docx Download Button
+// ---------------------------------------------------------------------------
+
+function DownloadDocxBtn({ sessionId, version }) {
+  const [downloading, setDownloading] = useState(false);
+  async function handleDownload() {
+    setDownloading(true);
+    try {
+      const blob = await downloadDraftDocx(sessionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dispute-letter-v${version || 1}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) { console.error('Download failed:', err); }
+    finally { setDownloading(false); }
+  }
+  return (
+    <button onClick={handleDownload} disabled={downloading}
+      className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-60">
+      {downloading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} .docx
+    </button>
   );
 }
 
@@ -627,7 +728,7 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
 // Account Card Component
 // ---------------------------------------------------------------------------
 
-function AccountCard({ account, onUpdate, onDelete, onAddFinding, onRemoveFinding }) {
+function AccountCard({ account, onUpdate, onDelete, onAddFinding, onRemoveFinding, onReanalyze, onRegenerateStatement }) {
   const [expanded, setExpanded] = useState(true);
   const [newFinding, setNewFinding] = useState('');
 
@@ -747,10 +848,40 @@ function AccountCard({ account, onUpdate, onDelete, onAddFinding, onRemoveFindin
               placeholder="e.g. AID, Account information disputed by consumer" />
           </div>
 
-          {/* Negative findings */}
+          {/* Auto-detected negative findings */}
+          {account.negativeFindings && account.negativeFindings.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-semibold uppercase text-amber-600">
+                  Auto-Detected Issues ({account.negativeFindings.length})
+                </label>
+                {onReanalyze && (
+                  <button onClick={onReanalyze} className="text-[10px] text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3" /> Re-analyze
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1 mb-2">
+                {account.negativeFindings.map((f, i) => (
+                  <div key={i} className={`flex items-center gap-2 rounded p-2 text-xs ${
+                    f.severity === 'high' ? 'bg-red-50 border border-red-200 text-red-800' :
+                    f.severity === 'medium' ? 'bg-amber-50 border border-amber-200 text-amber-800' :
+                    'bg-slate-50 border border-slate-200 text-slate-700'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      f.severity === 'high' ? 'bg-red-500' : f.severity === 'medium' ? 'bg-amber-500' : 'bg-slate-400'
+                    }`} />
+                    <span className="flex-1">{f.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Custom / manual findings */}
           <div>
             <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">
-              Negative Findings & Dispute Reasons ({account.customFindings.length})
+              Additional Dispute Reasons ({account.customFindings.length})
             </label>
             {account.customFindings.length > 0 && (
               <div className="space-y-1 mb-2">
@@ -774,6 +905,23 @@ function AccountCard({ account, onUpdate, onDelete, onAddFinding, onRemoveFindin
               </button>
             </div>
           </div>
+
+          {/* Consumer statement preview */}
+          {account.includeConsumerStatement && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-semibold uppercase text-purple-600">Consumer Statement Preview</label>
+                {onRegenerateStatement && (
+                  <button onClick={onRegenerateStatement} className="text-[10px] text-purple-600 hover:text-purple-700 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3" /> Regenerate
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-purple-900 leading-relaxed">
+                {account.consumerStatement || generateConsumerStatement(account)}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
