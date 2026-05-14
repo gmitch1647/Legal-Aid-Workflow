@@ -1,46 +1,71 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
-  FileText, Send, Download, Copy, RefreshCw, Plus, X, Upload,
-  Loader2, CheckCircle2, AlertCircle, Scale, Mail, User,
+  FileText, Send, Download, Copy, Plus, X, Upload, Trash2,
+  Loader2, CheckCircle2, AlertCircle, Mail, User, ChevronDown,
+  ChevronRight, RefreshCw, Eye, Shield,
 } from 'lucide-react';
 import {
-  getDefendants, startDraft, getDraftStatus, getDraftResult,
-  uploadDraftDocument, downloadDraftDocx, reviseDraft,
-  getCases, getDocuments,
+  startDraft, getDraftStatus, getDraftResult, downloadDraftDocx, reviseDraft,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
-const DISPUTE_TYPES = [
-  { value: 'initial_dispute', label: 'Initial Dispute', desc: 'First dispute to CRA about inaccurate item' },
-  { value: 'second_dispute', label: 'Second/Follow-up Dispute', desc: 'After first dispute was verified as accurate' },
-  { value: 'method_of_verification', label: 'Method of Verification Request', desc: 'Demand how they verified under §1681i(a)(7)' },
-  { value: 'reinsertion_dispute', label: 'Reinsertion Dispute', desc: 'Item deleted then reinserted without notice' },
-  { value: 'furnisher_dispute', label: 'Furnisher Direct Dispute', desc: 'Dispute sent to the furnisher after CRA fails' },
-  { value: 'mixed_file', label: 'Mixed File Dispute', desc: "Another person's info on your report" },
-  { value: 'identity_theft', label: 'Identity Theft Dispute', desc: 'Fraudulent accounts' },
-  { value: 'obsolete_info', label: 'Obsolete Information', desc: 'Items older than 7/10 years per §1681c' },
-  { value: 'forbearance', label: 'Forbearance/Administrative Dispute', desc: 'Delinquency during approved forbearance' },
-  { value: 'debt_validation', label: 'Debt Validation Letter', desc: 'FDCPA §1692g validation request' },
-  { value: 'cease_and_desist', label: 'Cease and Desist', desc: 'FDCPA §1692c(c) stop communication' },
-];
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const BUREAUS = [
-  { value: 'equifax', label: 'Equifax', address: 'P.O. Box 740256, Atlanta, GA 30374' },
-  { value: 'experian', label: 'Experian', address: 'P.O. Box 4500, Allen, TX 75013' },
-  { value: 'transunion', label: 'TransUnion', address: 'P.O. Box 2000, Chester, PA 19016' },
-  { value: 'chex_systems', label: 'Chex Systems', address: '7805 Hudson Road, Suite 100, Woodbury, MN 55125' },
-  { value: 'furnisher', label: 'Furnisher/Creditor (specify below)', address: '' },
-  { value: 'debt_collector', label: 'Debt Collector (specify below)', address: '' },
+  { id: 'experian', label: 'Experian', address: 'P.O. Box 4500, Allen, TX 75013' },
+  { id: 'equifax', label: 'Equifax', address: 'Equifax Information Services LLC, P.O. Box 740256, Atlanta, GA 30374' },
+  { id: 'transunion', label: 'TransUnion', address: 'TransUnion Consumer Solutions, P.O. Box 2000, Chester, PA 19016' },
+  { id: 'other', label: 'Other', address: '' },
 ];
 
+const DISPUTE_TYPES = [
+  { value: 'charge-off', label: 'Charge-Off' },
+  { value: 'collection', label: 'Collection' },
+  { value: 'late', label: 'Late Payment' },
+  { value: 'duplicate', label: 'Duplicate Account' },
+  { value: 'outdated', label: 'Outdated Information' },
+  { value: 'unknown', label: 'Unknown Account' },
+  { value: 'identity', label: 'Identity Theft' },
+  { value: 'inquiry', label: 'Unauthorized Inquiry' },
+  { value: 'bankruptcy', label: 'Bankruptcy Related' },
+  { value: 'balance', label: 'Incorrect Balance' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const ACCOUNT_CATEGORIES = [
+  { value: 'public-record', label: 'Public Records' },
+  { value: 'adverse-account', label: 'Adverse Accounts' },
+  { value: 'collection', label: 'Collections' },
+];
+
+// ---------------------------------------------------------------------------
+// Main Component
+// ---------------------------------------------------------------------------
+
 export default function DisputeLetters() {
+  const [step, setStep] = useState(1); // 1=info, 2=accounts, 3=letters
+
+  // Step 1 — Personal Info
+  const [userInfo, setUserInfo] = useState({
+    name: '', dob: '', address: '', cityStateZip: '', ssnLast4: '',
+  });
+
+  // Step 2 — Accounts
+  const [accounts, setAccounts] = useState([]);
+  const [activeTab, setActiveTab] = useState('experian');
+
+  // Step 3 — Letters
+  const [letters, setLetters] = useState({});
+  const [generatingLetters, setGeneratingLetters] = useState(false);
+  const [activeLetterTab, setActiveLetterTab] = useState('experian');
+
   // Client selection
-  const [clientMode, setClientMode] = useState(''); // 'existing' | 'new'
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
-  const [clientDocs, setClientDocs] = useState([]);
-  const [clientCases, setClientCases] = useState([]);
+  const [clientMode, setClientMode] = useState('');
   const [loadingClients, setLoadingClients] = useState(false);
 
   async function loadClients() {
@@ -48,554 +73,596 @@ export default function DisputeLetters() {
     try {
       const { data } = await supabase.from('profiles').select('*').eq('role', 'client').order('full_name');
       setClients(data || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingClients(false);
-    }
+    } catch (err) { console.error(err); }
+    finally { setLoadingClients(false); }
   }
 
-  async function handleSelectClient(clientId) {
+  function selectClient(clientId) {
     setSelectedClientId(clientId);
-    if (!clientId) {
-      setSelectedClient(null);
-      setClientDocs([]);
-      setClientCases([]);
-      return;
-    }
-
     const client = clients.find(c => c.id === clientId);
     setSelectedClient(client);
-
-    // Auto-fill ALL client info
     if (client) {
-      setClientName(client.full_name || '');
-      setClientAddress(
-        [client.address, client.county, client.state].filter(Boolean).join(', ')
-      );
-      // Parse DOB from case_facts if available later
-    }
-
-    // Load client's cases and documents
-    try {
-      const casesData = await getCases({ client_id: clientId });
-      const casesList = Array.isArray(casesData) ? casesData : casesData?.data || [];
-      const clientSpecific = casesList.filter(c => c.client_id === clientId);
-      setClientCases(clientSpecific);
-
-      // Load docs from all cases
-      const allDocs = [];
-      for (const c of clientSpecific.slice(0, 10)) {
-        try {
-          const docs = await getDocuments(c.id);
-          const docList = Array.isArray(docs) ? docs : docs?.documents || [];
-          docList.forEach(d => allDocs.push({ ...d, case_id: c.id }));
-        } catch {}
-      }
-      setClientDocs(allDocs);
-    } catch (err) {
-      console.error(err);
+      setUserInfo(prev => ({
+        ...prev,
+        name: client.full_name || '',
+        address: client.address || '',
+        cityStateZip: [client.county, client.state].filter(Boolean).join(', '),
+      }));
     }
   }
 
-  // Add a client file to the dispute attachments
-  function attachClientDoc(doc) {
-    const already = uploadedDocs.some(d => d.storage_path === doc.storage_path);
-    if (already) return;
-    setUploadedDocs(prev => [...prev, {
-      name: doc.file_name || doc.name || 'Document',
-      storage_path: doc.storage_path,
-      fromClient: true,
+  // Account management
+  function addAccount(bureau) {
+    setAccounts(prev => [...prev, {
+      id: `acc-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+      bureau,
+      category: 'adverse-account',
+      creditor: '',
+      accountNumber: '',
+      balance: '',
+      pastDue: '',
+      highBalance: '',
+      creditLimit: '',
+      dateOpened: '',
+      dateClosed: '',
+      dateUpdated: '',
+      lastPaymentMade: '',
+      payStatus: '',
+      originalCreditor: '',
+      remarks: '',
+      disputeType: 'charge-off',
+      negativeFindings: [],
+      customFindings: [],
+      includeConsumerStatement: false,
     }]);
   }
 
-  // Form state
-  const [disputeType, setDisputeType] = useState('');
-  const [sendTo, setSendTo] = useState('');
-  const [recipientName, setRecipientName] = useState('');
-  const [recipientAddress, setRecipientAddress] = useState('');
-  const [clientName, setClientName] = useState('');
-  const [clientAddress, setClientAddress] = useState('');
-  const [clientSSNLast4, setClientSSNLast4] = useState('');
-  const [clientDOB, setClientDOB] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [creditorName, setCreditorName] = useState('');
-  const [whatIsWrong, setWhatIsWrong] = useState('');
-  const [whatShouldShow, setWhatShouldShow] = useState('');
-  const [priorDisputeDate, setPriorDisputeDate] = useState('');
-  const [additionalDetails, setAdditionalDetails] = useState('');
-  const [uploadedDocs, setUploadedDocs] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef(null);
-
-  // Output state
-  const [outputState, setOutputState] = useState('idle');
-  const [sessionId, setSessionId] = useState(null);
-  const [letterText, setLetterText] = useState('');
-  const [letterVersion, setLetterVersion] = useState(1);
-  const [error, setError] = useState(null);
-  const [revisionInput, setRevisionInput] = useState('');
-  const [revising, setRevising] = useState(false);
-  const pollRef = useRef(null);
-
-  function handleBureauSelect(value) {
-    setSendTo(value);
-    const bureau = BUREAUS.find(b => b.value === value);
-    if (bureau && bureau.address) {
-      setRecipientName(bureau.label);
-      setRecipientAddress(bureau.address);
-    } else {
-      setRecipientName('');
-      setRecipientAddress('');
-    }
+  function updateAccount(id, field, value) {
+    setAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: value } : a));
   }
 
-  async function handleFiles(fileList) {
-    if (!fileList) return;
-    setUploading(true);
-    for (const file of Array.from(fileList)) {
+  function deleteAccount(id) {
+    setAccounts(prev => prev.filter(a => a.id !== id));
+  }
+
+  function addCustomFinding(id, finding) {
+    setAccounts(prev => prev.map(a =>
+      a.id === id ? { ...a, customFindings: [...a.customFindings, finding] } : a
+    ));
+  }
+
+  function removeCustomFinding(id, idx) {
+    setAccounts(prev => prev.map(a =>
+      a.id === id ? { ...a, customFindings: a.customFindings.filter((_, i) => i !== idx) } : a
+    ));
+  }
+
+  // Letter generation via AI
+  async function generateLetters() {
+    setGeneratingLetters(true);
+    const newLetters = {};
+
+    for (const bureau of BUREAUS) {
+      const bureauAccounts = accounts.filter(a => a.bureau === bureau.id);
+      if (bureauAccounts.length === 0) continue;
+
+      const accountDetails = bureauAccounts.map((a, i) => {
+        const findings = [
+          ...(a.negativeFindings || []).map(f => f.description || f),
+          ...(a.customFindings || []),
+        ];
+        return `Account ${i + 1}:
+Creditor: ${a.creditor}
+Account Number: ${a.accountNumber}
+Balance: ${a.balance || 'N/A'}
+Past Due: ${a.pastDue || 'N/A'}
+Pay Status: ${a.payStatus || 'N/A'}
+Date Opened: ${a.dateOpened || 'N/A'}
+Date Closed: ${a.dateClosed || 'N/A'}
+Original Creditor: ${a.originalCreditor || 'N/A'}
+Category: ${a.category}
+Dispute Type: ${a.disputeType}
+Negative Findings:
+${findings.length > 0 ? findings.map(f => `  - ${f}`).join('\n') : '  - None specified'}
+Include Consumer Statement: ${a.includeConsumerStatement ? 'YES' : 'NO'}`;
+      }).join('\n\n');
+
+      const caseFacts = `DISPUTE TYPE: Credit Report Dispute Letter
+SEND TO: ${bureau.label}
+RECIPIENT ADDRESS: ${bureau.address}
+
+CLIENT: ${userInfo.name}
+CLIENT ADDRESS: ${userInfo.address}, ${userInfo.cityStateZip}
+SSN LAST 4: ${userInfo.ssnLast4}
+DOB: ${userInfo.dob}
+
+NUMBER OF DISPUTED ACCOUNTS: ${bureauAccounts.length}
+
+${accountDetails}
+
+Generate a complete FCRA dispute letter with:
+PART ONE: Dispute of each account listed above with specific inaccuracies
+PART TWO: Consumer statements for accounts marked with Include Consumer Statement: YES (write unique ~100 word statements for each)`;
+
       try {
-        const result = await uploadDraftDocument(file);
-        setUploadedDocs(prev => [...prev, { name: file.name, storage_path: result.storage_path }]);
-      } catch (err) { console.error(err); }
-    }
-    setUploading(false);
-  }
+        const { session_id } = await startDraft({
+          plaintiff_name: userInfo.name,
+          plaintiff_county: '',
+          defendants: [{ name: bureau.label, entity_type: 'CRA' }],
+          case_facts: caseFacts,
+          damages_description: '',
+          jury_demand: false,
+          mode: 'fast',
+          document_type: 'dispute_letter',
+        });
 
-  async function handleGenerate() {
-    if (!disputeType || !clientName) return;
-    setOutputState('running');
-    setError(null);
-
-    const disputeLabel = DISPUTE_TYPES.find(d => d.value === disputeType)?.label || disputeType;
-    const caseFacts = [
-      `DISPUTE TYPE: ${disputeLabel}`,
-      `SEND TO: ${recipientName || sendTo}`,
-      recipientAddress ? `RECIPIENT ADDRESS: ${recipientAddress}` : '',
-      `\nCLIENT: ${clientName}`,
-      clientAddress ? `CLIENT ADDRESS: ${clientAddress}` : '',
-      clientSSNLast4 ? `SSN LAST 4: ${clientSSNLast4}` : '',
-      clientDOB ? `DOB: ${clientDOB}` : '',
-      `\nDISPUTED ITEM:`,
-      creditorName ? `Creditor/Furnisher: ${creditorName}` : '',
-      accountNumber ? `Account Number: ${accountNumber}` : '',
-      whatIsWrong ? `What Is Inaccurate: ${whatIsWrong}` : '',
-      whatShouldShow ? `What It Should Show: ${whatShouldShow}` : '',
-      priorDisputeDate ? `Prior Dispute Date: ${priorDisputeDate}` : '',
-      additionalDetails ? `\nADDITIONAL DETAILS:\n${additionalDetails}` : '',
-    ].filter(Boolean).join('\n');
-
-    try {
-      const { session_id } = await startDraft({
-        plaintiff_name: clientName,
-        plaintiff_county: '',
-        defendants: recipientName ? [{ name: recipientName, entity_type: 'CRA' }] : [],
-        case_facts: caseFacts,
-        damages_description: '',
-        jury_demand: false,
-        mode: 'fast',
-        document_type: 'dispute_letter',
-        document_urls: uploadedDocs.map(d => d.storage_path),
-      });
-      setSessionId(session_id);
-
-      // Poll for completion
-      const poll = setInterval(async () => {
-        try {
+        // Poll for completion
+        let complete = false;
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r => setTimeout(r, 2000));
           const status = await getDraftStatus(session_id);
           if (status.overall_status === 'complete') {
-            clearInterval(poll);
             const result = await getDraftResult(session_id);
-            setLetterText(result.complaint_text);
-            setLetterVersion(result.version || 1);
-            setOutputState('complete');
+            newLetters[bureau.id] = {
+              text: result.complaint_text,
+              sessionId: session_id,
+              version: result.version || 1,
+            };
+            complete = true;
+            break;
           } else if (status.overall_status === 'error') {
-            clearInterval(poll);
-            setError(status.pipeline_error || 'Generation failed');
-            setOutputState('error');
+            newLetters[bureau.id] = { text: `Error generating letter: ${status.pipeline_error || 'Unknown error'}`, error: true };
+            complete = true;
+            break;
           }
-        } catch (err) { console.error(err); }
-      }, 2000);
-      pollRef.current = poll;
-    } catch (err) {
-      setError(err.message);
-      setOutputState('error');
-    }
-  }
-
-  async function handleRevision() {
-    if (!revisionInput.trim() || !sessionId || revising) return;
-    setRevising(true);
-    try {
-      const result = await reviseDraft(sessionId, revisionInput, letterText);
-      if (result.revised_complaint && result.was_revised !== false) {
-        setLetterText(result.revised_complaint);
-        setLetterVersion(result.version || letterVersion + 1);
+        }
+        if (!complete) {
+          newLetters[bureau.id] = { text: 'Letter generation timed out. Please try again.', error: true };
+        }
+      } catch (err) {
+        newLetters[bureau.id] = { text: `Error: ${err.message}`, error: true };
       }
-      setRevisionInput('');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setRevising(false);
+    }
+
+    setLetters(newLetters);
+    setGeneratingLetters(false);
+    setStep(3);
+    setActiveLetterTab(Object.keys(newLetters)[0] || 'experian');
+  }
+
+  async function copyLetter(bureau) {
+    const letter = letters[bureau];
+    if (letter?.text) {
+      try { await navigator.clipboard.writeText(letter.text); } catch {}
     }
   }
 
-  async function handleCopy() {
-    try { await navigator.clipboard.writeText(letterText); } catch {}
+  function downloadLetter(bureau) {
+    const letter = letters[bureau];
+    if (!letter?.text) return;
+    const date = new Date().toISOString().split('T')[0];
+    const blob = new Blob([letter.text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dispute-letter-${bureau}-${date}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
-  async function handleDownload() {
-    if (!sessionId) return;
-    try {
-      const blob = await downloadDraftDocx(sessionId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `dispute_letter_v${letterVersion}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) { setError(err.message); }
-  }
-
-  function handleReset() {
-    if (pollRef.current) clearInterval(pollRef.current);
-    setOutputState('idle');
-    setSessionId(null);
-    setLetterText('');
-    setError(null);
-  }
+  const bureauCounts = BUREAUS.reduce((acc, b) => {
+    acc[b.id] = accounts.filter(a => a.bureau === b.id).length;
+    return acc;
+  }, {});
 
   return (
-    <div className="max-w-[1400px] mx-auto">
+    <div className="max-w-6xl mx-auto">
+      {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-medium text-slate-900">Dispute Letter Generator</h1>
-        <p className="text-sm text-slate-500 mt-1">FCRA · FDCPA · Credit Bureau Disputes · Furnisher Disputes</p>
+        <h1 className="text-2xl font-medium text-slate-900">Credit Report Disputer</h1>
+        <p className="text-sm text-slate-500 mt-1">Analyze credit reports and generate FCRA-compliant dispute letters</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[55%_45%] gap-5">
-        {/* LEFT — Form */}
-        <div className="space-y-5">
-          {/* Dispute Type */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-3">DISPUTE TYPE</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {DISPUTE_TYPES.map(dt => (
-                <button key={dt.value} onClick={() => setDisputeType(dt.value)}
-                  className={`rounded-lg border-2 p-3 text-left transition ${
-                    disputeType === dt.value ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-slate-300'
-                  }`}>
-                  <div className="text-sm font-semibold text-slate-900">{dt.label}</div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">{dt.desc}</div>
-                </button>
-              ))}
+      {/* Disclaimer */}
+      <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        <Shield className="w-4 h-4 inline mr-1" />
+        This tool helps generate FCRA dispute letters based on inaccuracies you identify. Results are not guaranteed.
+        Disputes must be sent and signed by the consumer. Review every detail before mailing.
+      </div>
+
+      {/* Step indicators */}
+      <div className="flex items-center gap-2 mb-6">
+        {[
+          { n: 1, label: 'Client Info' },
+          { n: 2, label: 'Disputed Accounts' },
+          { n: 3, label: 'Letters' },
+        ].map((s, i) => (
+          <React.Fragment key={s.n}>
+            <button
+              onClick={() => s.n <= step && setStep(s.n)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                step === s.n ? 'bg-blue-600 text-white' :
+                s.n < step ? 'bg-blue-100 text-blue-700 cursor-pointer' :
+                'bg-slate-100 text-slate-400'
+              }`}
+            >
+              {s.n < step ? <CheckCircle2 className="w-4 h-4" /> : <span className="w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs">{s.n}</span>}
+              {s.label}
+            </button>
+            {i < 2 && <ChevronRight className="w-4 h-4 text-slate-300" />}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* ═══════════ STEP 1 — Personal Info ═══════════ */}
+      {step === 1 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-5">
+          <h2 className="text-lg font-semibold text-slate-900">Client Information</h2>
+
+          {/* Client mode selector */}
+          {!clientMode && (
+            <div className="flex gap-3">
+              <button onClick={() => { setClientMode('existing'); loadClients(); }}
+                className="flex-1 flex items-center gap-3 rounded-lg border-2 border-slate-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition">
+                <User className="w-6 h-6 text-blue-600" />
+                <div><div className="text-sm font-semibold">Existing Client</div><div className="text-[10px] text-slate-500">Pick from your list</div></div>
+              </button>
+              <button onClick={() => setClientMode('new')}
+                className="flex-1 flex items-center gap-3 rounded-lg border-2 border-slate-200 p-4 hover:border-emerald-400 hover:bg-emerald-50 transition">
+                <Plus className="w-6 h-6 text-emerald-600" />
+                <div><div className="text-sm font-semibold">New Client</div><div className="text-[10px] text-slate-500">Enter manually</div></div>
+              </button>
             </div>
-          </div>
+          )}
 
-          {/* Send To */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-2">SEND TO</div>
-            <select value={sendTo} onChange={(e) => handleBureauSelect(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3">
-              <option value="">— Select recipient —</option>
-              {BUREAUS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-            </select>
-            {(sendTo === 'furnisher' || sendTo === 'debt_collector') && (
-              <div className="grid grid-cols-1 gap-2">
-                <input value={recipientName} onChange={(e) => setRecipientName(e.target.value)}
-                  placeholder="Recipient name (e.g. Midland Credit Management)"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <input value={recipientAddress} onChange={(e) => setRecipientAddress(e.target.value)}
-                  placeholder="Recipient address"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          {clientMode === 'existing' && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-medium text-slate-700">Select Client</label>
+                <button onClick={() => { setClientMode(''); setSelectedClient(null); }} className="text-xs text-slate-400">Change</button>
               </div>
-            )}
-          </div>
-
-          {/* Client Selection */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-3">CLIENT</div>
-
-            {/* Mode selector */}
-            {!clientMode && (
-              <div className="flex gap-3">
-                <button onClick={() => { setClientMode('existing'); loadClients(); }}
-                  className="flex-1 flex items-center gap-2 justify-center rounded-lg border-2 border-slate-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition">
-                  <User className="w-5 h-5 text-blue-600" />
-                  <div className="text-left">
-                    <div className="text-sm font-semibold text-slate-900">Existing Client</div>
-                    <div className="text-[10px] text-slate-500">Pick from your client list</div>
-                  </div>
-                </button>
-                <button onClick={() => setClientMode('new')}
-                  className="flex-1 flex items-center gap-2 justify-center rounded-lg border-2 border-slate-200 p-4 hover:border-blue-400 hover:bg-blue-50 transition">
-                  <Plus className="w-5 h-5 text-emerald-600" />
-                  <div className="text-left">
-                    <div className="text-sm font-semibold text-slate-900">New Client</div>
-                    <div className="text-[10px] text-slate-500">Enter info manually</div>
-                  </div>
-                </button>
-              </div>
-            )}
-
-            {/* Existing client picker */}
-            {clientMode === 'existing' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-slate-700">Select Client</label>
-                  <button onClick={() => { setClientMode(''); setSelectedClient(null); setClientDocs([]); setClientCases([]); }}
-                    className="text-xs text-slate-400 hover:text-slate-600">Change</button>
-                </div>
-                {loadingClients ? (
-                  <div className="flex items-center gap-2 py-4 justify-center text-slate-400 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading clients...</div>
-                ) : (
-                  <select value={selectedClientId} onChange={(e) => handleSelectClient(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">— Select a client —</option>
-                    {clients.map(c => (
-                      <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>
-                    ))}
-                  </select>
-                )}
-
-                {/* Selected client info card */}
-                {selectedClient && (
-                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-                    <div className="text-sm font-semibold text-slate-900">{selectedClient.full_name}</div>
-                    <div className="text-xs text-slate-600 mt-1 space-y-0.5">
-                      {selectedClient.email && <div>Email: {selectedClient.email}</div>}
-                      {selectedClient.phone && <div>Phone: {selectedClient.phone}</div>}
-                      {selectedClient.address && <div>Address: {selectedClient.address}</div>}
-                      {selectedClient.county && <div>County: {selectedClient.county}, {selectedClient.state}</div>}
-                    </div>
-
-                    {/* Client documents — click to attach */}
-                    {clientDocs.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-blue-200">
-                        <div className="text-[10px] font-semibold uppercase text-blue-700 mb-1.5">
-                          Client Documents ({clientDocs.length}) — click to attach
-                        </div>
-                        <div className="space-y-1 max-h-48 overflow-y-auto">
-                          {clientDocs.map((doc, i) => {
-                            const isAttached = uploadedDocs.some(d => d.storage_path === doc.storage_path);
-                            return (
-                              <button
-                                key={doc.id || i}
-                                onClick={() => attachClientDoc(doc)}
-                                disabled={isAttached}
-                                className={`w-full flex items-center gap-2 text-xs rounded p-2 text-left transition ${
-                                  isAttached
-                                    ? 'bg-blue-100 border border-blue-300 opacity-60'
-                                    : 'bg-white border border-slate-100 hover:bg-emerald-50 hover:border-emerald-300 cursor-pointer'
-                                }`}
-                              >
-                                <FileText className={`w-3.5 h-3.5 shrink-0 ${isAttached ? 'text-blue-500' : 'text-slate-400'}`} />
-                                <span className="truncate flex-1 text-slate-700">{doc.file_name || doc.name}</span>
-                                <span className="text-[9px] text-slate-400 shrink-0">{(doc.document_category || 'other').replace(/_/g, ' ')}</span>
-                                {isAttached ? (
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                                ) : (
-                                  <Plus className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Client cases */}
-                    {clientCases.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-blue-200">
-                        <div className="text-[10px] font-semibold uppercase text-blue-700 mb-1.5">Cases ({clientCases.length})</div>
-                        <div className="space-y-1">
-                          {clientCases.slice(0, 5).map(c => (
-                            <div key={c.id} className="text-xs bg-white rounded p-1.5 text-slate-700">
-                              {c.plaintiff_name || c.client_name || 'Case'} — <span className="text-slate-400">{c.status}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Editable fields (pre-filled from client) */}
-                {selectedClient && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <input value={clientSSNLast4} onChange={(e) => setClientSSNLast4(e.target.value)} placeholder="SSN last 4 digits" maxLength={4}
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                    <input type="date" value={clientDOB} onChange={(e) => setClientDOB(e.target.value)}
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* New client form */}
-            {clientMode === 'new' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-slate-700">New Client</label>
-                  <button onClick={() => setClientMode('')} className="text-xs text-slate-400 hover:text-slate-600">Change</button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Client full name *"
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  <input value={clientAddress} onChange={(e) => setClientAddress(e.target.value)} placeholder="Client address"
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  <input value={clientSSNLast4} onChange={(e) => setClientSSNLast4(e.target.value)} placeholder="SSN last 4 digits" maxLength={4}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  <input type="date" value={clientDOB} onChange={(e) => setClientDOB(e.target.value)}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Disputed Item */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-2">DISPUTED ITEM</div>
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input value={creditorName} onChange={(e) => setCreditorName(e.target.value)} placeholder="Creditor/Furnisher name"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <input value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder="Account number"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <textarea value={whatIsWrong} onChange={(e) => setWhatIsWrong(e.target.value)} rows={3}
-                placeholder="What is inaccurate? (e.g. 'Shows 90 days late for April 2025 but account was in forbearance')"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
-              <textarea value={whatShouldShow} onChange={(e) => setWhatShouldShow(e.target.value)} rows={2}
-                placeholder="What should it show instead? (e.g. 'Current/Paid as agreed — forbearance covered this period')"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
-              {(disputeType === 'second_dispute' || disputeType === 'method_of_verification' || disputeType === 'reinsertion_dispute') && (
-                <input type="date" value={priorDisputeDate} onChange={(e) => setPriorDisputeDate(e.target.value)}
-                  placeholder="Prior dispute date"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              {loadingClients ? (
+                <div className="py-4 text-center text-slate-400 text-sm"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Loading...</div>
+              ) : (
+                <select value={selectedClientId} onChange={(e) => selectClient(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">— Select —</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>)}
+                </select>
               )}
-              <textarea value={additionalDetails} onChange={(e) => setAdditionalDetails(e.target.value)} rows={3}
-                placeholder="Additional details, context, or specific instructions for the letter..."
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
             </div>
+          )}
+
+          {(clientMode === 'new' || selectedClient) && (
+            <>
+              {clientMode === 'new' && (
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-slate-700">Client Details</label>
+                  <button onClick={() => setClientMode('')} className="text-xs text-slate-400">Change</button>
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Full Name *</label>
+                  <input value={userInfo.name} onChange={(e) => setUserInfo(p => ({ ...p, name: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Date of Birth</label>
+                  <input type="date" value={userInfo.dob} onChange={(e) => setUserInfo(p => ({ ...p, dob: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Address</label>
+                  <input value={userInfo.address} onChange={(e) => setUserInfo(p => ({ ...p, address: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">City, State, ZIP</label>
+                  <input value={userInfo.cityStateZip} onChange={(e) => setUserInfo(p => ({ ...p, cityStateZip: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">SSN Last 4</label>
+                  <input value={userInfo.ssnLast4} onChange={(e) => setUserInfo(p => ({ ...p, ssnLast4: e.target.value }))} maxLength={4}
+                    placeholder="XXXX"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+              <button onClick={() => setStep(2)} disabled={!userInfo.name}
+                className="w-full mt-4 bg-blue-600 text-white py-3 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition">
+                Next: Add Disputed Accounts →
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ═══════════ STEP 2 — Accounts ═══════════ */}
+      {step === 2 && (
+        <div className="space-y-5">
+          {/* Bureau tabs */}
+          <div className="flex gap-2 overflow-x-auto">
+            {BUREAUS.map(b => (
+              <button key={b.id} onClick={() => setActiveTab(b.id)}
+                className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  activeTab === b.id ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}>
+                {b.label} {bureauCounts[b.id] > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">{bureauCounts[b.id]}</span>}
+              </button>
+            ))}
           </div>
 
-          {/* Documents */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-slate-500 mb-2">SUPPORTING DOCUMENTS</div>
-            <div onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 rounded-xl p-4 text-center cursor-pointer hover:border-blue-400 transition">
-              <Upload className="w-6 h-6 text-slate-400 mx-auto mb-1" />
-              <div className="text-xs text-slate-600">{uploading ? 'Uploading...' : 'Click to upload credit reports, prior dispute letters, etc.'}</div>
-              <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg" onChange={(e) => handleFiles(e.target.files)} className="hidden" />
-            </div>
-            {uploadedDocs.length > 0 && (
-              <div className="mt-3">
-                <div className="text-[10px] font-semibold uppercase text-slate-500 mb-1.5">
-                  Attached to Dispute ({uploadedDocs.length})
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {uploadedDocs.map((d, i) => (
-                    <span key={i} className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs ${
-                      d.fromClient ? 'bg-blue-50 border border-blue-200 text-blue-800' : 'bg-slate-100 text-slate-700'
-                    }`}>
-                      <FileText className="w-3 h-3" />
-                      <span className="max-w-[150px] truncate">{d.name}</span>
-                      {d.fromClient && <span className="text-[9px] text-blue-500">client file</span>}
-                      <button onClick={() => setUploadedDocs(prev => prev.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-500"><X className="w-3 h-3" /></button>
-                    </span>
+          {/* Add account button */}
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-700">
+              {BUREAUS.find(b => b.id === activeTab)?.label} — {bureauCounts[activeTab]} account{bureauCounts[activeTab] !== 1 ? 's' : ''}
+            </h3>
+            <button onClick={() => addAccount(activeTab)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700">
+              <Plus className="w-3.5 h-3.5" /> Add Account
+            </button>
+          </div>
+
+          {/* Account cards grouped by category */}
+          {ACCOUNT_CATEGORIES.map(cat => {
+            const catAccounts = accounts.filter(a => a.bureau === activeTab && a.category === cat.value);
+            if (catAccounts.length === 0) return null;
+            return (
+              <div key={cat.value}>
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">{cat.label} ({catAccounts.length})</div>
+                <div className="space-y-3">
+                  {catAccounts.map(account => (
+                    <AccountCard key={account.id} account={account}
+                      onUpdate={(field, val) => updateAccount(account.id, field, val)}
+                      onDelete={() => deleteAccount(account.id)}
+                      onAddFinding={(f) => addCustomFinding(account.id, f)}
+                      onRemoveFinding={(i) => removeCustomFinding(account.id, i)}
+                    />
                   ))}
                 </div>
               </div>
-            )}
+            );
+          })}
+
+          {accounts.filter(a => a.bureau === activeTab).length === 0 && (
+            <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
+              <FileText className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm text-slate-500">No accounts added for {BUREAUS.find(b => b.id === activeTab)?.label}</p>
+              <button onClick={() => addAccount(activeTab)}
+                className="mt-3 text-sm text-blue-600 hover:text-blue-700 font-medium">+ Add an account</button>
+            </div>
+          )}
+
+          {/* Generate button */}
+          <div className="flex gap-3">
+            <button onClick={() => setStep(1)} className="px-5 py-3 text-sm text-slate-600 hover:text-slate-800">← Back</button>
+            <button onClick={generateLetters} disabled={accounts.length === 0 || generatingLetters}
+              className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition">
+              {generatingLetters ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating letters...</> : <><Mail className="w-4 h-4" /> Generate Dispute Letters</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════ STEP 3 — Letters ═══════════ */}
+      {step === 3 && (
+        <div className="space-y-5">
+          <div className="flex gap-2 overflow-x-auto">
+            {BUREAUS.filter(b => letters[b.id]).map(b => (
+              <button key={b.id} onClick={() => setActiveLetterTab(b.id)}
+                className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  activeLetterTab === b.id ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}>
+                {b.label}
+              </button>
+            ))}
           </div>
 
-          {/* Generate */}
-          <button onClick={handleGenerate} disabled={!disputeType || !clientName || outputState === 'running'}
-            className="w-full flex items-center justify-center gap-2 text-white font-semibold py-3.5 rounded-xl transition disabled:opacity-60"
-            style={{ background: outputState === 'running' ? '#1e5ea8' : '#2563eb' }}>
-            {outputState === 'running' ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating dispute letter...</>
-              : <><Mail className="w-5 h-5" /> Generate Dispute Letter</>}
-          </button>
-        </div>
-
-        {/* RIGHT — Output */}
-        <div className="lg:sticky lg:top-4 lg:h-fit">
-          {outputState === 'idle' && (
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm text-center py-16 text-slate-400">
-              <Mail className="w-10 h-10 mx-auto mb-3" />
-              <div className="text-sm font-medium text-slate-600">Your dispute letter will appear here</div>
-              <div className="text-xs text-slate-400 mt-1">Select a dispute type and fill in the details</div>
-            </div>
-          )}
-
-          {outputState === 'running' && (
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm text-center py-16">
-              <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-3" />
-              <div className="text-sm font-medium text-slate-900">Generating your dispute letter...</div>
-              <div className="text-xs text-slate-500 mt-1">This usually takes 10-15 seconds</div>
-            </div>
-          )}
-
-          {outputState === 'error' && (
+          {letters[activeLetterTab] && (
             <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-                <div className="flex items-start gap-2"><AlertCircle className="w-5 h-5 text-red-500 mt-0.5" />
-                  <div className="text-sm text-red-700">{error}</div>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={handleGenerate} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium">Retry</button>
-                <button onClick={handleReset} className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-sm">Start Over</button>
-              </div>
-            </div>
-          )}
-
-          {outputState === 'complete' && (
-            <div className="space-y-4">
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-blue-600" />
-                    <span className="font-semibold text-blue-700">Letter Ready (v{letterVersion})</span>
-                  </div>
-                  <button onClick={handleDownload}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
-                    <Download className="w-3.5 h-3.5" /> Download .docx
-                  </button>
-                </div>
-                <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[500px] overflow-y-auto mb-4">
-                  <pre className="text-xs text-slate-800 whitespace-pre-wrap font-serif leading-relaxed">{letterText}</pre>
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-blue-600" />
+                  <span className="font-semibold text-blue-700">
+                    {BUREAUS.find(b => b.id === activeLetterTab)?.label} Letter
+                  </span>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={handleCopy} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs hover:bg-slate-50">
+                  <button onClick={() => copyLetter(activeLetterTab)}
+                    className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium hover:bg-slate-50">
                     <Copy className="w-3.5 h-3.5" /> Copy
                   </button>
-                  <button onClick={handleReset} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 text-slate-700 rounded-lg text-xs hover:bg-slate-50">
-                    <RefreshCw className="w-3.5 h-3.5" /> New Letter
+                  <button onClick={() => downloadLetter(activeLetterTab)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
+                    <Download className="w-3.5 h-3.5" /> Download .txt
                   </button>
                 </div>
               </div>
 
-              {/* Revision */}
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <div className="text-sm font-semibold text-slate-900 mb-2">Edit Letter</div>
-                <div className="flex items-end gap-2">
-                  <textarea value={revisionInput} onChange={(e) => setRevisionInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleRevision(); }}}
-                    placeholder="Tell the drafter what to change..." rows={2} disabled={revising}
-                    className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none disabled:opacity-60" />
-                  <button onClick={handleRevision} disabled={!revisionInput.trim() || revising}
-                    className="shrink-0 bg-blue-600 text-white p-2.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                    {revising ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                  </button>
-                </div>
+              <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 max-h-[600px] overflow-y-auto mb-4">
+                <pre className="text-xs text-slate-800 whitespace-pre-wrap font-serif leading-relaxed">
+                  {letters[activeLetterTab].text}
+                </pre>
+              </div>
+
+              {/* Mailing info */}
+              <div className="bg-blue-50 rounded-lg border border-blue-200 p-3 text-xs text-blue-800">
+                <strong>Mail to:</strong> {BUREAUS.find(b => b.id === activeLetterTab)?.address}<br/>
+                <strong>Send via:</strong> Certified Mail, Return Receipt Requested<br/>
+                <em className="text-blue-600">Review every detail before mailing. Bureaus have 30 days to respond. Keep copies of everything.</em>
               </div>
             </div>
           )}
+
+          <div className="flex gap-3">
+            <button onClick={() => setStep(2)} className="px-5 py-3 text-sm text-slate-600">← Back to Accounts</button>
+            <button onClick={() => { setAccounts([]); setLetters({}); setStep(1); setClientMode(''); }}
+              className="px-5 py-3 border border-slate-300 text-sm text-slate-600 rounded-lg hover:bg-slate-50">
+              <RefreshCw className="w-3.5 h-3.5 inline mr-1" /> Reset All
+            </button>
+          </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Account Card Component
+// ---------------------------------------------------------------------------
+
+function AccountCard({ account, onUpdate, onDelete, onAddFinding, onRemoveFinding }) {
+  const [expanded, setExpanded] = useState(true);
+  const [newFinding, setNewFinding] = useState('');
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 cursor-pointer"
+        onClick={() => setExpanded(!expanded)}>
+        <div className="flex items-center gap-3">
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition ${expanded ? '' : '-rotate-90'}`} />
+          <div>
+            <div className="text-sm font-semibold text-slate-900">
+              {account.creditor || 'New Account'}
+              {account.accountNumber && <span className="text-slate-400 font-normal ml-2">#{account.accountNumber}</span>}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-0.5">
+              {DISPUTE_TYPES.find(d => d.value === account.disputeType)?.label} · {account.balance ? `$${account.balance}` : 'No balance'}
+            </div>
+          </div>
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition">
+          <Trash2 className="w-4 h-4" />
+        </button>
       </div>
+
+      {/* Body */}
+      {expanded && (
+        <div className="p-4 space-y-4">
+          {/* Core fields */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="col-span-2 sm:col-span-1">
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Creditor Name</label>
+              <input value={account.creditor} onChange={(e) => onUpdate('creditor', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="e.g. Capital One" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Account #</label>
+              <input value={account.accountNumber} onChange={(e) => onUpdate('accountNumber', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Category</label>
+              <select value={account.category} onChange={(e) => onUpdate('category', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+                {ACCOUNT_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Balance</label>
+              <input value={account.balance} onChange={(e) => onUpdate('balance', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="$0" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Past Due</label>
+              <input value={account.pastDue} onChange={(e) => onUpdate('pastDue', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="$0" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Pay Status</label>
+              <input value={account.payStatus} onChange={(e) => onUpdate('payStatus', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="e.g. Charge-off" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Credit Limit</label>
+              <input value={account.creditLimit} onChange={(e) => onUpdate('creditLimit', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">High Balance</label>
+              <input value={account.highBalance} onChange={(e) => onUpdate('highBalance', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Original Creditor</label>
+              <input value={account.originalCreditor} onChange={(e) => onUpdate('originalCreditor', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Date Opened</label>
+              <input value={account.dateOpened} onChange={(e) => onUpdate('dateOpened', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="MM/YYYY" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Date Closed</label>
+              <input value={account.dateClosed} onChange={(e) => onUpdate('dateClosed', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="MM/YYYY" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Last Payment</label>
+              <input value={account.lastPaymentMade} onChange={(e) => onUpdate('lastPaymentMade', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm" placeholder="MM/YYYY" />
+            </div>
+          </div>
+
+          {/* Dispute type */}
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Dispute Type</label>
+              <select value={account.disputeType} onChange={(e) => onUpdate('disputeType', e.target.value)}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+                {DISPUTE_TYPES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 mt-4 text-sm text-slate-700 cursor-pointer">
+              <input type="checkbox" checked={account.includeConsumerStatement}
+                onChange={(e) => onUpdate('includeConsumerStatement', e.target.checked)} />
+              Include 100-word statement
+            </label>
+          </div>
+
+          {/* Remarks */}
+          <div>
+            <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">Remarks / Notes</label>
+            <input value={account.remarks} onChange={(e) => onUpdate('remarks', e.target.value)}
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+              placeholder="e.g. AID, Account information disputed by consumer" />
+          </div>
+
+          {/* Negative findings */}
+          <div>
+            <label className="block text-[10px] font-semibold uppercase text-slate-500 mb-1">
+              Negative Findings & Dispute Reasons ({account.customFindings.length})
+            </label>
+            {account.customFindings.length > 0 && (
+              <div className="space-y-1 mb-2">
+                {account.customFindings.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-red-50 border border-red-200 rounded p-2 text-xs text-red-800">
+                    <span className="flex-1">• {f}</span>
+                    <button onClick={() => onRemoveFinding(i)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3" /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input value={newFinding} onChange={(e) => setNewFinding(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && newFinding.trim()) { onAddFinding(newFinding.trim()); setNewFinding(''); }}}
+                placeholder="Add a specific inaccuracy or finding..."
+                className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-sm" />
+              <button onClick={() => { if (newFinding.trim()) { onAddFinding(newFinding.trim()); setNewFinding(''); }}}
+                disabled={!newFinding.trim()}
+                className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
