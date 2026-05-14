@@ -2,12 +2,13 @@ import React, { useState, useRef, useCallback } from 'react';
 import {
   FileText, Send, Download, Copy, Plus, X, Upload, Trash2,
   Loader2, CheckCircle2, AlertCircle, Mail, User, ChevronDown,
-  ChevronRight, RefreshCw, Eye, Shield,
+  ChevronRight, RefreshCw, Eye, Shield, FileUp,
 } from 'lucide-react';
 import {
   startDraft, getDraftStatus, getDraftResult, downloadDraftDocx, reviseDraft,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
+import { processReport, processReportText, analyzeAccount, generateConsumerStatement, regenerateStatement } from '../../lib/disputer';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -92,6 +93,47 @@ export default function DisputeLetters() {
   }
 
   // Account management
+  // PDF upload and parsing
+  const [parsing, setParsing] = useState(false);
+  const [parseError, setParseError] = useState(null);
+  const [showPasteModal, setShowPasteModal] = useState(null); // bureau id
+  const [pasteText, setPasteText] = useState('');
+
+  async function handlePDFUpload(file, bureau) {
+    setParsing(true);
+    setParseError(null);
+    try {
+      const result = await processReport(file, bureau);
+      if (result.error) {
+        setParseError(result.error);
+      }
+      if (result.accounts.length > 0) {
+        // Add parsed accounts, avoiding duplicates
+        setAccounts(prev => {
+          const existing = new Set(prev.map(a => `${a.creditor}|${a.accountNumber}`));
+          const newAccounts = result.accounts.filter(a => !existing.has(`${a.creditor}|${a.accountNumber}`));
+          return [...prev, ...newAccounts];
+        });
+      }
+    } catch (err) {
+      setParseError(`PDF parsing failed: ${err.message}`);
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  function handlePasteSubmit(bureau) {
+    if (!pasteText.trim()) return;
+    const result = processReportText(pasteText, bureau);
+    if (result.accounts.length > 0) {
+      setAccounts(prev => [...prev, ...result.accounts]);
+    } else {
+      setParseError('No accounts found in pasted text. Try adding accounts manually.');
+    }
+    setShowPasteModal(null);
+    setPasteText('');
+  }
+
   function addAccount(bureau) {
     setAccounts(prev => [...prev, {
       id: `acc-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
@@ -395,6 +437,77 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
             ))}
           </div>
 
+          {/* Upload zone */}
+          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const file = e.dataTransfer.files[0];
+                  if (file && file.type === 'application/pdf') handlePDFUpload(file, activeTab);
+                }}
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.pdf';
+                  input.onchange = (e) => {
+                    const file = e.target.files[0];
+                    if (file) handlePDFUpload(file, activeTab);
+                  };
+                  input.click();
+                }}
+                className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition"
+              >
+                {parsing ? (
+                  <div className="flex items-center justify-center gap-2 text-sm text-blue-600">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Parsing credit report...
+                  </div>
+                ) : (
+                  <>
+                    <FileUp className="w-6 h-6 text-slate-400 mx-auto mb-1" />
+                    <div className="text-xs text-slate-600 font-medium">Drop PDF or click to upload</div>
+                    <div className="text-[10px] text-slate-400">Auto-detects accounts from {BUREAUS.find(b => b.id === activeTab)?.label} reports</div>
+                  </>
+                )}
+              </div>
+              <button onClick={() => { setShowPasteModal(activeTab); setPasteText(''); }}
+                className="shrink-0 px-3 py-4 border border-slate-200 rounded-lg text-xs text-slate-600 hover:bg-slate-50 transition">
+                <FileText className="w-4 h-4 mx-auto mb-1" />
+                Paste Text
+              </button>
+            </div>
+            {parseError && (
+              <div className="mt-2 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {parseError}
+              </div>
+            )}
+          </div>
+
+          {/* Paste text modal */}
+          {showPasteModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+                <div className="flex items-center justify-between p-5 border-b border-slate-200">
+                  <h2 className="text-lg font-bold text-slate-900">Paste Credit Report Text</h2>
+                  <button onClick={() => setShowPasteModal(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                </div>
+                <div className="p-5 flex-1 overflow-y-auto">
+                  <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+                    rows={15} placeholder="Paste the credit report text here. The parser will automatically detect accounts and extract their details..."
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
+                </div>
+                <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
+                  <button onClick={() => setShowPasteModal(null)} className="px-4 py-2 text-sm text-slate-600">Cancel</button>
+                  <button onClick={() => handlePasteSubmit(showPasteModal)} disabled={!pasteText.trim()}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                    Parse & Import Accounts
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Add account button */}
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-700">
@@ -402,7 +515,7 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
             </h3>
             <button onClick={() => addAccount(activeTab)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700">
-              <Plus className="w-3.5 h-3.5" /> Add Account
+              <Plus className="w-3.5 h-3.5" /> Add Manually
             </button>
           </div>
 
