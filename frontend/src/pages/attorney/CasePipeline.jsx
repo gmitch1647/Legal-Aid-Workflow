@@ -68,6 +68,12 @@ export default function CasePipeline() {
   // Edit mode — drag columns to reorder
   const [editMode, setEditMode] = useState(false);
 
+  // Notification modal
+  const [notifyModal, setNotifyModal] = useState(null); // { caseId, caseName, oldStatus, newStatus, stage }
+  const [sendEmail, setSendEmail] = useState(false);
+  const [sendSms, setSendSms] = useState(false);
+  const [notifyMessage, setNotifyMessage] = useState('');
+
   async function handleDeleteCase(caseId, caseName) {
     if (!window.confirm(`Delete case "${caseName}"? This cannot be undone.`)) return;
     try {
@@ -127,6 +133,10 @@ export default function CasePipeline() {
             color: s.color || 'slate',
             is_system: s.is_system,
             pipeline_id: s.pipeline_id,
+            notify_email: s.notify_email || false,
+            notify_sms: s.notify_sms || false,
+            notify_on_enter: s.notify_on_enter || false,
+            notification_template: s.notification_template || '',
           }))
         );
       }
@@ -218,8 +228,85 @@ export default function CasePipeline() {
 
   // Drag end handler
   // Drag handler for CASES (normal mode)
+  async function moveCaseToStatus(caseId, newStatus, oldStatus) {
+    setCases((prev) =>
+      prev.map((c) => (c.id === caseId ? { ...c, status: newStatus, updated_at: new Date().toISOString() } : c))
+    );
+    try {
+      setUpdating(caseId);
+      await updateCaseStatus(caseId, newStatus);
+    } catch (err) {
+      console.error('Status update failed:', err);
+      setCases((prev) =>
+        prev.map((c) => (c.id === caseId ? { ...c, status: oldStatus } : c))
+      );
+      setError(`Failed to move case: ${err.message}`);
+      setTimeout(() => setError(null), 5000);
+    } finally {
+      setUpdating(null);
+    }
+  }
+
+  async function handleSendNotification() {
+    if (!notifyModal) return;
+    const { caseId, newStatus, oldStatus } = notifyModal;
+
+    // Move the case first
+    await moveCaseToStatus(caseId, newStatus, oldStatus);
+
+    // Send notifications
+    const caseData = cases.find(c => c.id === caseId);
+    const clientId = caseData?.client_id;
+    const clientEmail = caseData?.client?.email || caseData?.client_email;
+    const clientPhone = caseData?.client?.phone || caseData?.client_phone;
+    const clientName = caseData?.plaintiff_name || caseData?.client_name || 'Client';
+
+    if (clientId && (sendEmail || sendSms)) {
+      const message = notifyMessage
+        .replace('{client_name}', clientName)
+        .replace('{stage_name}', notifyModal.stage?.name || newStatus)
+        .replace('{case_status}', newStatus.replace(/_/g, ' '));
+
+      try {
+        if (sendEmail && clientEmail) {
+          const { sendClientEmail } = await import('../../lib/api');
+          await sendClientEmail({
+            client_id: clientId,
+            to_email: clientEmail,
+            subject: `Case Update: ${notifyModal.stage?.name || newStatus}`,
+            body: message || `Hi ${clientName}, your case status has been updated to: ${notifyModal.stage?.name || newStatus}.`,
+          });
+        }
+        if (sendSms && clientPhone) {
+          const { sendClientSMS } = await import('../../lib/api');
+          await sendClientSMS({
+            client_id: clientId,
+            to_phone: clientPhone,
+            body: message || `Hi ${clientName}, your case status has been updated to: ${notifyModal.stage?.name || newStatus}.`,
+          });
+        }
+      } catch (err) {
+        console.error('Notification send failed:', err);
+      }
+    }
+
+    setNotifyModal(null);
+    setSendEmail(false);
+    setSendSms(false);
+    setNotifyMessage('');
+  }
+
+  function handleSkipNotification() {
+    if (!notifyModal) return;
+    moveCaseToStatus(notifyModal.caseId, notifyModal.newStatus, notifyModal.oldStatus);
+    setNotifyModal(null);
+    setSendEmail(false);
+    setSendSms(false);
+    setNotifyMessage('');
+  }
+
   const handleCaseDragEnd = useCallback(
-    async (result) => {
+    (result) => {
       const { source, destination, draggableId } = result;
       if (!destination) return;
       if (source.droppableId === destination.droppableId && source.index === destination.index) return;
@@ -228,25 +315,22 @@ export default function CasePipeline() {
       const newStatus = destination.droppableId;
       const oldStatus = source.droppableId;
 
-      setCases((prev) =>
-        prev.map((c) => (c.id === caseId ? { ...c, status: newStatus, updated_at: new Date().toISOString() } : c))
-      );
-
-      try {
-        setUpdating(caseId);
-        await updateCaseStatus(caseId, newStatus);
-      } catch (err) {
-        console.error('Status update failed:', err);
-        setCases((prev) =>
-          prev.map((c) => (c.id === caseId ? { ...c, status: oldStatus } : c))
-        );
-        setError(`Failed to move case: ${err.message}`);
-        setTimeout(() => setError(null), 5000);
-      } finally {
-        setUpdating(null);
+      // Check if destination stage has notifications enabled
+      const destStage = columns.find(c => c.key === newStatus);
+      if (destStage && (destStage.notify_email || destStage.notify_sms)) {
+        const caseData = cases.find(c => c.id === caseId);
+        const caseName = caseData?.plaintiff_name || caseData?.client_name || 'Case';
+        setSendEmail(destStage.notify_email || false);
+        setSendSms(destStage.notify_sms || false);
+        setNotifyMessage(destStage.notification_template || '');
+        setNotifyModal({ caseId, caseName, oldStatus, newStatus, stage: destStage });
+        return;
       }
+
+      // No notifications — just move
+      moveCaseToStatus(caseId, newStatus, oldStatus);
     },
-    []
+    [columns, cases]
   );
 
   // Drag handler for COLUMNS (edit mode)
@@ -627,6 +711,54 @@ export default function CasePipeline() {
           )}
         </Droppable>
       </DragDropContext>
+
+      {/* Notification Modal */}
+      {notifyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full">
+            <div className="p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">Notify Client?</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Moving <strong>{notifyModal.caseName}</strong> to <strong>{notifyModal.stage?.label || notifyModal.newStatus}</strong>
+              </p>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+                  Send Email
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input type="checkbox" checked={sendSms} onChange={(e) => setSendSms(e.target.checked)} />
+                  Send SMS
+                </label>
+              </div>
+              {(sendEmail || sendSms) && (
+                <textarea
+                  value={notifyMessage}
+                  onChange={(e) => setNotifyMessage(e.target.value)}
+                  rows={3}
+                  placeholder={`Hi {client_name}, your case has been updated to: {stage_name}. We will keep you informed of any further updates.`}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                />
+              )}
+              <p className="text-[10px] text-slate-400">
+                Use {'{client_name}'}, {'{stage_name}'}, {'{case_status}'} in your message
+              </p>
+            </div>
+            <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
+              <button onClick={handleSkipNotification}
+                className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">
+                Move Without Notifying
+              </button>
+              <button onClick={handleSendNotification}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
+                {sendEmail || sendSms ? 'Move & Notify' : 'Move Case'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

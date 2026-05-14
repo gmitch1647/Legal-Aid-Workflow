@@ -875,6 +875,9 @@ function PipelineStagesTab() {
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
+  const [editNotifyEmail, setEditNotifyEmail] = useState(false);
+  const [editNotifySms, setEditNotifySms] = useState(false);
+  const [editNotifyTemplate, setEditNotifyTemplate] = useState('');
 
   const loadStages = useCallback(async () => {
     try {
@@ -919,7 +922,14 @@ function PipelineStagesTab() {
 
   async function handleSaveEdit(id) {
     try {
-      await updatePipelineStage(id, { name: editName, color: editColor });
+      await updatePipelineStage(id, {
+        name: editName,
+        color: editColor,
+        notify_on_enter: editNotifyEmail || editNotifySms,
+        notify_email: editNotifyEmail,
+        notify_sms: editNotifySms,
+        notification_template: editNotifyTemplate,
+      });
       setEditingId(null);
       await loadStages();
     } catch (err) {
@@ -1009,38 +1019,64 @@ function PipelineStagesTab() {
 
             {/* Name + slug */}
             {editingId === stage.id ? (
-              <div className="flex-1 flex items-center gap-2">
-                <input
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
-                  autoFocus
-                />
-                <select
-                  value={editColor}
-                  onChange={(e) => setEditColor(e.target.value)}
-                  className="rounded border border-slate-300 px-2 py-1 text-xs"
-                >
-                  {STAGE_COLORS.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => handleSaveEdit(stage.id)}
-                  className="text-emerald-600 hover:text-emerald-700"
-                >
-                  <Check className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => setEditingId(null)}
-                  className="text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+              <div className="flex-1 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
+                    autoFocus
+                  />
+                  <select
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs"
+                  >
+                    {STAGE_COLORS.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => handleSaveEdit(stage.id)} className="text-emerald-600 hover:text-emerald-700">
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => setEditingId(null)} className="text-slate-400 hover:text-slate-600">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                {/* Notification settings */}
+                <div className="bg-slate-50 rounded-lg p-2.5 space-y-2">
+                  <div className="text-[10px] font-semibold uppercase text-slate-500">Notify client when case enters this stage</div>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input type="checkbox" checked={editNotifyEmail} onChange={(e) => setEditNotifyEmail(e.target.checked)} />
+                      Email
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input type="checkbox" checked={editNotifySms} onChange={(e) => setEditNotifySms(e.target.checked)} />
+                      SMS
+                    </label>
+                  </div>
+                  {(editNotifyEmail || editNotifySms) && (
+                    <textarea
+                      value={editNotifyTemplate}
+                      onChange={(e) => setEditNotifyTemplate(e.target.value)}
+                      rows={2}
+                      placeholder="Message template (use {client_name}, {case_status}, {stage_name})..."
+                      className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                    />
+                  )}
+                </div>
               </div>
             ) : (
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-slate-900">{stage.name}</div>
+                <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
+                  {stage.name}
+                  {(stage.notify_email || stage.notify_sms) && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold uppercase">
+                      {[stage.notify_email && 'email', stage.notify_sms && 'sms'].filter(Boolean).join(' + ')}
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-400">{stage.slug}{stage.description ? ` — ${stage.description}` : ''}</div>
               </div>
             )}
@@ -1056,6 +1092,9 @@ function PipelineStagesTab() {
                     setEditingId(stage.id);
                     setEditName(stage.name);
                     setEditColor(stage.color);
+                    setEditNotifyEmail(stage.notify_email || false);
+                    setEditNotifySms(stage.notify_sms || false);
+                    setEditNotifyTemplate(stage.notification_template || '');
                   }}
                   className="p-1 text-slate-400 hover:text-slate-700"
                 >
