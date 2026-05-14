@@ -67,10 +67,13 @@ export default function DisputeLetters() {
     const client = clients.find(c => c.id === clientId);
     setSelectedClient(client);
 
-    // Auto-fill client info
+    // Auto-fill ALL client info
     if (client) {
       setClientName(client.full_name || '');
-      setClientAddress([client.address, client.county, client.state].filter(Boolean).join(', '));
+      setClientAddress(
+        [client.address, client.county, client.state].filter(Boolean).join(', ')
+      );
+      // Parse DOB from case_facts if available later
     }
 
     // Load client's cases and documents
@@ -93,6 +96,17 @@ export default function DisputeLetters() {
     } catch (err) {
       console.error(err);
     }
+  }
+
+  // Add a client file to the dispute attachments
+  function attachClientDoc(doc) {
+    const already = uploadedDocs.some(d => d.storage_path === doc.storage_path);
+    if (already) return;
+    setUploadedDocs(prev => [...prev, {
+      name: doc.file_name || doc.name || 'Document',
+      storage_path: doc.storage_path,
+      fromClient: true,
+    }]);
   }
 
   // Form state
@@ -356,18 +370,37 @@ export default function DisputeLetters() {
                       {selectedClient.county && <div>County: {selectedClient.county}, {selectedClient.state}</div>}
                     </div>
 
-                    {/* Client documents */}
+                    {/* Client documents — click to attach */}
                     {clientDocs.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-blue-200">
-                        <div className="text-[10px] font-semibold uppercase text-blue-700 mb-1.5">Client Documents ({clientDocs.length})</div>
-                        <div className="space-y-1 max-h-32 overflow-y-auto">
-                          {clientDocs.map((doc, i) => (
-                            <div key={doc.id || i} className="flex items-center gap-2 text-xs bg-white rounded p-1.5">
-                              <FileText className="w-3 h-3 text-slate-400 shrink-0" />
-                              <span className="truncate flex-1 text-slate-700">{doc.file_name || doc.name}</span>
-                              <span className="text-[9px] text-slate-400">{(doc.document_category || 'other').replace(/_/g, ' ')}</span>
-                            </div>
-                          ))}
+                        <div className="text-[10px] font-semibold uppercase text-blue-700 mb-1.5">
+                          Client Documents ({clientDocs.length}) — click to attach
+                        </div>
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                          {clientDocs.map((doc, i) => {
+                            const isAttached = uploadedDocs.some(d => d.storage_path === doc.storage_path);
+                            return (
+                              <button
+                                key={doc.id || i}
+                                onClick={() => attachClientDoc(doc)}
+                                disabled={isAttached}
+                                className={`w-full flex items-center gap-2 text-xs rounded p-2 text-left transition ${
+                                  isAttached
+                                    ? 'bg-blue-100 border border-blue-300 opacity-60'
+                                    : 'bg-white border border-slate-100 hover:bg-emerald-50 hover:border-emerald-300 cursor-pointer'
+                                }`}
+                              >
+                                <FileText className={`w-3.5 h-3.5 shrink-0 ${isAttached ? 'text-blue-500' : 'text-slate-400'}`} />
+                                <span className="truncate flex-1 text-slate-700">{doc.file_name || doc.name}</span>
+                                <span className="text-[9px] text-slate-400 shrink-0">{(doc.document_category || 'other').replace(/_/g, ' ')}</span>
+                                {isAttached ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                ) : (
+                                  <Plus className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -458,13 +491,22 @@ export default function DisputeLetters() {
               <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg" onChange={(e) => handleFiles(e.target.files)} className="hidden" />
             </div>
             {uploadedDocs.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {uploadedDocs.map((d, i) => (
-                  <span key={i} className="flex items-center gap-1 px-2 py-1 bg-slate-100 rounded-full text-xs">
-                    <FileText className="w-3 h-3" />{d.name}
-                    <button onClick={() => setUploadedDocs(prev => prev.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-500"><X className="w-3 h-3" /></button>
-                  </span>
-                ))}
+              <div className="mt-3">
+                <div className="text-[10px] font-semibold uppercase text-slate-500 mb-1.5">
+                  Attached to Dispute ({uploadedDocs.length})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {uploadedDocs.map((d, i) => (
+                    <span key={i} className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs ${
+                      d.fromClient ? 'bg-blue-50 border border-blue-200 text-blue-800' : 'bg-slate-100 text-slate-700'
+                    }`}>
+                      <FileText className="w-3 h-3" />
+                      <span className="max-w-[150px] truncate">{d.name}</span>
+                      {d.fromClient && <span className="text-[9px] text-blue-500">client file</span>}
+                      <button onClick={() => setUploadedDocs(prev => prev.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
