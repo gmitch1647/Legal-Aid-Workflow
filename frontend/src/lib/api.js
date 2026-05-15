@@ -523,3 +523,51 @@ export async function registerClient(data) {
     body: JSON.stringify(data),
   });
 }
+
+// ---------------------------------------------------------------------------
+// E-Signatures (Dropbox Sign)
+// ---------------------------------------------------------------------------
+
+export async function getEsignConfig() {
+  return request('/esign/config');
+}
+
+export async function getEsignTemplates() {
+  return request('/esign/templates');
+}
+
+export async function sendSignatureRequest(data) {
+  return request('/esign/send', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getSignatureRequests(caseId = null, clientId = null) {
+  const params = new URLSearchParams();
+  if (caseId) params.append('case_id', caseId);
+  if (clientId) params.append('client_id', clientId);
+  const qs = params.toString();
+  return request(`/esign/requests${qs ? `?${qs}` : ''}`);
+}
+
+export async function getSignatureRequest(id) {
+  return request(`/esign/requests/${id}`);
+}
+
+export async function remindSigner(id) {
+  return request(`/esign/requests/${id}/remind`, { method: 'POST' });
+}
+
+export async function cancelSignatureRequest(id) {
+  return request(`/esign/requests/${id}/cancel`, { method: 'POST' });
+}
+
+export async function downloadSignedDocument(id) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/esign/requests/${id}/download`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error('Download failed');
+  return response.blob();
+}
