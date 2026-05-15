@@ -377,6 +377,13 @@ export async function getReindexStatus() {
   return request('/draft/reindex/status');
 }
 
+export async function analyzeCreditReport(reportText, bureau = '') {
+  return request('/draft/analyze-credit-report', {
+    method: 'POST',
+    body: JSON.stringify({ report_text: reportText, bureau }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Calendar
 // ---------------------------------------------------------------------------

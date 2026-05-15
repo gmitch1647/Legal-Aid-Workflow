@@ -772,6 +772,44 @@ async def download_complaint_docx(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# POST /analyze-credit-report — AI analysis of credit report text
+# ---------------------------------------------------------------------------
+
+
+@router.post("/analyze-credit-report")
+async def analyze_credit_report_endpoint(
+    request: Request,
+    authorization: str = Header(default=None),
+):
+    """Analyze credit report text using Claude to extract all negative accounts."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    report_text = body.get("report_text", "")
+    bureau = body.get("bureau", "")
+
+    if not report_text or len(report_text) < 50:
+        raise HTTPException(status_code=400, detail="Report text is too short")
+
+    try:
+        from agents.credit_analyzer import analyze_credit_report
+        accounts = await analyze_credit_report(report_text)
+
+        # Tag each account with the bureau if provided
+        if bureau:
+            for acc in accounts:
+                if not acc.get("bureau"):
+                    acc["bureau"] = bureau
+
+        return {"accounts": accounts, "count": len(accounts)}
+    except Exception as e:
+        logger.exception("Credit report analysis failed")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {type(e).__name__}: {str(e)[:300]}")
+
+
 class ReindexPayload(BaseModel):
     force: bool = False
 

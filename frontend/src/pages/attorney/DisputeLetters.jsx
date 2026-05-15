@@ -6,9 +6,12 @@ import {
 } from 'lucide-react';
 import {
   startDraft, getDraftStatus, getDraftResult, downloadDraftDocx, reviseDraft,
+  analyzeCreditReport,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
-import { processReport, processReportText, analyzeAccount, generateConsumerStatement, regenerateStatement } from '../../lib/disputer';
+import { extractTextFromPDF } from '../../lib/disputer/pdfExtractor';
+import { generateConsumerStatement, regenerateStatement } from '../../lib/disputer/consumerStatementGenerator';
+import { analyzeAccount } from '../../lib/disputer/negativeAttributeAnalyzer';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -103,35 +106,68 @@ export default function DisputeLetters() {
     setParsing(true);
     setParseError(null);
     try {
-      const result = await processReport(file, bureau);
-      if (result.error) {
-        setParseError(result.error);
+      // Step 1: Extract text from PDF client-side
+      const { text, isScanned } = await extractTextFromPDF(file);
+      if (isScanned) {
+        setParseError('This PDF appears to be a scan. Please upload a text-based PDF or paste the report text manually.');
+        setParsing(false);
+        return;
       }
-      if (result.accounts.length > 0) {
-        // Add parsed accounts, avoiding duplicates
-        setAccounts(prev => {
-          const existing = new Set(prev.map(a => `${a.creditor}|${a.accountNumber}`));
-          const newAccounts = result.accounts.filter(a => !existing.has(`${a.creditor}|${a.accountNumber}`));
-          return [...prev, ...newAccounts];
-        });
+      if (!text || text.length < 50) {
+        setParseError('Could not extract text from this PDF. Try pasting the text manually.');
+        setParsing(false);
+        return;
+      }
+
+      // Step 2: Send to Claude for AI analysis
+      const result = await analyzeCreditReport(text, bureau);
+      if (result.accounts && result.accounts.length > 0) {
+        const newAccounts = result.accounts.map((a, i) => ({
+          ...a,
+          id: a.id || `ai-${Date.now()}-${i}`,
+          bureau: a.bureau || bureau,
+          customFindings: a.customFindings || [],
+          includeConsumerStatement: a.includeConsumerStatement || false,
+          negativeFindings: a.negativeFindings || [],
+        }));
+        setAccounts(prev => [...prev, ...newAccounts]);
+        setParseError(null);
+      } else {
+        setParseError('No negative accounts found. Try adding accounts manually.');
       }
     } catch (err) {
-      setParseError(`PDF parsing failed: ${err.message}`);
+      setParseError(`Analysis failed: ${err.message}`);
     } finally {
       setParsing(false);
     }
   }
 
-  function handlePasteSubmit(bureau) {
+  async function handlePasteSubmit(bureau) {
     if (!pasteText.trim()) return;
-    const result = processReportText(pasteText, bureau);
-    if (result.accounts.length > 0) {
-      setAccounts(prev => [...prev, ...result.accounts]);
-    } else {
-      setParseError('No accounts found in pasted text. Try adding accounts manually.');
+    setParsing(true);
+    setParseError(null);
+    try {
+      const result = await analyzeCreditReport(pasteText, bureau);
+      if (result.accounts && result.accounts.length > 0) {
+        const newAccounts = result.accounts.map((a, i) => ({
+          ...a,
+          id: a.id || `paste-${Date.now()}-${i}`,
+          bureau: a.bureau || bureau,
+          customFindings: a.customFindings || [],
+          includeConsumerStatement: false,
+          negativeFindings: a.negativeFindings || [],
+        }));
+        setAccounts(prev => [...prev, ...newAccounts]);
+      } else {
+        setParseError('No negative accounts found in pasted text. Try adding manually.');
+      }
+    } catch (err) {
+      setParseError(`Analysis failed: ${err.message}`);
+    } finally {
+      setParsing(false);
+      setShowPasteModal(null);
+      setPasteText('');
     }
-    setShowPasteModal(null);
-    setPasteText('');
   }
 
   function addAccount(bureau) {
@@ -490,13 +526,13 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
               >
                 {parsing ? (
                   <div className="flex items-center justify-center gap-2 text-sm text-blue-600">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Parsing credit report...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing credit report with AI...
                   </div>
                 ) : (
                   <>
                     <FileUp className="w-6 h-6 text-slate-400 mx-auto mb-1" />
                     <div className="text-xs text-slate-600 font-medium">Drop PDF or click to upload</div>
-                    <div className="text-[10px] text-slate-400">Auto-detects accounts from {BUREAUS.find(b => b.id === activeTab)?.label} reports</div>
+                    <div className="text-[10px] text-slate-400">AI analyzes the report and extracts all negative accounts automatically</div>
                   </>
                 )}
               </div>
