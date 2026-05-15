@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   FileText, Send, Download, Copy, Plus, X, Upload, Trash2,
   Loader2, CheckCircle2, AlertCircle, Mail, User, ChevronDown,
@@ -45,32 +45,60 @@ const ACCOUNT_CATEGORIES = [
 ];
 
 // ---------------------------------------------------------------------------
+// Session-storage persistence so state survives navigation
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY = 'disputer_state';
+
+function loadSaved() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function usePersisted(key, fallback) {
+  const saved = loadSaved();
+  return useState(saved?.[key] !== undefined ? saved[key] : fallback);
+}
+
+// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
 export default function DisputeLetters() {
-  const [step, setStep] = useState(1); // 1=info, 2=accounts, 3=letters
+  const [step, setStep] = usePersisted('step', 1);
 
   // Step 1 — Personal Info
-  const [userInfo, setUserInfo] = useState({
+  const [userInfo, setUserInfo] = usePersisted('userInfo', {
     name: '', dob: '', address: '', cityStateZip: '', ssnLast4: '',
   });
 
   // Step 2 — Accounts
-  const [accounts, setAccounts] = useState([]);
-  const [activeTab, setActiveTab] = useState('experian');
+  const [accounts, setAccounts] = usePersisted('accounts', []);
+  const [activeTab, setActiveTab] = usePersisted('activeTab', 'experian');
 
   // Step 3 — Letters
-  const [letters, setLetters] = useState({});
+  const [letters, setLetters] = usePersisted('letters', {});
   const [generatingLetters, setGeneratingLetters] = useState(false);
-  const [activeLetterTab, setActiveLetterTab] = useState('experian');
+  const [activeLetterTab, setActiveLetterTab] = usePersisted('activeLetterTab', 'experian');
 
   // Client selection
   const [clients, setClients] = useState([]);
-  const [selectedClientId, setSelectedClientId] = useState('');
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [clientMode, setClientMode] = useState('');
+  const [selectedClientId, setSelectedClientId] = usePersisted('selectedClientId', '');
+  const [selectedClient, setSelectedClient] = usePersisted('selectedClient', null);
+  const [clientMode, setClientMode] = usePersisted('clientMode', '');
   const [loadingClients, setLoadingClients] = useState(false);
+
+  // Persist key state to sessionStorage on every change
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        step, userInfo, accounts, activeTab, letters, activeLetterTab,
+        selectedClientId, selectedClient, clientMode,
+      }));
+    } catch {}
+  }, [step, userInfo, accounts, activeTab, letters, activeLetterTab, selectedClientId, selectedClient, clientMode]);
 
   async function loadClients() {
     setLoadingClients(true);
@@ -690,7 +718,7 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
 
           <div className="flex gap-3">
             <button onClick={() => setStep(2)} className="px-5 py-3 text-sm text-slate-600">← Back to Accounts</button>
-            <button onClick={() => { setAccounts([]); setLetters({}); setStep(1); setClientMode(''); }}
+            <button onClick={() => { setAccounts([]); setLetters({}); setStep(1); setClientMode(''); setSelectedClient(null); setSelectedClientId(''); setUserInfo({ name: '', dob: '', address: '', cityStateZip: '', ssnLast4: '' }); try { sessionStorage.removeItem(STORAGE_KEY); } catch {} }}
               className="px-5 py-3 border border-slate-300 text-sm text-slate-600 rounded-lg hover:bg-slate-50">
               <RefreshCw className="w-3.5 h-3.5 inline mr-1" /> Reset All
             </button>
