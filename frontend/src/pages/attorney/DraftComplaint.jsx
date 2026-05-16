@@ -22,6 +22,7 @@ import {
   getDraftStatus,
   getDraftResult,
   reviseDraft,
+  streamDraftChat,
   downloadDraftDocx,
   listDrafts,
   listDraftVersions,
@@ -1346,7 +1347,7 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [attachments, setAttachments] = useState([]); // { name, storage_path }
+  const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -1390,43 +1391,59 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
 
     setMessages((prev) => [
       ...prev,
-      {
-        role: 'user',
-        content: userMsg,
-        attachments: currentAttachments.map((a) => a.name),
-      },
+      { role: 'user', content: userMsg, attachments: currentAttachments.map((a) => a.name) },
     ]);
 
+    // Add streaming placeholder
+    const streamId = `stream-${Date.now()}`;
+    setMessages((prev) => [...prev, { role: 'assistant', content: '', _streamId: streamId }]);
+
     try {
-      const result = await reviseDraft(
+      const fullText = await streamDraftChat(
         sessionId,
         userMsg,
         complaintText,
         currentAttachments.map((a) => a.storage_path),
+        messages.slice(-10),
+        (partial) => {
+          setMessages((prev) =>
+            prev.map((m) => m._streamId === streamId ? { ...m, content: partial } : m)
+          );
+        }
       );
 
-      // If the backend indicates it was NOT revised (chat-only reply),
-      // don't update the complaint and just show the reply
-      const wasRevised = result.was_revised !== false;
-      const assistantMsg = wasRevised
-        ? (result.changes_summary
-            ? `${result.changes_summary}\n\n✅ Complaint updated to v${result.version}`
-            : `✅ Complaint revised (v${result.version})`)
-        : (result.changes_summary || 'Reply received. Complaint unchanged.');
+      // Finalize stream message
+      setMessages((prev) =>
+        prev.map((m) => m._streamId === streamId ? { ...m, _streamId: undefined } : m)
+      );
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: assistantMsg }]);
-
-      if (wasRevised && result.revised_complaint && onComplaintUpdate) {
-        onComplaintUpdate(result.revised_complaint, result.version);
+      // If the response contains a revised complaint, update it
+      if (fullText.includes('REVISED COMPLAINT:')) {
+        const revised = fullText.split('REVISED COMPLAINT:')[1].trim();
+        if (revised.length > 1000 && onComplaintUpdate) {
+          onComplaintUpdate(revised);
+          // Append a note to the message
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === 'assistant') {
+              const summary = fullText.split('REVISED COMPLAINT:')[0].trim();
+              return [...prev.slice(0, -1), { ...last, content: (summary || '✅ Complaint revised.') + '\n\n✅ Complaint updated above.' }];
+            }
+            return prev;
+          });
+        }
       }
     } catch (err) {
-      console.error('Revision failed:', err);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Error: ${err.message || 'Revision failed. Try again.'}` },
-      ]);
+      console.error('Chat failed:', err);
+      setMessages((prev) =>
+        prev.map((m) => m._streamId === streamId
+          ? { ...m, content: `Error: ${err.message}`, _streamId: undefined }
+          : m
+        )
+      );
     } finally {
       setSending(false);
+      if (inputRef.current) inputRef.current.focus();
     }
   }
 
@@ -1441,18 +1458,20 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
     <Card>
       <div className="flex items-center gap-2 mb-3">
         <Sparkles className="w-4 h-4 text-purple-500" />
-        <span className="text-sm font-semibold text-slate-900">Revision Chat</span>
-        <span className="text-[10px] text-slate-400 ml-1">Ask for changes to the draft</span>
+        <span className="text-sm font-semibold text-slate-900">Draft Assistant</span>
+        <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full ml-1">Streaming</span>
+        <span className="text-[10px] text-slate-400 ml-1">Revise, ask questions, discuss case law</span>
       </div>
 
       {messages.length === 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {[
             'Add a count for §1681g failure to provide file disclosure',
+            'What case law supports the §1681i(a)(5)(B) reinsertion claim?',
+            'Do you think we have a strong willfulness argument here?',
+            'What discovery should I request from the CRA?',
             'Strengthen the damages language',
             'Add Georgia FBPA count',
-            'Change the court to Middle District of Georgia',
-            'Add more factual detail about the dispute timeline',
           ].map((suggestion) => (
             <button
               key={suggestion}
@@ -1552,7 +1571,7 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
           onKeyDown={handleKeyDown}
           placeholder={attachments.length > 0
             ? "Add context (or send to analyze the attachment)..."
-            : "Tell the drafter what to change... (attach files with the 📎 button)"}
+            : "Ask a question, request a revision, or discuss strategy..."}
           rows={2}
           disabled={sending}
           className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:opacity-60"

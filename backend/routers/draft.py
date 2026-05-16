@@ -774,6 +774,247 @@ async def download_complaint_docx(
 
 
 # ---------------------------------------------------------------------------
+# POST /{session_id}/chat — streaming conversational assistant for drafts
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{session_id}/chat-stream")
+async def draft_chat_stream(
+    session_id: str,
+    request: Request,
+    authorization: str = Header(default=None),
+):
+    """Full conversational assistant for drafts — streams responses.
+    Can revise the complaint, answer questions, discuss case law, or give opinions.
+    If it revises, the response starts with REVISED COMPLAINT: prefix."""
+    from fastapi.responses import StreamingResponse
+    import anthropic
+
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    message = body.get("message", "")
+    complaint_text = body.get("complaint_text", "")
+    attachment_paths = body.get("attachment_paths", [])
+    chat_history = body.get("history", [])
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    # Load revision history from DB for continuity
+    case_resp = (
+        supabase.table("cases")
+        .select("revision_history, case_facts, status")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    db_history = []
+    case_facts = ""
+    if case_resp.data:
+        db_history = case_resp.data[0].get("revision_history") or []
+        case_facts = case_resp.data[0].get("case_facts") or ""
+
+    # Get RAG context
+    reference_context = ""
+    try:
+        from utils.rag_retrieval import retrieve_relevant_chunks, format_retrieved_context
+        from utils.embeddings import is_configured
+        if is_configured():
+            chunks = retrieve_relevant_chunks(message[:500], top_k=4, document_type="complaint")
+            if chunks:
+                reference_context = format_retrieved_context(chunks)
+    except Exception:
+        pass
+
+    # Get case law context
+    case_law_context = ""
+    try:
+        from utils.embeddings import embed_text, is_configured as _emb_check
+        if _emb_check():
+            query_emb = embed_text(message[:500])
+            cl_resp = supabase.rpc("match_case_law_chunks", {
+                "query_embedding": query_emb,
+                "match_threshold": 0.6,
+                "match_count": 3,
+            }).execute()
+            if cl_resp.data:
+                parts = []
+                for chunk in cl_resp.data:
+                    ci = supabase.table("case_law").select("case_name, citation, court, year").eq("id", chunk["case_law_id"]).limit(1).execute()
+                    info = ci.data[0] if ci.data else {}
+                    parts.append(f"[{info.get('case_name', '')}] ({info.get('citation', '')}, {info.get('court', '')} {info.get('year', '')})\n{chunk['content'][:1200]}")
+                case_law_context = "\n\n".join(parts)
+    except Exception:
+        pass
+
+    # Attorney memory
+    memory_context = ""
+    try:
+        from utils.memory import get_full_memory_context
+        memory_context = get_full_memory_context(session_id, profile.get("id"))
+    except Exception:
+        pass
+
+    # Read attachments
+    attachment_text = ""
+    if attachment_paths:
+        try:
+            from utils.document_reader import read_document
+            for path in attachment_paths[:3]:
+                try:
+                    file_type = path.split(".")[-1].lower() if "." in path else "bin"
+                    text = read_document(path, file_type)
+                    if text:
+                        attachment_text += f"\n=== ATTACHMENT: {path.split('/')[-1]} ===\n{text[:6000]}\n"
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    system_prompt = """You are a senior legal assistant for a consumer protection attorney in the Northern District of Georgia. You specialize in FCRA, FDCPA, and TCPA litigation.
+
+You serve TWO roles in this conversation:
+1. LEGAL ADVISOR — Answer questions, give opinions, discuss case law, strategize, analyze issues
+2. COMPLAINT REVISER — When asked to change/add/remove content from the complaint
+
+WHEN ANSWERING QUESTIONS OR GIVING OPINIONS:
+- Be direct and specific
+- Cite relevant statutes and case law
+- Give honest assessments of strengths and weaknesses
+- Reference the current complaint and case facts when relevant
+- Share strategic insights about litigation approach
+
+WHEN REVISING THE COMPLAINT:
+- Start your response with "REVISED COMPLAINT:" followed by the complete updated text
+- NEVER add defendants, parties, or facts not requested
+- CONDENSE counts: same violation by multiple defendants = ONE count
+- Number ALL paragraphs sequentially
+- NO markdown — plain text only
+- Use standard damages language and willful/negligent closing in every count
+
+VALID FCRA STATUTES FOR COUNTS:
+CRA: §1681e(b), §1681i(a)(1)(A), §1681i(a)(2)(A), §1681i(a)(4), §1681i(a)(5)(A), §1681i(a)(5)(B), §1681g, §1681i(c)
+Furnishers: §1681s-2(b) (NEVER §1681s-2(a))
+FDCPA: §1692c(c), §1692e, §1692f, §1692g
+TCPA: §227(b)(1)(A)(iii), §227(b)(1)(B), §227(c)
+Georgia FBPA: O.C.G.A. §10-1-390 et seq. (NEVER §34-6-2)
+
+HOW TO DETERMINE YOUR RESPONSE:
+- If the message is clearly asking for a revision/change/addition/removal → revise and return full complaint with "REVISED COMPLAINT:" prefix
+- If the message is a question, request for opinion, or discussion → just answer conversationally
+- If unclear, answer the question AND ask if they want you to revise the complaint based on your answer
+
+Be concise but thorough. The attorney's time is valuable."""
+
+    if reference_context:
+        system_prompt += f"\n\n--- REFERENCE CASE STYLE ---\n{reference_context}"
+    if case_law_context:
+        system_prompt += f"\n\n--- RELEVANT CASE LAW ---\n{case_law_context}"
+    if memory_context:
+        system_prompt += f"\n\n--- MEMORY ---\n{memory_context}"
+
+    # Build messages
+    messages = []
+    for turn in (db_history or [])[-6:]:
+        if turn.get("role") and turn.get("content"):
+            messages.append({"role": turn["role"], "content": turn["content"][:2000]})
+    for turn in (chat_history or [])[-8:]:
+        if turn.get("role") and turn.get("content"):
+            messages.append({"role": turn["role"], "content": turn["content"][:3000]})
+
+    # Current user message
+    user_content = ""
+    if complaint_text:
+        user_content += f"CURRENT COMPLAINT (v latest):\n---\n{complaint_text[:12000]}\n---\n\n"
+    if case_facts:
+        user_content += f"CASE FACTS:\n{case_facts[:3000]}\n\n"
+    if attachment_text:
+        user_content += f"ATTACHMENTS:\n{attachment_text}\n\n"
+    user_content += f"ATTORNEY: {message}"
+
+    messages.append({"role": "user", "content": user_content})
+
+    client = anthropic.Anthropic()
+
+    async def generate():
+        full_response = ""
+        try:
+            with client.messages.stream(
+                model="claude-haiku-4-5",
+                max_tokens=16384,
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    full_response += text
+                    yield f"data: {text}\n\n"
+            yield "data: [DONE]\n\n"
+
+            # Save conversation to revision_history for continuity
+            try:
+                updated_history = (db_history or []) + [
+                    {"role": "user", "content": message[:2000]},
+                    {"role": "assistant", "content": full_response[:2000]},
+                ]
+                updated_history = updated_history[-20:]
+                supabase.table("cases").update({
+                    "revision_history": updated_history,
+                }).eq("id", session_id).execute()
+            except Exception:
+                pass
+
+            # Extract memories (non-blocking)
+            try:
+                import asyncio
+                from utils.memory import extract_memories_from_draft
+                asyncio.create_task(
+                    extract_memories_from_draft(
+                        session_id=session_id,
+                        case_id=session_id,
+                        attorney_id=profile.get("id"),
+                        revision_message=message,
+                        revised_output=full_response[:1000],
+                    )
+                )
+            except Exception:
+                pass
+
+            # If it's a revision, save new complaint version
+            if "REVISED COMPLAINT:" in full_response:
+                revised = full_response.split("REVISED COMPLAINT:", 1)[1].strip()
+                if len(revised) > 1000:
+                    try:
+                        version_q = supabase.table("complaints").select("version").eq("case_id", session_id).order("version", desc=True).limit(1).execute()
+                        next_v = (version_q.data[0]["version"] + 1) if version_q.data else 1
+                        if next_v > 1:
+                            supabase.table("complaints").update({"is_current": False}).eq("case_id", session_id).execute()
+                        supabase.table("complaints").insert({
+                            "case_id": session_id,
+                            "complaint_text": revised,
+                            "version": next_v,
+                            "is_current": True,
+                        }).execute()
+                    except Exception as e:
+                        logger.warning(f"Could not save revised complaint: {e}")
+
+        except Exception as e:
+            yield f"data: Error: {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /dispute-chat — streaming chat for dispute letter revisions
 # ---------------------------------------------------------------------------
 

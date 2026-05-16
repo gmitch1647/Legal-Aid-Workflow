@@ -369,6 +369,51 @@ export async function reviseDraft(sessionId, message, complaintText, attachmentP
   });
 }
 
+export async function streamDraftChat(sessionId, message, complaintText, attachmentPaths, history, onToken) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/draft/${sessionId}/chat-stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      message,
+      complaint_text: complaintText,
+      attachment_paths: attachmentPaths || [],
+      history: history || [],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Chat failed' }));
+    throw new Error(err.detail || 'Chat failed');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') break;
+        fullText += data;
+        onToken(fullText);
+      }
+    }
+  }
+
+  return fullText;
+}
+
 /**
  * Download the current complaint as a formatted Word document.
  * Returns a Blob that can be saved via URL.createObjectURL.
