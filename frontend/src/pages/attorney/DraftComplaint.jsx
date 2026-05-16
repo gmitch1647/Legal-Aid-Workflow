@@ -27,7 +27,11 @@ import {
   listDrafts,
   listDraftVersions,
   restoreDraftVersion,
+  getCases,
+  getCase,
+  getDocuments,
 } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -96,6 +100,79 @@ export default function DraftComplaint() {
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
+  // ── Client / Case linking ─────────────────────────────────────────────
+  const [clients, setClients] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [clientCases, setClientCases] = useState([]);
+  const [loadingClients, setLoadingClients] = useState(false);
+  const [existingComplaint, setExistingComplaint] = useState('');
+
+  async function loadClients() {
+    setLoadingClients(true);
+    try {
+      const { data } = await supabase.from('profiles').select('id, full_name, email, county, state, address').eq('role', 'client').order('full_name');
+      setClients(data || []);
+    } catch (err) { console.error(err); }
+    finally { setLoadingClients(false); }
+  }
+
+  async function selectClient(clientId) {
+    setSelectedClientId(clientId);
+    const client = clients.find(c => c.id === clientId);
+    if (client) {
+      setPlaintiffName(client.full_name || '');
+      setPlaintiffCounty(client.county || '');
+    }
+    // Load client's cases
+    try {
+      const cases = await getCases({ client_id: clientId });
+      setClientCases(Array.isArray(cases) ? cases : []);
+    } catch (err) {
+      console.error('Failed to load client cases:', err);
+      setClientCases([]);
+    }
+  }
+
+  async function selectCase(caseId) {
+    try {
+      const caseData = await getCase(caseId);
+      setSelectedCase(caseData);
+
+      // Auto-fill case facts if available
+      if (caseData.case_facts && !caseFacts) {
+        setCaseFacts(caseData.case_facts);
+      }
+      if (caseData.damages_description && !damages) {
+        setDamages(caseData.damages_description);
+      }
+
+      // Load existing complaint if there is one
+      const { data: complaints } = await supabase
+        .from('complaints')
+        .select('complaint_text, version')
+        .eq('case_id', caseId)
+        .eq('is_current', true)
+        .limit(1);
+      if (complaints && complaints[0]) {
+        setExistingComplaint(complaints[0].complaint_text || '');
+      }
+
+      // Load case documents for drag-over context
+      try {
+        const docs = await getDocuments(caseId);
+        if (docs && docs.length > 0) {
+          setUploadedDocs(prev => [
+            ...prev,
+            ...docs.map(d => ({ name: d.file_name, storage_path: d.storage_path, size: d.file_size, fromCase: true }))
+          ]);
+        }
+      } catch {}
+    } catch (err) {
+      console.error('Failed to load case:', err);
+    }
+  }
+
   // ── Pipeline / output state ───────────────────────────────────────────
   const [outputState, setOutputState] = useState('idle'); // idle | running | complete | error
   const [sessionId, setSessionId] = useState(null);
@@ -140,6 +217,7 @@ export default function DraftComplaint() {
   useEffect(() => {
     loadKnownDefendants();
     loadRecentDrafts();
+    loadClients();
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
@@ -280,7 +358,10 @@ export default function DraftComplaint() {
       case_facts: (
         (documentType === 'motion' && motionType ? `MOTION TYPE: ${motionType}\n\n` : '') +
         (documentType === 'discovery' && discoveryType ? `DISCOVERY TYPE: ${discoveryType}\n\n` : '') +
-        caseFacts
+        caseFacts +
+        (existingComplaint && documentType !== 'complaint'
+          ? `\n\n=== EXISTING COMPLAINT ON FILE (use as reference for facts, parties, and counts) ===\n${existingComplaint.slice(0, 15000)}`
+          : '')
       ),
       damages_description: damages,
       jury_demand: juryDemand,
@@ -501,6 +582,47 @@ export default function DraftComplaint() {
                 </button>
               ))}
             </div>
+          </Card>
+
+          {/* Client / Case Selector */}
+          <Card>
+            <SectionLabel>LINK TO CLIENT</SectionLabel>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-[10px]">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Select Client (auto-fills info)</label>
+                <select value={selectedClientId} onChange={(e) => selectClient(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">— Manual entry —</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>)}
+                </select>
+              </div>
+              {clientCases.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Existing Case (loads complaint + docs)</label>
+                  <select value={selectedCase?.id || ''} onChange={(e) => e.target.value && selectCase(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">— New draft (no case) —</option>
+                    {clientCases.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.case_facts ? c.case_facts.slice(0, 50) + '...' : c.status} ({new Date(c.created_at).toLocaleDateString()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+            {existingComplaint && documentType !== 'complaint' && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Existing complaint loaded — will be used as reference for {documentType} drafting.
+              </div>
+            )}
+            {selectedCase && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                <FileText className="w-3.5 h-3.5" />
+                Case linked — documents and facts loaded. Switch document type above to draft discovery, motions, etc.
+              </div>
+            )}
           </Card>
 
           {/* Plaintiff info */}
