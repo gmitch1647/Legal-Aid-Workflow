@@ -15,7 +15,8 @@ from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-5"
+MODEL = "claude-haiku-4-5"
+MODEL_DEEP = "claude-sonnet-4-5"
 
 
 def _get_client():
@@ -429,3 +430,120 @@ async def chat(
             "content": error_msg,
             "metadata": {"error": True},
         }
+
+
+# ---------------------------------------------------------------------------
+# Streaming chat function — yields tokens as they arrive
+# ---------------------------------------------------------------------------
+
+async def stream_chat(
+    conversation_id: str,
+    agent_type: str,
+    user_message: str,
+    case_id: str | None = None,
+):
+    """Stream a response token-by-token. Yields text chunks as they arrive."""
+    supabase = get_supabase()
+
+    system_prompt = AGENT_SYSTEM_PROMPTS.get(agent_type, AGENT_SYSTEM_PROMPTS["general"])
+
+    # Inject memory (fast — just DB reads)
+    from utils.memory import get_full_memory_context
+    conv_resp = supabase.table("conversations").select("user_id").eq("id", conversation_id).limit(1).execute()
+    attorney_id = conv_resp.data[0]["user_id"] if conv_resp.data else None
+
+    memory_context = get_full_memory_context(case_id, attorney_id) if attorney_id else ""
+    if memory_context:
+        system_prompt += (
+            "\n\n--- MEMORY (learned from past interactions) ---\n"
+            f"{memory_context}"
+        )
+
+    if case_id:
+        case_context = _build_case_context(case_id)
+        if case_context:
+            system_prompt += f"\n\n--- CASE CONTEXT ---\n{case_context}"
+
+    # Load conversation history
+    history = _load_conversation_history(conversation_id)
+    messages = history + [{"role": "user", "content": user_message}]
+
+    # Save user message
+    supabase.table("conversation_messages").insert({
+        "conversation_id": conversation_id,
+        "role": "user",
+        "content": user_message,
+    }).execute()
+
+    full_response = ""
+
+    try:
+        client = _get_client()
+        system_blocks = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        with client.messages.stream(
+            model=MODEL,
+            max_tokens=4096,
+            system=system_blocks,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                full_response += text
+                yield text
+
+        # Save full response to DB
+        supabase.table("conversation_messages").insert({
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "content": full_response,
+        }).execute()
+
+        # Memory extraction (async, non-blocking)
+        if attorney_id:
+            import asyncio
+            from utils.memory import extract_memories_from_conversation
+            all_msgs = messages + [{"role": "assistant", "content": full_response}]
+            asyncio.create_task(
+                extract_memories_from_conversation(
+                    conversation_id=conversation_id,
+                    case_id=case_id,
+                    attorney_id=attorney_id,
+                    recent_messages=all_msgs,
+                )
+            )
+
+        # Auto-title with Haiku (fast, non-blocking)
+        if len(history) == 0:
+            try:
+                import asyncio
+                async def _set_title():
+                    try:
+                        title_resp = client.messages.create(
+                            model=MODEL,
+                            max_tokens=30,
+                            messages=[{"role": "user", "content": f"Generate a short title (under 6 words) for: \"{user_message[:200]}\" Return ONLY the title."}],
+                        )
+                        title = title_resp.content[0].text.strip().strip('"')
+                        supabase.table("conversations").update({"title": title}).eq("id", conversation_id).execute()
+                    except Exception:
+                        pass
+                asyncio.create_task(_set_title())
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.error(f"Streaming agent error: {e}")
+        error_msg = f"Error: {str(e)}"
+        yield error_msg
+
+        supabase.table("conversation_messages").insert({
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "content": error_msg,
+        }).execute()

@@ -6,6 +6,7 @@ import {
   getConversation,
   createConversation,
   sendAgentMessage,
+  streamAgentMessage,
   archiveConversation,
   getCases,
 } from '../../lib/api';
@@ -172,26 +173,41 @@ export default function AgentChat() {
       { role: 'user', content: userMsg, created_at: new Date().toISOString() },
     ]);
 
+    // Add a placeholder for streaming response
+    const streamMsgId = `stream-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      { role: 'assistant', content: '', created_at: new Date().toISOString(), _streamId: streamMsgId },
+    ]);
+
     try {
-      const response = await sendAgentMessage(activeConvo.id, userMsg);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: response.content, created_at: new Date().toISOString() },
-      ]);
+      await streamAgentMessage(activeConvo.id, userMsg, (partialText) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m._streamId === streamMsgId ? { ...m, content: partialText } : m
+          )
+        );
+      });
+
+      // Remove stream marker
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._streamId === streamMsgId ? { ...m, _streamId: undefined } : m
+        )
+      );
 
       // Refresh conversation list to update titles
       const convos = await getConversations();
       setConversations(convos || []);
     } catch (err) {
       console.error('Failed to send message:', err);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Sorry, I encountered an error. Please try again.',
-          created_at: new Date().toISOString(),
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._streamId === streamMsgId
+            ? { ...m, content: 'Sorry, I encountered an error. Please try again.', _streamId: undefined }
+            : m
+        )
+      );
     } finally {
       setSending(false);
     }

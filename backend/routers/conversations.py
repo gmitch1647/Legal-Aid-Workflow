@@ -205,6 +205,58 @@ async def send_chat_message(
 
 
 # ---------------------------------------------------------------------------
+# POST /{conversation_id}/stream — streaming chat response
+# ---------------------------------------------------------------------------
+
+@router.post("/{conversation_id}/stream")
+async def stream_chat_message(
+    conversation_id: str,
+    body: ChatMessage,
+    authorization: str = Header(...),
+):
+    """Send a message and stream the response token-by-token via SSE."""
+    from fastapi.responses import StreamingResponse
+    from agents.interactive_agent import stream_chat
+
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+
+    convo_resp = (
+        supabase.table("conversations")
+        .select("*")
+        .eq("id", conversation_id)
+        .eq("user_id", profile["id"])
+        .limit(1)
+        .execute()
+    )
+    if not convo_resp.data:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    convo = convo_resp.data[0]
+
+    async def event_generator():
+        async for token in stream_chat(
+            conversation_id=conversation_id,
+            agent_type=convo["agent_type"],
+            user_message=body.message,
+            case_id=convo.get("case_id"),
+        ):
+            yield f"data: {token}\n\n"
+        yield "data: [DONE]\n\n"
+
+    # Update conversation timestamp
+    supabase.table("conversations").update({
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", conversation_id).execute()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # DELETE /{conversation_id} — archive a conversation
 # ---------------------------------------------------------------------------
 

@@ -248,6 +248,46 @@ export async function sendAgentMessage(conversationId, message) {
   });
 }
 
+export async function streamAgentMessage(conversationId, message, onToken) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/conversations/${conversationId}/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ message }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Stream failed' }));
+    throw new Error(err.detail || 'Stream failed');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') break;
+        fullText += data;
+        onToken(fullText);
+      }
+    }
+  }
+
+  return fullText;
+}
+
 export async function archiveConversation(id) {
   return request(`/conversations/${id}`, {
     method: 'DELETE',
