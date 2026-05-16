@@ -7,6 +7,8 @@ import {
 import {
   startDraft, getDraftStatus, getDraftResult, downloadDraftDocx, reviseDraft,
   analyzeCreditReport,
+  getDisputeSessions, getDisputeSession, createDisputeSession,
+  updateDisputeSession, deleteDisputeSession,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { extractTextFromPDF } from '../../lib/disputer/pdfExtractor';
@@ -90,15 +92,115 @@ export default function DisputeLetters() {
   const [clientMode, setClientMode] = usePersisted('clientMode', '');
   const [loadingClients, setLoadingClients] = useState(false);
 
+  // Database persistence
+  const [currentSessionId, setCurrentSessionId] = usePersisted('currentSessionId', null);
+  const [savedSessions, setSavedSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
+  const [showSavedPanel, setShowSavedPanel] = useState(false);
+
+  // Load saved sessions on mount
+  useEffect(() => {
+    loadSavedSessions();
+  }, []);
+
+  async function loadSavedSessions() {
+    setLoadingSessions(true);
+    try {
+      const data = await getDisputeSessions();
+      setSavedSessions(data || []);
+    } catch (err) { console.error('Failed to load dispute sessions:', err); }
+    finally { setLoadingSessions(false); }
+  }
+
+  async function saveSession() {
+    if (!userInfo.name) return;
+    setSaving(true);
+    try {
+      const payload = {
+        client_name: userInfo.name,
+        client_dob: userInfo.dob,
+        client_address: userInfo.address,
+        client_city_state_zip: userInfo.cityStateZip,
+        client_ssn_last4: userInfo.ssnLast4,
+        client_id: selectedClientId || null,
+        accounts,
+        letters,
+        status: Object.keys(letters).length > 0 ? 'letters_generated' : 'draft',
+      };
+
+      let result;
+      if (currentSessionId) {
+        result = await updateDisputeSession(currentSessionId, payload);
+      } else {
+        result = await createDisputeSession(payload);
+        setCurrentSessionId(result.id);
+      }
+      setLastSaved(new Date());
+      loadSavedSessions();
+    } catch (err) {
+      console.error('Save failed:', err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadSession(sessionId) {
+    try {
+      const data = await getDisputeSession(sessionId);
+      setCurrentSessionId(data.id);
+      setUserInfo({
+        name: data.client_name || '',
+        dob: data.client_dob || '',
+        address: data.client_address || '',
+        cityStateZip: data.client_city_state_zip || '',
+        ssnLast4: data.client_ssn_last4 || '',
+      });
+      setAccounts(data.accounts || []);
+      setLetters(data.letters || {});
+      setSelectedClientId(data.client_id || '');
+      setClientMode(data.client_id ? 'existing' : (data.client_name ? 'new' : ''));
+      setStep(data.accounts?.length > 0 ? (Object.keys(data.letters || {}).length > 0 ? 3 : 2) : 1);
+      setShowSavedPanel(false);
+    } catch (err) {
+      console.error('Failed to load session:', err);
+    }
+  }
+
+  async function deleteSavedSession(sessionId) {
+    if (!confirm('Delete this dispute session?')) return;
+    try {
+      await deleteDisputeSession(sessionId);
+      if (currentSessionId === sessionId) setCurrentSessionId(null);
+      loadSavedSessions();
+    } catch (err) {
+      console.error('Delete failed:', err);
+    }
+  }
+
+  function startNewSession() {
+    setCurrentSessionId(null);
+    setAccounts([]);
+    setLetters({});
+    setStep(1);
+    setClientMode('');
+    setSelectedClient(null);
+    setSelectedClientId('');
+    setUserInfo({ name: '', dob: '', address: '', cityStateZip: '', ssnLast4: '' });
+    setLastSaved(null);
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+  }
+
   // Persist key state to sessionStorage on every change
   useEffect(() => {
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
         step, userInfo, accounts, activeTab, letters, activeLetterTab,
-        selectedClientId, selectedClient, clientMode,
+        selectedClientId, selectedClient, clientMode, currentSessionId,
       }));
     } catch {}
-  }, [step, userInfo, accounts, activeTab, letters, activeLetterTab, selectedClientId, selectedClient, clientMode]);
+  }, [step, userInfo, accounts, activeTab, letters, activeLetterTab, selectedClientId, selectedClient, clientMode, currentSessionId]);
 
   async function loadClients() {
     setLoadingClients(true);
@@ -363,6 +465,32 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
     setGeneratingLetters(false);
     setStep(3);
     setActiveLetterTab(Object.keys(newLetters)[0] || 'experian');
+
+    // Auto-save after generating letters
+    if (userInfo.name) {
+      try {
+        const payload = {
+          client_name: userInfo.name,
+          client_dob: userInfo.dob,
+          client_address: userInfo.address,
+          client_city_state_zip: userInfo.cityStateZip,
+          client_ssn_last4: userInfo.ssnLast4,
+          client_id: selectedClientId || null,
+          accounts,
+          letters: newLetters,
+          status: 'letters_generated',
+        };
+        let result;
+        if (currentSessionId) {
+          result = await updateDisputeSession(currentSessionId, payload);
+        } else {
+          result = await createDisputeSession(payload);
+          setCurrentSessionId(result.id);
+        }
+        setLastSaved(new Date());
+        loadSavedSessions();
+      } catch (err) { console.error('Auto-save failed:', err); }
+    }
   }
 
   async function copyLetter(bureau) {
@@ -395,10 +523,85 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
   return (
     <div className="max-w-6xl mx-auto">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-medium text-slate-900">Credit Report Disputer</h1>
-        <p className="text-sm text-slate-500 mt-1">Analyze credit reports and generate FCRA-compliant dispute letters</p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-medium text-slate-900">Credit Report Disputer</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            {currentSessionId ? (
+              <span>Editing: <strong>{userInfo.name || 'Untitled'}</strong>
+                {lastSaved && <span className="text-emerald-600 ml-2">· Saved {lastSaved.toLocaleTimeString()}</span>}
+              </span>
+            ) : 'Analyze credit reports and generate FCRA-compliant dispute letters'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowSavedPanel(!showSavedPanel)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">
+            <FileText className="w-4 h-4" /> Saved ({savedSessions.length})
+          </button>
+          <button onClick={saveSession} disabled={saving || !userInfo.name}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+            {currentSessionId ? 'Save' : 'Save New'}
+          </button>
+          {currentSessionId && (
+            <button onClick={startNewSession}
+              className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">
+              <Plus className="w-4 h-4" /> New
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Saved Sessions Panel */}
+      {showSavedPanel && (
+        <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
+            <h3 className="text-sm font-semibold text-slate-700">Saved Disputes</h3>
+            <button onClick={() => setShowSavedPanel(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          </div>
+          {loadingSessions ? (
+            <div className="p-6 text-center text-sm text-slate-400"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Loading...</div>
+          ) : savedSessions.length === 0 ? (
+            <div className="p-6 text-center text-sm text-slate-400">No saved disputes yet. Click "Save New" to save your current work.</div>
+          ) : (
+            <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+              {savedSessions.map(s => (
+                <div key={s.id}
+                  className={`flex items-center gap-3 px-4 py-3 hover:bg-blue-50/50 cursor-pointer transition ${
+                    currentSessionId === s.id ? 'bg-blue-50 border-l-2 border-blue-500' : ''
+                  }`}
+                  onClick={() => loadSession(s.id)}>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-slate-900 truncate">{s.client_name}</div>
+                    <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-0.5">
+                      <span>{s.account_count} account{s.account_count !== 1 ? 's' : ''}</span>
+                      <span>·</span>
+                      <span className={`px-1.5 py-0.5 rounded-full font-medium ${
+                        s.status === 'letters_generated' ? 'bg-emerald-100 text-emerald-700' :
+                        s.status === 'sent' ? 'bg-blue-100 text-blue-700' :
+                        'bg-slate-100 text-slate-600'
+                      }`}>
+                        {s.status === 'letters_generated' ? 'Letters Ready' :
+                         s.status === 'sent' ? 'Sent' : 'Draft'}
+                      </span>
+                      <span>·</span>
+                      <span>{new Date(s.updated_at).toLocaleDateString()}</span>
+                      {s.bureau_counts && Object.entries(s.bureau_counts).map(([b, c]) => (
+                        <span key={b} className="px-1 bg-slate-100 rounded text-[9px]">{b}: {c}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); deleteSavedSession(s.id); }}
+                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg shrink-0">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Disclaimer */}
       <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
@@ -718,7 +921,7 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
 
           <div className="flex gap-3">
             <button onClick={() => setStep(2)} className="px-5 py-3 text-sm text-slate-600">← Back to Accounts</button>
-            <button onClick={() => { setAccounts([]); setLetters({}); setStep(1); setClientMode(''); setSelectedClient(null); setSelectedClientId(''); setUserInfo({ name: '', dob: '', address: '', cityStateZip: '', ssnLast4: '' }); try { sessionStorage.removeItem(STORAGE_KEY); } catch {} }}
+            <button onClick={startNewSession}
               className="px-5 py-3 border border-slate-300 text-sm text-slate-600 rounded-lg hover:bg-slate-50">
               <RefreshCw className="w-3.5 h-3.5 inline mr-1" /> Reset All
             </button>

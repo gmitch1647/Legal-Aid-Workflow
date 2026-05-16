@@ -385,6 +385,36 @@ export async function analyzeCreditReport(reportText, bureau = '') {
 }
 
 // ---------------------------------------------------------------------------
+// Dispute Sessions
+// ---------------------------------------------------------------------------
+
+export async function getDisputeSessions() {
+  return request('/disputes');
+}
+
+export async function getDisputeSession(id) {
+  return request(`/disputes/${id}`);
+}
+
+export async function createDisputeSession(data) {
+  return request('/disputes', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateDisputeSession(id, data) {
+  return request(`/disputes/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteDisputeSession(id) {
+  return request(`/disputes/${id}`, { method: 'DELETE' });
+}
+
+// ---------------------------------------------------------------------------
 // Calendar
 // ---------------------------------------------------------------------------
 
