@@ -774,6 +774,109 @@ async def download_complaint_docx(
 
 
 # ---------------------------------------------------------------------------
+# POST /dispute-chat — streaming chat for dispute letter revisions
+# ---------------------------------------------------------------------------
+
+
+@router.post("/dispute-chat")
+async def dispute_chat_stream(
+    request: Request,
+    authorization: str = Header(default=None),
+):
+    """Streaming chat for the dispute letter editor.
+    Accepts the current letter text + user message, streams back a revised version or answer."""
+    from fastapi.responses import StreamingResponse
+    import anthropic
+
+    profile = await _get_current_user(authorization)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    message = body.get("message", "")
+    letter_text = body.get("letter_text", "")
+    accounts_context = body.get("accounts_context", "")
+    chat_history = body.get("history", [])
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    # Build system prompt
+    system_prompt = """You are a credit dispute letter assistant. You help an attorney revise and improve FCRA dispute letters.
+
+You have deep knowledge of:
+- Metro 2 format compliance and reporting violations
+- FCRA §§ 1681e(b), 1681i(a), 1681s-2(b) requirements
+- Proper dispute letter language and structure
+- Consumer statement writing (100-word personal statements)
+- Bureau-specific formatting and addresses
+
+When the attorney asks you to:
+- REVISE the letter: Return the COMPLETE revised letter text, not just the changed parts. Start your response with "REVISED LETTER:" followed by the full letter.
+- ADD accounts or language: Incorporate into the existing letter and return the full revised version.
+- REMOVE sections: Remove them and return the full revised version.
+- ASK A QUESTION: Answer concisely and helpfully.
+- CHANGE TONE/STYLE: Apply the change to the full letter and return it.
+
+RULES:
+- Always maintain proper FCRA citation format
+- Keep dispute language assertive but professional
+- Include specific Metro 2 violations when applicable
+- Each disputed account should reference specific inaccuracies
+- Consumer statements must be ~100 words, first-person, unique per account
+- Be fast and concise in your responses"""
+
+    # Inject memory
+    try:
+        from utils.memory import get_attorney_memories
+        mem = get_attorney_memories(profile.get("id"), limit=10)
+        if mem:
+            system_prompt += f"\n\n--- ATTORNEY PREFERENCES ---\n{mem}"
+    except Exception:
+        pass
+
+    # Build messages
+    messages = []
+    for turn in (chat_history or [])[-10:]:
+        if turn.get("role") and turn.get("content"):
+            messages.append({"role": turn["role"], "content": turn["content"][:3000]})
+
+    user_content = message
+    if letter_text:
+        user_content = f"CURRENT DISPUTE LETTER:\n---\n{letter_text}\n---\n\n"
+        if accounts_context:
+            user_content += f"ACCOUNT DETAILS:\n{accounts_context}\n\n"
+        user_content += f"ATTORNEY'S REQUEST: {message}"
+
+    messages.append({"role": "user", "content": user_content})
+
+    client = anthropic.Anthropic()
+
+    async def generate():
+        try:
+            with client.messages.stream(
+                model="claude-haiku-4-5",
+                max_tokens=8192,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield f"data: {text}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: Error: {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /analyze-credit-report — AI analysis of credit report text
 # ---------------------------------------------------------------------------
 

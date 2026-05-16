@@ -2,11 +2,11 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   FileText, Send, Download, Copy, Plus, X, Upload, Trash2,
   Loader2, CheckCircle2, AlertCircle, Mail, User, ChevronDown,
-  ChevronRight, RefreshCw, Eye, Shield, FileUp,
+  ChevronRight, RefreshCw, Eye, Shield, FileUp, MessageSquare,
 } from 'lucide-react';
 import {
   startDraft, getDraftStatus, getDraftResult, downloadDraftDocx, reviseDraft,
-  analyzeCreditReport,
+  analyzeCreditReport, streamDisputeChat,
   getDisputeSessions, getDisputeSession, createDisputeSession,
   updateDisputeSession, deleteDisputeSession,
 } from '../../lib/api';
@@ -919,6 +919,20 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
             </div>
           )}
 
+          {/* Dispute Chat */}
+          {letters[activeLetterTab] && !letters[activeLetterTab].error && (
+            <DisputeChat
+              letterText={letters[activeLetterTab]?.text || ''}
+              accounts={accounts.filter(a => a.bureau === activeLetterTab)}
+              onLetterUpdate={(newText) => {
+                setLetters(prev => ({
+                  ...prev,
+                  [activeLetterTab]: { ...prev[activeLetterTab], text: newText },
+                }));
+              }}
+            />
+          )}
+
           <div className="flex gap-3">
             <button onClick={() => setStep(2)} className="px-5 py-3 text-sm text-slate-600">← Back to Accounts</button>
             <button onClick={startNewSession}
@@ -958,6 +972,155 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Dispute Chat — streaming AI assistant for letter revisions
+// ---------------------------------------------------------------------------
+
+function DisputeChat({ letterText, accounts, onLetterUpdate }) {
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatSending, setChatSending] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const chatEndRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
+
+  async function handleChatSend() {
+    if (!chatInput.trim() || chatSending) return;
+
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatSending(true);
+
+    const newMessages = [...chatMessages, { role: 'user', content: userMsg }];
+    setChatMessages(newMessages);
+
+    // Add streaming placeholder
+    const streamId = `stream-${Date.now()}`;
+    setChatMessages(prev => [...prev, { role: 'assistant', content: '', _streamId: streamId }]);
+
+    try {
+      const accountsContext = accounts.map((a, i) =>
+        `${i + 1}. ${a.creditor} (${a.accountNumber}) — ${a.disputeType} — Balance: ${a.balance || 'N/A'} — Status: ${a.payStatus || 'N/A'}`
+      ).join('\n');
+
+      const fullText = await streamDisputeChat(
+        userMsg,
+        letterText,
+        accountsContext,
+        chatMessages.slice(-10),
+        (partial) => {
+          setChatMessages(prev =>
+            prev.map(m => m._streamId === streamId ? { ...m, content: partial } : m)
+          );
+        }
+      );
+
+      // Finalize
+      setChatMessages(prev =>
+        prev.map(m => m._streamId === streamId ? { ...m, _streamId: undefined } : m)
+      );
+
+      // If the response contains a revised letter, update the letter
+      if (fullText.includes('REVISED LETTER:')) {
+        const revised = fullText.split('REVISED LETTER:')[1].trim();
+        if (revised.length > 200) {
+          onLetterUpdate(revised);
+        }
+      }
+
+    } catch (err) {
+      setChatMessages(prev =>
+        prev.map(m => m._streamId === streamId
+          ? { ...m, content: `Error: ${err.message}`, _streamId: undefined }
+          : m
+        )
+      );
+    } finally {
+      setChatSending(false);
+      if (inputRef.current) inputRef.current.focus();
+    }
+  }
+
+  if (!isOpen) {
+    return (
+      <button onClick={() => setIsOpen(true)}
+        className="w-full flex items-center justify-center gap-2 py-3 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 transition">
+        <MessageSquare className="w-4 h-4" /> Chat with AI — revise, edit, or ask questions about this letter
+      </button>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-white">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-4 h-4" />
+          <span className="text-sm font-medium">Dispute Assistant</span>
+          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full">Streaming</span>
+        </div>
+        <button onClick={() => setIsOpen(false)} className="text-white/60 hover:text-white">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Messages */}
+      <div className="h-72 overflow-y-auto p-4 space-y-3 bg-slate-50">
+        {chatMessages.length === 0 && (
+          <div className="text-center py-8 text-slate-400 text-xs">
+            <MessageSquare className="w-6 h-6 mx-auto mb-2 opacity-50" />
+            <p>Ask me to revise the letter, add accounts, change language, or explain something.</p>
+            <div className="flex flex-wrap gap-1.5 justify-center mt-3">
+              {['Make it more aggressive', 'Add Metro 2 violation language', 'Rewrite the consumer statement', 'Add a demand for method of verification'].map(s => (
+                <button key={s} onClick={() => { setChatInput(s); if (inputRef.current) inputRef.current.focus(); }}
+                  className="px-2.5 py-1 bg-white border border-slate-200 rounded-full text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600 transition">
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {chatMessages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+              msg.role === 'user'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white border border-slate-200 text-slate-800'
+            }`}>
+              <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed">{msg.content || (msg._streamId ? '...' : '')}</pre>
+            </div>
+          </div>
+        ))}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Input */}
+      <div className="flex items-center gap-2 p-3 border-t border-slate-200 bg-white">
+        <input
+          ref={inputRef}
+          value={chatInput}
+          onChange={(e) => setChatInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend(); } }}
+          placeholder="Tell the AI what to change..."
+          className="flex-1 rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          disabled={chatSending}
+        />
+        <button onClick={handleChatSend} disabled={chatSending || !chatInput.trim()}
+          className="p-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition">
+          {chatSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+        </button>
+      </div>
     </div>
   );
 }
