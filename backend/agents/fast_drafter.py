@@ -663,6 +663,110 @@ DOCUMENT_LABELS = {
 # ---------------------------------------------------------------------------
 
 
+def _load_discovery_knowledge(case_facts: str) -> str:
+    """Load relevant discovery templates from the knowledge base.
+
+    Reads files from backend/knowledge_base/discovery/ and selects
+    the most relevant ones based on case facts (CRA vs furnisher, etc.)
+    """
+    from pathlib import Path
+    import os
+
+    # Find the discovery knowledge base directory
+    possible_paths = [
+        Path(__file__).resolve().parent.parent / "knowledge_base" / "discovery",
+        Path.cwd() / "knowledge_base" / "discovery",
+        Path.cwd() / "backend" / "knowledge_base" / "discovery",
+        Path("/app") / "knowledge_base" / "discovery",
+    ]
+
+    kb_dir = None
+    for p in possible_paths:
+        if p.exists() and any(p.iterdir()):
+            kb_dir = p
+            break
+
+    if not kb_dir:
+        logger.debug("[fast_draft] Discovery knowledge base not found on disk, trying DB")
+        # Fallback: load from case_law table
+        try:
+            supabase = get_supabase()
+            resp = supabase.table("case_law").select("full_text, case_name").ilike("source_file", "%discovery%").limit(10).execute()
+            if resp.data:
+                parts = ["\n--- FCRA DISCOVERY REFERENCE LIBRARY ---\n"]
+                total = 0
+                for entry in resp.data:
+                    text = entry.get("full_text", "")
+                    if text and total + len(text) < 50000:
+                        parts.append(f"\n=== {entry['case_name']} ===\n{text[:8000]}")
+                        total += min(len(text), 8000)
+                return "\n".join(parts) if len(parts) > 1 else ""
+        except Exception:
+            pass
+        return ""
+
+    # Determine which files are most relevant based on case_facts
+    facts_lower = case_facts.lower()
+    is_cra = any(w in facts_lower for w in ["equifax", "experian", "transunion", "cra", "credit reporting agency", "bureau"])
+    is_furnisher = any(w in facts_lower for w in ["furnisher", "bank", "lender", "servicer", "creditor", "capital one", "chase", "wells fargo", "midland", "portfolio", "lvnv"])
+
+    # Always include strategy overview + master index
+    priority_files = ["discovery_00", "discovery_01"]
+
+    if is_cra:
+        priority_files.extend(["discovery_03", "discovery_04", "discovery_11"])
+    if is_furnisher:
+        priority_files.extend(["discovery_05", "discovery_06", "discovery_12"])
+
+    # Always include RFAs, subpoenas, and case law
+    priority_files.extend(["discovery_07", "discovery_09", "discovery_16"])
+
+    # Load files
+    parts = ["\n--- FCRA DISCOVERY REFERENCE LIBRARY ---\n"
+             "Use these templates and strategies as reference when drafting discovery. "
+             "Adapt to the specific case facts but maintain the level of detail shown here.\n"]
+
+    total_chars = 0
+    max_chars = 60000  # Cap to avoid blowing up context
+
+    # Load priority files first
+    loaded = set()
+    for prefix in priority_files:
+        for f in sorted(kb_dir.iterdir()):
+            if f.name.startswith(prefix) and f.suffix == ".md" and f.name not in loaded:
+                try:
+                    text = f.read_text(encoding="utf-8")
+                    if total_chars + len(text) > max_chars:
+                        text = text[:max_chars - total_chars]
+                    parts.append(f"\n=== {f.stem} ===\n{text}")
+                    total_chars += len(text)
+                    loaded.add(f.name)
+                except Exception:
+                    pass
+                if total_chars >= max_chars:
+                    break
+        if total_chars >= max_chars:
+            break
+
+    # Fill remaining space with other files
+    if total_chars < max_chars:
+        for f in sorted(kb_dir.iterdir()):
+            if f.suffix == ".md" and f.name not in loaded:
+                try:
+                    text = f.read_text(encoding="utf-8")
+                    remaining = max_chars - total_chars
+                    if remaining < 1000:
+                        break
+                    parts.append(f"\n=== {f.stem} ===\n{text[:remaining]}")
+                    total_chars += min(len(text), remaining)
+                    loaded.add(f.name)
+                except Exception:
+                    pass
+
+    logger.info(f"[fast_draft] Loaded {len(loaded)} discovery reference files ({total_chars} chars)")
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
 async def run_fast_draft(case_id: str, case_facts: str, damages_description: str, document_type: str = "complaint") -> dict:
     """Run the fast 2-call pipeline.
 
@@ -803,6 +907,11 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
         except Exception as e:
             logger.debug(f"[fast_draft] Memory retrieval skipped: {e}")
 
+        # Load discovery knowledge base if drafting discovery
+        discovery_knowledge = ""
+        if document_type == "discovery":
+            discovery_knowledge = _load_discovery_knowledge(case_facts)
+
         # Build system prompt with caching
         system_blocks = [
             {
@@ -811,6 +920,11 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
                 "cache_control": {"type": "ephemeral"},
             },
         ]
+        if discovery_knowledge:
+            system_blocks.append({
+                "type": "text",
+                "text": discovery_knowledge,
+            })
         if reference_context:
             system_blocks.append({
                 "type": "text",
