@@ -127,7 +127,73 @@ export default function DraftComplaint() {
     // Load client's cases
     try {
       const cases = await getCases({ client_id: clientId });
-      setClientCases(Array.isArray(cases) ? cases : []);
+      const caseList = Array.isArray(cases) ? cases : [];
+      setClientCases(caseList);
+
+      // Load ALL documents from all client cases
+      const allDocs = [];
+      for (const c of caseList.slice(0, 10)) {
+        try {
+          const docs = await getDocuments(c.id);
+          if (docs && docs.length > 0) {
+            docs.forEach(d => {
+              allDocs.push({
+                name: d.file_name,
+                storage_path: d.storage_path,
+                size: d.file_size,
+                fromCase: true,
+                caseId: c.id,
+              });
+            });
+          }
+        } catch {}
+      }
+
+      // Load existing complaints from client's cases
+      try {
+        const { data: complaints } = await supabase
+          .from('complaints')
+          .select('complaint_text, version, case_id')
+          .in('case_id', caseList.map(c => c.id))
+          .eq('is_current', true);
+        if (complaints && complaints.length > 0) {
+          complaints.forEach(comp => {
+            allDocs.push({
+              name: `Complaint v${comp.version} (Case ${comp.case_id.slice(0, 8)})`,
+              storage_path: `__complaint__:${comp.case_id}`,
+              size: comp.complaint_text?.length || 0,
+              fromCase: true,
+              isComplaint: true,
+            });
+          });
+          // Set the most recent complaint as reference
+          setExistingComplaint(complaints[0].complaint_text || '');
+        }
+      } catch {}
+
+      // Load dispute sessions for this client
+      try {
+        const { data: disputes } = await supabase
+          .from('dispute_sessions')
+          .select('id, client_name, letters, status, updated_at')
+          .eq('client_id', clientId)
+          .eq('status', 'letters_generated');
+        if (disputes && disputes.length > 0) {
+          disputes.forEach(d => {
+            allDocs.push({
+              name: `Dispute Letters — ${d.client_name} (${new Date(d.updated_at).toLocaleDateString()})`,
+              storage_path: `__dispute__:${d.id}`,
+              size: 0,
+              fromCase: true,
+              isDispute: true,
+            });
+          });
+        }
+      } catch {}
+
+      if (allDocs.length > 0) {
+        setUploadedDocs(prev => [...prev.filter(d => !d.fromCase), ...allDocs]);
+      }
     } catch (err) {
       console.error('Failed to load client cases:', err);
       setClientCases([]);
