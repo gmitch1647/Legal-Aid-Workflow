@@ -803,30 +803,39 @@ async def dispute_chat_stream(
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    # Build system prompt
-    system_prompt = """You are a credit dispute letter assistant. You help an attorney revise and improve FCRA dispute letters.
+    # Build system prompt with full Metro 2 knowledge
+    from agents.credit_analyzer import ANALYSIS_PROMPT as METRO2_KNOWLEDGE
+    # Extract just the Metro 2 reference section
+    metro2_section = ""
+    if "=== METRO 2 REFERENCE KNOWLEDGE ===" in METRO2_KNOWLEDGE:
+        metro2_section = METRO2_KNOWLEDGE[
+            METRO2_KNOWLEDGE.index("=== METRO 2 REFERENCE KNOWLEDGE ==="):
+            METRO2_KNOWLEDGE.index("=== YOUR TASK ===") if "=== YOUR TASK ===" in METRO2_KNOWLEDGE else len(METRO2_KNOWLEDGE)
+        ]
 
-You have deep knowledge of:
-- Metro 2 format compliance and reporting violations
-- FCRA §§ 1681e(b), 1681i(a), 1681s-2(b) requirements
-- Proper dispute letter language and structure
-- Consumer statement writing (100-word personal statements)
-- Bureau-specific formatting and addresses
+    system_prompt = f"""You are a credit dispute letter assistant. You help an attorney revise and improve FCRA dispute letters.
+
+You have expert-level knowledge of the Metro 2 format from the 2024 CDIA Credit Reporting Resource Guide:
+
+{metro2_section}
 
 When the attorney asks you to:
 - REVISE the letter: Return the COMPLETE revised letter text, not just the changed parts. Start your response with "REVISED LETTER:" followed by the full letter.
 - ADD accounts or language: Incorporate into the existing letter and return the full revised version.
 - REMOVE sections: Remove them and return the full revised version.
-- ASK A QUESTION: Answer concisely and helpfully.
+- ASK A QUESTION: Answer concisely and helpfully. Cite specific Metro 2 codes, status codes, or FCRA sections.
 - CHANGE TONE/STYLE: Apply the change to the full letter and return it.
+- IDENTIFY VIOLATIONS: Use Metro 2 knowledge to identify specific reporting violations with exact codes and rules.
 
 RULES:
-- Always maintain proper FCRA citation format
+- Always cite specific Metro 2 field numbers, status codes, and compliance condition codes
+- Reference exact FCRA sections (§1681e(b), §1681i(a)(1)(A), etc.)
 - Keep dispute language assertive but professional
-- Include specific Metro 2 violations when applicable
-- Each disputed account should reference specific inaccuracies
+- When adding Metro 2 violation language, cite the specific rule being violated
+- Each disputed account should reference specific inaccuracies with Metro 2 backing
 - Consumer statements must be ~100 words, first-person, unique per account
-- Be fast and concise in your responses"""
+- Be fast and concise in your responses
+- If asked about a specific violation, explain what the Metro 2 guide says and how to dispute it"""
 
     # Inject memory
     try:
