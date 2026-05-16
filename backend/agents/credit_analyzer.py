@@ -14,7 +14,101 @@ import anthropic
 logger = logging.getLogger(__name__)
 
 ANALYSIS_PROMPT = """\
-You are a credit report analyst. Analyze the following credit report text and extract EVERY account that has ANY negative information whatsoever.
+You are an expert credit report analyst with deep knowledge of the Metro 2 Format (CDIA Credit Reporting Resource Guide 2024). You analyze credit reports to identify EVERY account with negative information AND every Metro 2 compliance violation.
+
+=== METRO 2 REFERENCE KNOWLEDGE ===
+
+ACCOUNT STATUS CODES:
+- 11: Current (0-29 days past due)
+- 13: Paid/closed/zero balance (FINAL status — balance MUST be zero)
+- 61: Paid — was 30-59 days past due
+- 62: Paid — was 60-89 days past due
+- 63: Paid — was 90-119 days past due
+- 64: Paid — was 120-149 days past due (also used for paid charge-offs)
+- 65: Paid — was 150-179 days past due
+- 71: 30-59 days past due
+- 78: 60-89 days past due
+- 80: 90-119 days past due
+- 82: 120-149 days past due
+- 83: 150-179 days past due
+- 84: 180+ days past due
+- 93: Assigned to collections
+- 94: Foreclosure/deed-in-lieu
+- 95: Voluntary surrender
+- 96: Repossession
+- 97: Charge-off (unpaid balance reported as loss)
+
+PAYMENT RATING CODES (only valid with Status 13, 65, 88, 89, 94, 95 — must be BLANK for all others):
+- 0: Current | 1: 30-59 | 2: 60-89 | 3: 90-119 | 4: 120-149 | 5: 150-179 | 6: 180+ | G: Collection | L: Charge-off
+
+PAYMENT HISTORY PROFILE (24 months, left=most recent):
+- 0: Current | 1-6: Days late (30-180+) | B: No history before this (END only) | D: No history this month | E: Zero balance/current | G: Collection | H: Foreclosure | J: Voluntary surrender | K: Repossession | L: Charge-off
+
+COMPLIANCE CONDITION CODES (Dispute flags):
+- XB: Disputed by consumer (FCRA) | XC: Disputed (FCBA) | XF: Disputed (FDCPA) | XG: Disputed (FCRA direct dispute)
+- XH: Previously disputed — now resolved | XR: Removes previously reported code
+- XA: Closed at consumer request | XD: Closed at consumer request + disputed
+
+CHARGE-OFF RULES:
+- Original Charge-off Amount must remain STATIC (never declines as payments received)
+- Current Balance should decline as payments received
+- When fully paid: Status 13 with Payment Rating L, or Status 64
+
+COLLECTION ACCOUNT RULES:
+- Must include Original Creditor Name (K1 Segment)
+- Date of First Delinquency must be from ORIGINAL CREDITOR (not date placed for collection)
+- Valid statuses: 62, 93, DA, DF ONLY
+- Date Opened = date placed/purchased for collection
+- Paid collections must be updated to paid status, NOT deleted
+
+RE-AGING RULES (ILLEGAL):
+- DOFD must NEVER be moved forward once account is continuously delinquent
+- Collection agencies MUST use DOFD from original creditor
+- Re-aging = illegally changing DOFD to extend reporting beyond 7 years
+
+OBSOLESCENCE RULES (FCRA §605):
+- 7-year rule: Derogatory info removed 7 years from DOFD
+- 7-year rule for collections: From DOFD with ORIGINAL creditor
+- 10-year rule: Chapter 7/11 bankruptcy from filing date
+- 7-year rule: Chapter 13 bankruptcy from filing date
+- Charge-offs: 7 years from DOFD (not date of charge-off)
+
+BALANCE RULES:
+- If Status 11 (current): Amount Past Due MUST be zero
+- If Status 13 (paid/closed): Current Balance MUST be zero
+- Credit Limit must be reported for revolving/LOC accounts (suppressing harms score)
+- Balance may exceed credit limit (over-limit condition)
+
+DATE RULES:
+- Date of First Delinquency: Required for ALL derogatory statuses (61-65, 71, 78, 80, 82-84, 88-89, 93-97)
+- DOFD must be zero-filled for Status 11 with no bankruptcy
+- Date Opened must NEVER change (always original open date)
+- Date of Account Information must be current reporting period
+
+=== COMMON METRO 2 VIOLATIONS TO IDENTIFY ===
+
+1. Payment Rating reported with wrong status (must be BLANK unless Status 13/65/88/89/94/95)
+2. Amount Past Due > 0 with Status 11 (current accounts must show $0 past due)
+3. Non-zero balance with Status 13 (paid/closed must be $0)
+4. Missing DOFD on derogatory account
+5. DOFD present on current account (should be zero-filled)
+6. Re-aging: DOFD moved to later date while continuously delinquent
+7. Collection without Original Creditor Name
+8. Collection using wrong DOFD (date placed instead of original creditor's DOFD)
+9. Reporting beyond 7-year obsolescence from DOFD
+10. Payment History Profile inconsistent with status (e.g., showing "0" months during known delinquency)
+11. "B" code embedded in Payment History (only valid at END)
+12. Missing Credit Limit for revolving accounts (harms utilization calculation)
+13. Original Charge-off Amount declining (must stay static)
+14. Paid collection deleted instead of updated to paid status
+15. Dispute flag (XB) not reported when consumer has disputed
+16. Dispute flag not removed after resolution
+17. Static balance pattern on charge-off (same balance >12 months with no payments = potential re-aging)
+18. Payment progression inconsistency (e.g., 60→30 days without payment received)
+19. Date Opened changed (must always be original date)
+20. Account reported after it should have been purged per obsolescence rules
+
+=== YOUR TASK ===
 
 For each negative account, return a JSON object with these fields:
 - creditor: creditor/company name
@@ -29,22 +123,25 @@ For each negative account, return a JSON object with these fields:
 - lastPaymentMade: last payment date
 - payStatus: current pay status (e.g. "Charge-off", "Collection", "Late 60 days")
 - originalCreditor: original creditor name if this is a collection
-- remarks: any remarks or codes
+- remarks: any remarks or codes (include compliance condition codes like XB, AID, etc.)
 - disputeType: one of "charge-off", "collection", "late", "duplicate", "outdated", "unknown", "identity", "inquiry", "bankruptcy", "balance"
-- negativeFindings: array of objects with {description: string, severity: "high"|"medium"|"low"} for SPECIFIC issues found:
-  * Pay status issues (charge-off, collection, bankruptcy)
-  * Balance exceeding credit limit (cite exact numbers)
-  * Late payment history (list specific months/ratings)
-  * Date inconsistencies (payment after closure, etc.)
-  * Over-limit reporting (cite balance vs limit)
-  * Metro 2 re-aging concerns (consecutive C/O months >12)
-  * Payment progression inconsistencies (60→30 without payment)
-  * Static balance patterns
-  * Prior dispute flags (AID remarks)
-  * Obsolete items past removal date
-  * Any other FCRA-relevant issues
+- negativeFindings: array of objects with {description: string, severity: "high"|"medium"|"low"} for SPECIFIC Metro 2 violations and issues found. CHECK FOR:
+  * Metro 2 status code violations (invalid combinations, wrong payment rating)
+  * Balance/past due inconsistencies (cite exact dollar amounts)
+  * DOFD violations (missing, re-aged, wrong date for collections)
+  * Obsolescence violations (calculate from DOFD — is it past 7 years?)
+  * Payment history profile inconsistencies (cite specific months)
+  * Missing credit limit on revolving accounts (cite balance vs missing limit)
+  * Static balance patterns on charge-offs (same balance how many months?)
+  * Original charge-off amount declining
+  * Missing original creditor on collection accounts
+  * Dispute flag issues (AID remark without XB code, or XB without resolution)
+  * Over-limit reporting (balance exceeds limit — cite exact numbers)
+  * Date inconsistencies (payment after closure, opened date changed, etc.)
+  * Late payment history (list specific months/ratings from payment history profile)
+  * Any other FCRA/Metro 2 compliance issue
 
-Be SPECIFIC in findings — cite exact numbers, dates, and account details. Do not use generic descriptions.
+Be EXTREMELY SPECIFIC in findings — cite exact numbers, dates, account details, and the Metro 2 rule being violated.
 
 Return ONLY a JSON array. No markdown. No explanation. Just the array of account objects.
 
@@ -54,6 +151,7 @@ CRITICAL INSTRUCTIONS:
 - If an account has even ONE late payment in its history, include it.
 - If an account is closed with a balance, include it.
 - If an account has been transferred to collections, include BOTH the original and the collection.
+- Apply Metro 2 knowledge to identify violations that a consumer would not normally catch.
 - Count your accounts at the end and verify you haven't missed any.\
 """
 
