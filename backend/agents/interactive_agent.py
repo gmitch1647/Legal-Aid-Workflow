@@ -301,6 +301,32 @@ async def chat(
                 f"{case_context}"
             )
 
+    # Inject relevant case law via semantic search (if available)
+    try:
+        from utils.embeddings import embed_text, is_configured as _emb_configured
+        if _emb_configured() and user_message:
+            query_emb = embed_text(user_message[:500])
+            cl_resp = supabase.rpc("match_case_law_chunks", {
+                "query_embedding": query_emb,
+                "match_threshold": 0.6,
+                "match_count": 3,
+            }).execute()
+            if cl_resp.data:
+                cl_parts = ["\n\n--- RELEVANT CASE LAW ---"]
+                for chunk in cl_resp.data:
+                    case_info = supabase.table("case_law").select(
+                        "case_name, citation, court, year"
+                    ).eq("id", chunk["case_law_id"]).limit(1).execute()
+                    info = case_info.data[0] if case_info.data else {}
+                    cl_parts.append(
+                        f"\n[{info.get('case_name', 'Unknown')}] "
+                        f"({info.get('citation', '')}, {info.get('court', '')} {info.get('year', '')})\n"
+                        f"{chunk['content'][:1500]}"
+                    )
+                system_prompt += "\n".join(cl_parts)
+    except Exception as e:
+        logger.debug(f"Case law RAG unavailable: {e}")
+
     # Load conversation history
     history = _load_conversation_history(conversation_id)
 

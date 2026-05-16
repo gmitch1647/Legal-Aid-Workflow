@@ -415,6 +415,75 @@ export async function deleteDisputeSession(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Violation Patterns
+// ---------------------------------------------------------------------------
+
+export async function getViolationPatterns(filters = {}) {
+  const params = new URLSearchParams();
+  if (filters.statute) params.append('statute', filters.statute);
+  if (filters.defendant_type) params.append('defendant_type', filters.defendant_type);
+  if (filters.search) params.append('search', filters.search);
+  const qs = params.toString();
+  return request(`/violations${qs ? `?${qs}` : ''}`);
+}
+
+export async function getViolationPattern(id) {
+  return request(`/violations/${id}`);
+}
+
+export async function createViolationPattern(data) {
+  return request('/violations', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function seedViolationPatterns() {
+  return request('/violations/seed', { method: 'POST' });
+}
+
+export async function deleteViolationPattern(id) {
+  return request(`/violations/${id}`, { method: 'DELETE' });
+}
+
+// ---------------------------------------------------------------------------
+// Case Law
+// ---------------------------------------------------------------------------
+
+export async function getCaseLaw(filters = {}) {
+  const params = new URLSearchParams();
+  if (filters.court) params.append('court', filters.court);
+  if (filters.statute) params.append('statute', filters.statute);
+  if (filters.search) params.append('search', filters.search);
+  const qs = params.toString();
+  return request(`/case-law${qs ? `?${qs}` : ''}`);
+}
+
+export async function getCaseLawEntry(id) {
+  return request(`/case-law/${id}`);
+}
+
+export async function createCaseLaw(data) {
+  return request('/case-law', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function uploadCaseLaw(file, metadata = {}) {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (metadata.case_name) formData.append('case_name', metadata.case_name);
+  if (metadata.citation) formData.append('citation', metadata.citation);
+  if (metadata.court) formData.append('court', metadata.court);
+  if (metadata.year) formData.append('year', metadata.year);
+  if (metadata.statutes) formData.append('statutes', metadata.statutes);
+  return request('/case-law/upload', { method: 'POST', body: formData });
+}
+
+export async function deleteCaseLaw(id) {
+  return request(`/case-law/${id}`, { method: 'DELETE' });
+}
+
+export async function searchCaseLaw(query, topK = 5) {
+  return request(`/case-law/search/semantic?q=${encodeURIComponent(query)}&top_k=${topK}`);
+}
+
+// ---------------------------------------------------------------------------
 // Memory
 // ---------------------------------------------------------------------------
 
