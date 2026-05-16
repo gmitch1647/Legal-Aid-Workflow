@@ -1,6 +1,6 @@
 /**
  * PDF text extraction using pdfjs-dist.
- * Runs entirely client-side — no credit report data is sent to a server.
+ * Preserves spatial layout for credit reports with tables/columns.
  */
 
 let pdfjsLib = null;
@@ -8,13 +8,15 @@ let pdfjsLib = null;
 async function loadPdfJs() {
   if (pdfjsLib) return pdfjsLib;
   pdfjsLib = await import('pdfjs-dist');
-  // Use the bundled worker
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
   return pdfjsLib;
 }
 
 /**
- * Extract all text from a PDF file.
+ * Extract text from a PDF preserving spatial layout.
+ * Uses text item positions to reconstruct rows/columns so that
+ * credit report tables (account details, payment histories) remain readable.
+ *
  * @param {File} file — PDF file from input or drag-and-drop
  * @returns {Promise<{text: string, pages: number, isScanned: boolean}>}
  */
@@ -30,20 +32,96 @@ export async function extractTextFromPDF(file) {
   for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items
-      .map(item => item.str)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    fullText += pageText + '\n\n';
+    const pageText = extractWithLayout(content.items, page.getViewport({ scale: 1.0 }));
+    fullText += pageText + '\n\n--- PAGE BREAK ---\n\n';
   }
 
   // Detect if PDF is scanned (image-based)
-  const isScanned = fullText.replace(/\s/g, '').length < 100 && pageCount > 0;
+  const cleanedLength = fullText.replace(/[\s\-|_PAGE BREAK]/g, '').length;
+  const isScanned = cleanedLength < 100 && pageCount > 0;
 
   return {
     text: fullText.trim(),
     pages: pageCount,
     isScanned,
   };
+}
+
+/**
+ * Reconstruct text layout from positioned PDF text items.
+ * Groups items into lines by Y-coordinate, then sorts left-to-right.
+ * Inserts spacing/tabs between columns based on X gaps.
+ */
+function extractWithLayout(items, viewport) {
+  if (!items || items.length === 0) return '';
+
+  // Get page height for coordinate flip (PDF Y is bottom-up)
+  const pageHeight = viewport.height;
+
+  // Transform items to have consistent top-down Y
+  const positioned = items
+    .filter(item => item.str && item.str.trim())
+    .map(item => {
+      const tx = item.transform;
+      // transform is [scaleX, skewX, skewY, scaleY, translateX, translateY]
+      const x = tx[4];
+      const y = pageHeight - tx[5]; // flip Y to top-down
+      return { text: item.str, x: Math.round(x), y: Math.round(y), width: item.width || 0 };
+    });
+
+  if (positioned.length === 0) return '';
+
+  // Group items into lines by Y-coordinate (items within 3px are same line)
+  const lineThreshold = 3;
+  const lines = [];
+  let currentLine = [positioned[0]];
+  let currentY = positioned[0].y;
+
+  // Sort by Y first (top to bottom), then X (left to right)
+  positioned.sort((a, b) => a.y - b.y || a.x - b.x);
+
+  for (let i = 1; i < positioned.length; i++) {
+    const item = positioned[i];
+    if (Math.abs(item.y - currentY) <= lineThreshold) {
+      currentLine.push(item);
+    } else {
+      lines.push(currentLine);
+      currentLine = [item];
+      currentY = item.y;
+    }
+  }
+  lines.push(currentLine);
+
+  // Build text for each line, preserving column spacing
+  const textLines = lines.map(lineItems => {
+    // Sort items left to right within the line
+    lineItems.sort((a, b) => a.x - b.x);
+
+    let lineText = '';
+    let lastX = 0;
+
+    for (const item of lineItems) {
+      // Calculate gap between this item and the previous one
+      const gap = item.x - lastX;
+
+      if (lastX > 0) {
+        if (gap > 50) {
+          // Large gap = likely a new column — use tab
+          lineText += '\t';
+        } else if (gap > 15) {
+          // Medium gap = space between words/fields
+          lineText += '  ';
+        } else if (gap > 3) {
+          lineText += ' ';
+        }
+      }
+
+      lineText += item.text;
+      lastX = item.x + (item.width || item.text.length * 5);
+    }
+
+    return lineText;
+  });
+
+  return textLines.join('\n');
 }
