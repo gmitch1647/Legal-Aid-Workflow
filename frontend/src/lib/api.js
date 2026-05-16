@@ -610,6 +610,10 @@ export async function deleteCaseLaw(id) {
   return request(`/case-law/${id}`, { method: 'DELETE' });
 }
 
+export async function reprocessAllCaseLaw() {
+  return request('/case-law/reprocess-all', { method: 'POST' });
+}
+
 export async function searchCaseLaw(query, topK = 5) {
   return request(`/case-law/search/semantic?q=${encodeURIComponent(query)}&top_k=${topK}`);
 }

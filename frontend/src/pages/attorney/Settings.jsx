@@ -42,6 +42,7 @@ import {
   getCaseLaw,
   uploadCaseLaw,
   bulkUploadCaseLaw,
+  reprocessAllCaseLaw,
   deleteCaseLaw,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -1673,8 +1674,12 @@ function KnowledgeBaseTab() {
                 <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload files — select multiple (.pdf, .docx, .txt)</span>
               )}
             </label>
+            <button onClick={async () => { try { const r = await reprocessAllCaseLaw(); alert(`Reprocessing ${r.count} entries`); setTimeout(() => loadData(), 3000); } catch(e) { alert('Failed: ' + e.message); } }}
+              className="shrink-0 px-3 py-3 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50" title="Reprocess stuck entries">
+              <RefreshCw className="w-4 h-4" />
+            </button>
             <button onClick={() => setShowCategoryManager(!showCategoryManager)}
-              className="shrink-0 px-3 py-3 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50">
+              className="shrink-0 px-3 py-3 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50" title="Manage categories">
               <Edit3 className="w-4 h-4" />
             </button>
           </div>

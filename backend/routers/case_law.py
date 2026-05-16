@@ -301,6 +301,37 @@ async def ingest_text(
 
 
 # ---------------------------------------------------------------------------
+# POST /reprocess-all — fix stuck "Processing" entries
+# ---------------------------------------------------------------------------
+
+@router.post("/reprocess-all")
+async def reprocess_all_stuck(authorization: str = Header(default=None)):
+    """Reprocess all entries stuck in 'Processing' (indexed=false)."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+    resp = supabase.table("case_law").select("id, full_text, case_name").eq("indexed", False).execute()
+
+    if not resp.data:
+        return {"status": "none_stuck", "count": 0}
+
+    import asyncio
+    count = 0
+    for entry in resp.data:
+        text = entry.get("full_text", "")
+        if text and len(text) > 50:
+            asyncio.create_task(_summarize_and_index(entry["id"], text, entry.get("case_name", "")))
+            count += 1
+        else:
+            # No text — just mark as indexed so it stops showing "Processing"
+            supabase.table("case_law").update({"indexed": True}).eq("id", entry["id"]).execute()
+            count += 1
+
+    return {"status": "reprocessing", "count": count}
+
+
+# ---------------------------------------------------------------------------
 # POST /{id}/reindex — re-index a case law entry
 # ---------------------------------------------------------------------------
 
@@ -319,9 +350,9 @@ async def reindex_case_law(case_id: str, authorization: str = Header(default=Non
         raise HTTPException(status_code=400, detail="No text to index")
 
     import asyncio
-    asyncio.create_task(_index_case_law(case_id, text))
+    asyncio.create_task(_summarize_and_index(case_id, text, resp.data[0].get("case_name", "")))
 
-    return {"status": "reindexing"}
+    return {"status": "reprocessing"}
 
 
 # ---------------------------------------------------------------------------
@@ -458,16 +489,25 @@ Opinion text (first 15000 chars):
     except Exception as e:
         logger.warning(f"Case law summarization failed for {case_id}: {e}")
 
-    # Index regardless of summarization success
+    # Always mark as indexed after summarization — even if vector embedding fails,
+    # the text content is stored and usable for keyword search
+    supabase = get_supabase()
+    supabase.table("case_law").update({
+        "indexed": True,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", case_id).execute()
+
+    # Try vector indexing (optional — depends on VOYAGE_API_KEY being set)
     await _index_case_law(case_id, text)
 
 
 async def _index_case_law(case_id: str, text: str):
     """Chunk and embed case law text for vector search."""
+    supabase = get_supabase()
     try:
         from utils.embeddings import embed_texts, is_configured
         if not is_configured():
-            logger.warning("Embeddings not configured — skipping case law indexing")
+            logger.info("Embeddings not configured — text stored but not vector-indexed")
             return
 
         # Chunk the text (1500 chars with 200 char overlap)
@@ -492,8 +532,6 @@ async def _index_case_law(case_id: str, text: str):
             logger.error(f"Embedding mismatch for case law {case_id}")
             return
 
-        supabase = get_supabase()
-
         # Delete existing chunks for this case
         supabase.table("case_law_chunks").delete().eq("case_law_id", case_id).execute()
 
@@ -515,9 +553,7 @@ async def _index_case_law(case_id: str, text: str):
             batch = records[i:i + batch_size]
             supabase.table("case_law_chunks").insert(batch).execute()
 
-        # Mark as indexed
-        supabase.table("case_law").update({"indexed": True}).eq("id", case_id).execute()
-        logger.info(f"Case law indexed: {case_id} ({len(chunks)} chunks)")
+        logger.info(f"Case law vector-indexed: {case_id} ({len(chunks)} chunks)")
 
     except Exception as e:
-        logger.exception(f"Case law indexing failed for {case_id}: {e}")
+        logger.warning(f"Case law vector indexing failed for {case_id}: {e} (text still stored)")
