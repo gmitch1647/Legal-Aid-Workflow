@@ -1058,6 +1058,15 @@ async def revise_draft(
     except Exception as e:
         logger.warning(f"[revise] RAG retrieval failed: {e}")
 
+    # Inject attorney memory/preferences into the revision context
+    profile = await _get_current_user(authorization)
+    memory_context = ""
+    try:
+        from utils.memory import get_full_memory_context
+        memory_context = get_full_memory_context(session_id, profile.get("id"))
+    except Exception:
+        pass
+
     # Build the enhanced system prompt
     system_prompt = """You are a legal complaint revision assistant specializing in consumer protection law in the Northern District of Georgia.
 
@@ -1148,6 +1157,8 @@ REVISED COMPLAINT:
     ]
     if reference_context:
         system_blocks.append({"type": "text", "text": reference_context})
+    if memory_context:
+        system_blocks.append({"type": "text", "text": f"\n--- MEMORY (learned from past interactions) ---\n{memory_context}"})
 
     try:
         response = client.messages.create(
@@ -1272,6 +1283,22 @@ REVISED COMPLAINT:
             }).eq("id", session_id).execute()
         except Exception as e:
             logger.warning(f"Could not save revision history: {e}")
+
+        # Extract memories from this revision (async, non-blocking)
+        try:
+            import asyncio
+            from utils.memory import extract_memories_from_draft
+            asyncio.create_task(
+                extract_memories_from_draft(
+                    session_id=session_id,
+                    case_id=session_id,
+                    attorney_id=profile.get("id"),
+                    revision_message=payload.message,
+                    revised_output=changes_summary or "",
+                )
+            )
+        except Exception:
+            pass
 
         return {
             "revised_complaint": revised_complaint,

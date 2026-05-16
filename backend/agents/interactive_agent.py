@@ -274,6 +274,22 @@ async def chat(
     # Build system prompt with case context
     system_prompt = AGENT_SYSTEM_PROMPTS.get(agent_type, AGENT_SYSTEM_PROMPTS["general"])
 
+    # Inject memory context (attorney preferences + case-specific memories)
+    from utils.memory import get_full_memory_context
+    # Get attorney_id from conversation record
+    conv_resp = supabase.table("conversations").select("user_id").eq("id", conversation_id).limit(1).execute()
+    attorney_id = conv_resp.data[0]["user_id"] if conv_resp.data else None
+
+    memory_context = get_full_memory_context(case_id, attorney_id) if attorney_id else ""
+    if memory_context:
+        system_prompt += (
+            "\n\n--- MEMORY (information learned from past interactions) ---\n"
+            "Use this to give more personalized and consistent responses. "
+            "These are things the attorney has told you before or decisions "
+            "made in previous conversations.\n\n"
+            f"{memory_context}"
+        )
+
     if case_id:
         case_context = _build_case_context(case_id)
         if case_context:
@@ -336,6 +352,20 @@ async def chat(
             "role": "assistant",
             "content": assistant_content,
         }).execute()
+
+        # Extract memories asynchronously (don't block the response)
+        if attorney_id:
+            import asyncio
+            from utils.memory import extract_memories_from_conversation
+            all_msgs = messages + [{"role": "assistant", "content": assistant_content}]
+            asyncio.create_task(
+                extract_memories_from_conversation(
+                    conversation_id=conversation_id,
+                    case_id=case_id,
+                    attorney_id=attorney_id,
+                    recent_messages=all_msgs,
+                )
+            )
 
         # Auto-title the conversation after the first exchange
         if len(history) == 0:

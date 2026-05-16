@@ -33,6 +33,10 @@ import {
   updatePipelineStage,
   deletePipelineStage,
   reorderPipelineStages,
+  getAttorneyMemories,
+  addAttorneyMemory,
+  deleteAttorneyMemory,
+  getMemoryStats,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -42,6 +46,7 @@ import { supabase } from '../../lib/supabase';
 
 const TABS = [
   { key: 'profile', label: 'Attorney Profile', icon: User },
+  { key: 'memory', label: 'AI Memory', icon: Sparkles },
   { key: 'pipeline', label: 'Pipeline Stages', icon: RefreshCw },
   { key: 'defendants', label: 'Defendant Database', icon: Database },
   { key: 'reference_cases', label: 'Reference Cases', icon: BookOpen },
@@ -1443,6 +1448,196 @@ function ReferenceCasesTab() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// AI Memory Tab
+// ---------------------------------------------------------------------------
+
+function MemoryTab() {
+  const [memories, setMemories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newCategory, setNewCategory] = useState('preference');
+  const [newContent, setNewContent] = useState('');
+  const [newImportance, setNewImportance] = useState(7);
+  const [adding, setAdding] = useState(false);
+  const [filterCat, setFilterCat] = useState('all');
+
+  useEffect(() => {
+    loadMemories();
+  }, []);
+
+  async function loadMemories() {
+    setLoading(true);
+    try {
+      const [mems, st] = await Promise.all([getAttorneyMemories(), getMemoryStats()]);
+      setMemories(mems || []);
+      setStats(st);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }
+
+  async function handleAdd() {
+    if (!newContent.trim()) return;
+    setAdding(true);
+    try {
+      await addAttorneyMemory({
+        category: newCategory,
+        content: newContent.trim(),
+        importance: newImportance,
+      });
+      setNewContent('');
+      setShowAdd(false);
+      loadMemories();
+    } catch (err) { console.error(err); }
+    finally { setAdding(false); }
+  }
+
+  async function handleDelete(id) {
+    try {
+      await deleteAttorneyMemory(id);
+      setMemories(prev => prev.filter(m => m.id !== id));
+    } catch (err) { console.error(err); }
+  }
+
+  const CATEGORIES = [
+    { value: 'preference', label: 'Preference', color: 'bg-blue-100 text-blue-700' },
+    { value: 'instruction', label: 'Instruction', color: 'bg-purple-100 text-purple-700' },
+    { value: 'strategy', label: 'Strategy', color: 'bg-emerald-100 text-emerald-700' },
+    { value: 'fact', label: 'Fact', color: 'bg-amber-100 text-amber-700' },
+    { value: 'decision', label: 'Decision', color: 'bg-rose-100 text-rose-700' },
+  ];
+
+  const filtered = filterCat === 'all' ? memories : memories.filter(m => m.category === filterCat);
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-slate-900">AI Memory</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          The AI learns from your conversations and draft revisions. These memories are injected into every future interaction so the AI remembers your preferences, past decisions, and case-specific context.
+        </p>
+      </div>
+
+      {/* Stats */}
+      {stats && (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="text-2xl font-bold text-slate-900">{stats.attorney_memories}</div>
+            <div className="text-xs text-slate-500">Global Memories</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="text-2xl font-bold text-slate-900">{stats.case_memories}</div>
+            <div className="text-xs text-slate-500">Case-Specific Memories</div>
+          </div>
+        </div>
+      )}
+
+      {/* Info box */}
+      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+        <Sparkles className="w-4 h-4 inline mr-1" />
+        <strong>How it works:</strong> After each conversation or draft revision, the AI automatically extracts important facts, decisions, and preferences.
+        These are used in all future interactions. You can also add memories manually below.
+      </div>
+
+      {/* Filter + Add */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1 flex-wrap">
+          <button onClick={() => setFilterCat('all')}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium ${filterCat === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+            All ({memories.length})
+          </button>
+          {CATEGORIES.map(c => {
+            const count = memories.filter(m => m.category === c.value).length;
+            if (count === 0) return null;
+            return (
+              <button key={c.value} onClick={() => setFilterCat(c.value)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium ${filterCat === c.value ? 'bg-slate-800 text-white' : `${c.color} hover:opacity-80`}`}>
+                {c.label} ({count})
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={() => setShowAdd(!showAdd)}
+          className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700">
+          <Plus className="w-3.5 h-3.5" /> Add Memory
+        </button>
+      </div>
+
+      {/* Add form */}
+      {showAdd && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Category</label>
+              <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Importance (1-10)</label>
+              <input type="number" min={1} max={10} value={newImportance} onChange={(e) => setNewImportance(Number(e.target.value))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Content</label>
+            <textarea value={newContent} onChange={(e) => setNewContent(e.target.value)} rows={3}
+              placeholder="e.g. 'Always use 2.0 line spacing in complaints' or 'Never include Georgia FBPA unless there is clear willful/deceptive conduct'"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm resize-y" />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowAdd(false)} className="px-3 py-1.5 text-sm text-slate-600">Cancel</button>
+            <button onClick={handleAdd} disabled={adding || !newContent.trim()}
+              className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+              {adding ? 'Saving...' : 'Save Memory'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Memory list */}
+      {filtered.length === 0 ? (
+        <div className="text-center py-10 bg-white rounded-xl border border-slate-200">
+          <Sparkles className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+          <p className="text-sm text-slate-500">No memories yet. Start chatting or drafting and the AI will learn automatically.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(mem => {
+            const cat = CATEGORIES.find(c => c.value === mem.category) || CATEGORIES[0];
+            return (
+              <div key={mem.id} className="bg-white rounded-lg border border-slate-200 p-3 flex items-start gap-3 group hover:border-slate-300 transition">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${cat.color}`}>{cat.label}</span>
+                    <span className="text-[10px] text-slate-400">Importance: {mem.importance}/10</span>
+                    <span className="text-[10px] text-slate-400">·</span>
+                    <span className="text-[10px] text-slate-400">{mem.source_type === 'manual' ? 'Manual' : mem.source_type === 'conversation' ? 'From Chat' : 'From Draft'}</span>
+                    <span className="text-[10px] text-slate-400">· {new Date(mem.created_at).toLocaleDateString()}</span>
+                  </div>
+                  <p className="text-sm text-slate-800">{mem.content}</p>
+                </div>
+                <button onClick={() => handleDelete(mem.id)}
+                  className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
 function StatCard({ label, value, icon: Icon, tone = 'default' }) {
   const toneClasses = {
     default: 'border-slate-200 bg-white text-slate-900',
@@ -1471,6 +1666,8 @@ export default function Settings() {
     switch (activeTab) {
       case 'profile':
         return <ProfileTab />;
+      case 'memory':
+        return <MemoryTab />;
       case 'defendants':
         return <DefendantsTab />;
       case 'pipeline':

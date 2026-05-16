@@ -415,6 +415,44 @@ export async function deleteDisputeSession(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Memory
+// ---------------------------------------------------------------------------
+
+export async function getAttorneyMemories() {
+  return request('/memory/attorney');
+}
+
+export async function getCaseMemories(caseId) {
+  return request(`/memory/case/${caseId}`);
+}
+
+export async function addAttorneyMemory(data) {
+  return request('/memory/attorney', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function addCaseMemory(caseId, data) {
+  return request(`/memory/case/${caseId}`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteAttorneyMemory(id) {
+  return request(`/memory/attorney/${id}`, { method: 'DELETE' });
+}
+
+export async function deleteCaseMemory(id) {
+  return request(`/memory/case-memory/${id}`, { method: 'DELETE' });
+}
+
+export async function getMemoryStats() {
+  return request('/memory/stats');
+}
+
+// ---------------------------------------------------------------------------
 // Calendar
 // ---------------------------------------------------------------------------
 
