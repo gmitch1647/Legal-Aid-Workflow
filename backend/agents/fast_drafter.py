@@ -790,6 +790,19 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
         doc_label = DOCUMENT_LABELS.get(document_type, "Complaint")
         logger.info(f"[fast_draft] Document type: {document_type} ({doc_label})")
 
+        # Inject attorney memory/preferences into drafting context
+        memory_context = ""
+        try:
+            from utils.memory import get_attorney_memories
+            # Get attorney_id from case record
+            case_record = supabase.table("cases").select("client_id").eq("id", case_id).limit(1).execute()
+            # Use the case_id to look up who created it — or just get all attorney memories
+            atty_resp = supabase.table("profiles").select("id").eq("role", "attorney").limit(1).execute()
+            if atty_resp.data:
+                memory_context = get_attorney_memories(atty_resp.data[0]["id"], limit=15)
+        except Exception as e:
+            logger.debug(f"[fast_draft] Memory retrieval skipped: {e}")
+
         # Build system prompt with caching
         system_blocks = [
             {
@@ -802,6 +815,11 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             system_blocks.append({
                 "type": "text",
                 "text": reference_context,
+            })
+        if memory_context:
+            system_blocks.append({
+                "type": "text",
+                "text": f"\n--- ATTORNEY PREFERENCES (apply these to your drafting) ---\n{memory_context}",
             })
 
         draft_response = client.messages.create(

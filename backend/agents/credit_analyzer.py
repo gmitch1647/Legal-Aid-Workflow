@@ -314,6 +314,20 @@ async def analyze_credit_report(report_text: str) -> list:
     chunks = _chunk_report(report_text, max_chars=60000)
     all_accounts = []
 
+    # Inject attorney preferences for dispute analysis
+    system_with_memory = ANALYSIS_PROMPT
+    try:
+        from utils.memory import get_attorney_memories
+        from utils.supabase_client import get_supabase
+        supabase = get_supabase()
+        atty_resp = supabase.table("profiles").select("id").eq("role", "attorney").limit(1).execute()
+        if atty_resp.data:
+            mem = get_attorney_memories(atty_resp.data[0]["id"], limit=10)
+            if mem:
+                system_with_memory += f"\n\n--- ATTORNEY PREFERENCES ---\n{mem}"
+    except Exception:
+        pass
+
     for i, chunk in enumerate(chunks):
         chunk_label = f"chunk {i+1}/{len(chunks)}" if len(chunks) > 1 else "full report"
         logger.info(f"Analyzing credit report ({chunk_label}, {len(chunk)} chars)")
@@ -329,7 +343,7 @@ async def analyze_credit_report(report_text: str) -> list:
             response = client.messages.create(
                 model="claude-haiku-4-5",
                 max_tokens=16384,
-                system=ANALYSIS_PROMPT,
+                system=system_with_memory,
                 messages=[{
                     "role": "user",
                     "content": user_msg,
