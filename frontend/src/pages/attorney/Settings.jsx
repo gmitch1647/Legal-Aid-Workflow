@@ -1470,9 +1470,49 @@ function KnowledgeBaseTab() {
   const [filterStatute, setFilterStatute] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Categories
+  const [categories, setCategories] = useState([]);
+  const [newCategory, setNewCategory] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+
+  const DEFAULT_CATEGORIES = [
+    'Case Opinions', 'Statutes & Regulations', 'CFPB Guidance',
+    'FTC Advisory', 'Demand Letters', 'Settlement Agreements',
+    'Briefs & Motions', 'Reference Guides', 'Articles & Commentary',
+    'Discovery Templates', 'Client Intake Docs',
+  ];
+
   useEffect(() => {
     loadData();
+    loadCategories();
   }, []);
+
+  async function loadCategories() {
+    try {
+      const saved = localStorage.getItem('kb_categories');
+      if (saved) {
+        setCategories(JSON.parse(saved));
+      } else {
+        setCategories(DEFAULT_CATEGORIES);
+        localStorage.setItem('kb_categories', JSON.stringify(DEFAULT_CATEGORIES));
+      }
+    } catch { setCategories(DEFAULT_CATEGORIES); }
+  }
+
+  function addCategory() {
+    if (!newCategory.trim()) return;
+    const updated = [...categories, newCategory.trim()];
+    setCategories(updated);
+    localStorage.setItem('kb_categories', JSON.stringify(updated));
+    setNewCategory('');
+  }
+
+  function removeCategory(cat) {
+    const updated = categories.filter(c => c !== cat);
+    setCategories(updated);
+    localStorage.setItem('kb_categories', JSON.stringify(updated));
+  }
 
   async function loadData() {
     setLoading(true);
@@ -1633,20 +1673,71 @@ function KnowledgeBaseTab() {
                 <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload files — select multiple (.pdf, .docx, .txt)</span>
               )}
             </label>
+            <button onClick={() => setShowCategoryManager(!showCategoryManager)}
+              className="shrink-0 px-3 py-3 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50">
+              <Edit3 className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Category Manager */}
+          {showCategoryManager && (
+            <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-slate-900">Manage Categories</h4>
+                <button onClick={() => setShowCategoryManager(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {categories.map(cat => (
+                  <span key={cat} className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 rounded-full text-xs text-slate-700">
+                    {cat}
+                    <button onClick={() => removeCategory(cat)} className="text-slate-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input value={newCategory} onChange={(e) => setNewCategory(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addCategory(); }}
+                  placeholder="New category name..."
+                  className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm" />
+                <button onClick={addCategory} disabled={!newCategory.trim()}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Category filter */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => setFilterCategory('')}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium ${!filterCategory ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+              All ({caseLawEntries.length})
+            </button>
+            {categories.map(cat => {
+              const count = caseLawEntries.filter(c => (c.tags || []).includes(cat)).length;
+              return (
+                <button key={cat} onClick={() => setFilterCategory(cat)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium ${filterCategory === cat ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  {cat} {count > 0 && `(${count})`}
+                </button>
+              );
+            })}
           </div>
 
           <p className="text-xs text-slate-500">
-            Upload court opinions and the AI will automatically summarize, tag, and index them for semantic search. The more you upload, the better the AI can cite real precedent.
+            Upload legal documents and the AI will automatically categorize, summarize, and index them. Assign categories to organize your knowledge base.
           </p>
 
           {caseLawEntries.length === 0 ? (
             <div className="text-center py-10 bg-white rounded-xl border border-slate-200">
               <BookOpen className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm text-slate-500">No case law indexed yet. Upload opinions to build your AI's legal library.</p>
+              <p className="text-sm text-slate-500">No documents indexed yet. Upload files to build your AI's legal library.</p>
             </div>
           ) : (
             <div className="space-y-2">
-              {caseLawEntries.map(c => (
+              {caseLawEntries
+                .filter(c => !filterCategory || (c.tags || []).includes(filterCategory))
+                .map(c => (
                 <div key={c.id} className="bg-white rounded-lg border border-slate-200 p-3 flex items-start gap-3 group hover:border-slate-300">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-semibold text-slate-900">{c.case_name}</div>
@@ -1656,6 +1747,9 @@ function KnowledgeBaseTab() {
                       {c.year && <span>{c.year}</span>}
                       {(c.statutes || []).map(s => (
                         <span key={s} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full text-[10px] font-medium">{s}</span>
+                      ))}
+                      {(c.tags || []).filter(t => categories.includes(t)).map(t => (
+                        <span key={t} className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-medium">{t}</span>
                       ))}
                       <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${c.indexed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                         {c.indexed ? 'Indexed' : 'Processing'}
