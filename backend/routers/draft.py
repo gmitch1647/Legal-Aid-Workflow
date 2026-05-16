@@ -85,6 +85,7 @@ class DraftStartPayload(BaseModel):
     document_urls: list[str] = []
     mode: str = "fast"  # "fast" (2-call, ~15s) or "thorough" (7-agent, ~90s)
     document_type: str = "complaint"  # complaint | motion | discovery | demand_letter
+    client_id: Optional[str] = None  # Link draft to a client profile
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +268,7 @@ async def start_draft(
 
     supabase = get_supabase()
 
-    # Create a case row using the attorney as a placeholder client.
-    # The real plaintiff info is embedded in case_facts via _format_case_facts.
+    # Create a case row linked to the client (or attorney as fallback).
     case_facts = _format_case_facts(payload)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -276,7 +276,7 @@ async def start_draft(
         supabase.table("cases")
         .insert(
             {
-                "client_id": profile["id"],
+                "client_id": payload.client_id or profile["id"],
                 "status": "approved_for_processing",
                 "court": payload.court or "",
                 "jury_demand": payload.jury_demand,

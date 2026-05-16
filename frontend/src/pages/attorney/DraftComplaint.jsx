@@ -432,9 +432,10 @@ export default function DraftComplaint() {
       damages_description: damages,
       jury_demand: juryDemand,
       georgia_claims: gaClaims,
-      document_urls: uploadedDocs.map((d) => d.storage_path),
+      document_urls: uploadedDocs.filter(d => !d.storage_path.startsWith('__')).map((d) => d.storage_path),
       mode: draftMode,
       document_type: documentType,
+      client_id: selectedClientId || null,
     };
 
     try {
