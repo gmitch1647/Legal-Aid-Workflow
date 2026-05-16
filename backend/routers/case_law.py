@@ -215,6 +215,92 @@ async def upload_case_law(
 
 
 # ---------------------------------------------------------------------------
+# POST /bulk-upload — upload multiple files at once for bulk ingestion
+# ---------------------------------------------------------------------------
+
+@router.post("/bulk-upload")
+async def bulk_upload_case_law(
+    files: list[UploadFile] = File(...),
+    authorization: str = Header(default=None),
+):
+    """Upload multiple legal documents for AI categorization and indexing."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    documents = []
+    for file in files:
+        content = await file.read()
+        text = ""
+
+        if file.filename.endswith(".txt"):
+            text = content.decode("utf-8", errors="ignore")
+        elif file.filename.endswith(".docx"):
+            try:
+                import io as _io
+                from docx import Document
+                doc = Document(_io.BytesIO(content))
+                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            except Exception:
+                text = content.decode("utf-8", errors="ignore")
+        elif file.filename.endswith(".pdf"):
+            try:
+                import io as _io
+                from PyPDF2 import PdfReader
+                reader = PdfReader(_io.BytesIO(content))
+                text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            except Exception:
+                pass
+        else:
+            text = content.decode("utf-8", errors="ignore")
+
+        if text and len(text) >= 50:
+            documents.append({"filename": file.filename, "text": text})
+
+    if not documents:
+        raise HTTPException(status_code=400, detail="No valid documents found in upload")
+
+    # Process in background
+    import asyncio
+    from utils.knowledge_importer import bulk_ingest_texts
+    asyncio.create_task(bulk_ingest_texts(documents))
+
+    return {
+        "status": "processing",
+        "files_accepted": len(documents),
+        "files_rejected": len(files) - len(documents),
+        "message": f"Processing {len(documents)} files. They will appear in the Knowledge Base as they're indexed.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest-text — ingest raw text (for pasting or API integration)
+# ---------------------------------------------------------------------------
+
+@router.post("/ingest-text")
+async def ingest_text(
+    request_body: dict,
+    authorization: str = Header(default=None),
+):
+    """Ingest raw text as a knowledge base entry."""
+    from fastapi import Request
+
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    text = request_body.get("text", "")
+    filename = request_body.get("filename", "pasted_document")
+
+    if not text or len(text) < 50:
+        raise HTTPException(status_code=400, detail="Text too short")
+
+    import asyncio
+    from utils.knowledge_importer import ingest_document
+    asyncio.create_task(ingest_document(text, filename))
+
+    return {"status": "processing", "message": "Document is being categorized and indexed."}
+
+
+# ---------------------------------------------------------------------------
 # POST /{id}/reindex — re-index a case law entry
 # ---------------------------------------------------------------------------
 

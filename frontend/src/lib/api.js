@@ -600,6 +600,12 @@ export async function uploadCaseLaw(file, metadata = {}) {
   return request('/case-law/upload', { method: 'POST', body: formData });
 }
 
+export async function bulkUploadCaseLaw(files) {
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+  return request('/case-law/bulk-upload', { method: 'POST', body: formData });
+}
+
 export async function deleteCaseLaw(id) {
   return request(`/case-law/${id}`, { method: 'DELETE' });
 }

@@ -41,6 +41,7 @@ import {
   getViolationPatterns,
   getCaseLaw,
   uploadCaseLaw,
+  bulkUploadCaseLaw,
   deleteCaseLaw,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -1501,12 +1502,17 @@ function KnowledgeBaseTab() {
   }
 
   async function handleUploadCaseLaw(e) {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     setUploading(true);
     try {
-      await uploadCaseLaw(file, {});
-      loadData();
+      if (files.length === 1) {
+        await uploadCaseLaw(files[0], {});
+      } else {
+        await bulkUploadCaseLaw(files);
+      }
+      // Reload after a short delay to let background processing start
+      setTimeout(() => loadData(), 2000);
     } catch (err) {
       console.error('Upload failed:', err);
     } finally {
@@ -1620,11 +1626,11 @@ function KnowledgeBaseTab() {
           {/* Upload */}
           <div className="flex items-center gap-3">
             <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition">
-              <input type="file" accept=".pdf,.docx,.txt" onChange={handleUploadCaseLaw} className="hidden" />
+              <input type="file" accept=".pdf,.docx,.txt" multiple onChange={handleUploadCaseLaw} className="hidden" />
               {uploading ? (
                 <span className="text-sm text-blue-600"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Uploading & indexing...</span>
               ) : (
-                <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload judicial opinion (.pdf, .docx, .txt)</span>
+                <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload files — select multiple (.pdf, .docx, .txt)</span>
               )}
             </label>
           </div>
