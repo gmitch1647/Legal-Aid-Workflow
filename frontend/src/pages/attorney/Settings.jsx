@@ -37,6 +37,11 @@ import {
   addAttorneyMemory,
   deleteAttorneyMemory,
   getMemoryStats,
+  seedViolationPatterns,
+  getViolationPatterns,
+  getCaseLaw,
+  uploadCaseLaw,
+  deleteCaseLaw,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -47,6 +52,7 @@ import { supabase } from '../../lib/supabase';
 const TABS = [
   { key: 'profile', label: 'Attorney Profile', icon: User },
   { key: 'memory', label: 'AI Memory', icon: Sparkles },
+  { key: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { key: 'pipeline', label: 'Pipeline Stages', icon: RefreshCw },
   { key: 'defendants', label: 'Defendant Database', icon: Database },
   { key: 'reference_cases', label: 'Reference Cases', icon: BookOpen },
@@ -1449,6 +1455,308 @@ function ReferenceCasesTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge Base Tab (Violation Patterns + Case Law)
+// ---------------------------------------------------------------------------
+
+function KnowledgeBaseTab() {
+  const [subTab, setSubTab] = useState('violations');
+  const [violations, setViolations] = useState([]);
+  const [caseLawEntries, setCaseLawEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
+  const [seedResult, setSeedResult] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [filterStatute, setFilterStatute] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [vp, cl] = await Promise.all([
+        getViolationPatterns(),
+        getCaseLaw(),
+      ]);
+      setViolations(vp || []);
+      setCaseLawEntries(cl || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }
+
+  async function handleSeed() {
+    setSeeding(true);
+    setSeedResult(null);
+    try {
+      const result = await seedViolationPatterns();
+      setSeedResult(result);
+      loadData();
+    } catch (err) {
+      setSeedResult({ status: 'error', error: err.message });
+    } finally {
+      setSeeding(false);
+    }
+  }
+
+  async function handleUploadCaseLaw(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      await uploadCaseLaw(file, {});
+      loadData();
+    } catch (err) {
+      console.error('Upload failed:', err);
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  }
+
+  async function handleDeleteCaseLaw(id) {
+    if (!confirm('Delete this case law entry?')) return;
+    try {
+      await deleteCaseLaw(id);
+      setCaseLawEntries(prev => prev.filter(c => c.id !== id));
+    } catch (err) { console.error(err); }
+  }
+
+  const filteredViolations = violations.filter(v => {
+    if (filterStatute && v.statute !== filterStatute) return false;
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      return (v.short_name || '').toLowerCase().includes(term)
+        || (v.section || '').toLowerCase().includes(term)
+        || (v.description || '').toLowerCase().includes(term);
+    }
+    return true;
+  });
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-slate-900">Knowledge Base</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Violation patterns and case law that power the AI's legal knowledge.
+        </p>
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex gap-2 border-b border-slate-200 pb-2">
+        <button onClick={() => setSubTab('violations')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium ${subTab === 'violations' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+          Violation Patterns ({violations.length})
+        </button>
+        <button onClick={() => setSubTab('caselaw')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium ${subTab === 'caselaw' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+          Case Law ({caseLawEntries.length})
+        </button>
+      </div>
+
+      {/* ═══ Violations Sub-tab ═══ */}
+      {subTab === 'violations' && (
+        <div className="space-y-4">
+          {/* Seed button */}
+          {violations.length === 0 ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
+              <Database className="w-10 h-10 text-blue-400 mx-auto mb-3" />
+              <h3 className="font-semibold text-slate-900 mb-1">Seed Violation Patterns</h3>
+              <p className="text-sm text-slate-600 mb-4">
+                Load pre-built FCRA, FDCPA, TCPA, and Georgia FBPA violation patterns with elements, damages, defenses, and case citations.
+              </p>
+              <button onClick={handleSeed} disabled={seeding}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+                {seeding ? <><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Seeding...</> : 'Seed Database Now'}
+              </button>
+              {seedResult && (
+                <div className={`mt-3 text-sm ${seedResult.status === 'error' ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {seedResult.status === 'seeded' ? `Done! ${seedResult.count} patterns loaded.` :
+                   seedResult.status === 'already_seeded' ? `Already seeded (${seedResult.count} patterns).` :
+                   `Error: ${seedResult.error}`}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Filter + Search */}
+              <div className="flex items-center gap-3">
+                <select value={filterStatute} onChange={(e) => setFilterStatute(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                  <option value="">All Statutes</option>
+                  <option value="FCRA">FCRA</option>
+                  <option value="FDCPA">FDCPA</option>
+                  <option value="TCPA">TCPA</option>
+                  <option value="GA_FBPA">Georgia FBPA</option>
+                </select>
+                <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search violations..."
+                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                <button onClick={handleSeed} disabled={seeding}
+                  className="px-3 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 hover:bg-slate-50">
+                  {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+
+              {/* Violations list */}
+              <div className="space-y-2">
+                {filteredViolations.map(v => (
+                  <ViolationCard key={v.id} violation={v} />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ═══ Case Law Sub-tab ═══ */}
+      {subTab === 'caselaw' && (
+        <div className="space-y-4">
+          {/* Upload */}
+          <div className="flex items-center gap-3">
+            <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition">
+              <input type="file" accept=".pdf,.docx,.txt" onChange={handleUploadCaseLaw} className="hidden" />
+              {uploading ? (
+                <span className="text-sm text-blue-600"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Uploading & indexing...</span>
+              ) : (
+                <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload judicial opinion (.pdf, .docx, .txt)</span>
+              )}
+            </label>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            Upload court opinions and the AI will automatically summarize, tag, and index them for semantic search. The more you upload, the better the AI can cite real precedent.
+          </p>
+
+          {caseLawEntries.length === 0 ? (
+            <div className="text-center py-10 bg-white rounded-xl border border-slate-200">
+              <BookOpen className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm text-slate-500">No case law indexed yet. Upload opinions to build your AI's legal library.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {caseLawEntries.map(c => (
+                <div key={c.id} className="bg-white rounded-lg border border-slate-200 p-3 flex items-start gap-3 group hover:border-slate-300">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-900">{c.case_name}</div>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 flex-wrap">
+                      {c.citation && <span>{c.citation}</span>}
+                      {c.court && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-medium">{c.court}</span>}
+                      {c.year && <span>{c.year}</span>}
+                      {(c.statutes || []).map(s => (
+                        <span key={s} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full text-[10px] font-medium">{s}</span>
+                      ))}
+                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${c.indexed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {c.indexed ? 'Indexed' : 'Processing'}
+                      </span>
+                    </div>
+                    {c.holding && <p className="text-xs text-slate-600 mt-1 line-clamp-2">{c.holding}</p>}
+                  </div>
+                  <button onClick={() => handleDeleteCaseLaw(c.id)}
+                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ViolationCard({ violation: v }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const statuteColors = {
+    FCRA: 'bg-blue-100 text-blue-700',
+    FDCPA: 'bg-purple-100 text-purple-700',
+    TCPA: 'bg-emerald-100 text-emerald-700',
+    GA_FBPA: 'bg-amber-100 text-amber-700',
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50" onClick={() => setExpanded(!expanded)}>
+        <ChevronRight className={`w-4 h-4 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
+        <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${statuteColors[v.statute] || 'bg-slate-100 text-slate-700'}`}>
+          {v.statute}
+        </span>
+        <span className="text-xs font-mono text-slate-500">§{v.section}</span>
+        <span className="text-sm font-medium text-slate-900 flex-1 truncate">{v.short_name}</span>
+        <span className="text-[10px] text-slate-400">{v.defendant_type}</span>
+      </div>
+
+      {expanded && (
+        <div className="px-4 pb-4 pt-1 border-t border-slate-100 space-y-3">
+          <p className="text-xs text-slate-700">{v.description}</p>
+
+          {v.elements && v.elements.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Elements to Prove</div>
+              <ol className="list-decimal list-inside text-xs text-slate-700 space-y-0.5">
+                {v.elements.map((e, i) => <li key={i}>{e}</li>)}
+              </ol>
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-3 text-xs">
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Statutory Damages</div>
+              <div className="text-slate-700">{v.damages_statutory || 'N/A'}</div>
+            </div>
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">SOL</div>
+              <div className="text-slate-700">{v.sol_years ? `${v.sol_years} years` : 'N/A'}</div>
+            </div>
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Scienter</div>
+              <div className="text-slate-700 capitalize">{v.scienter || 'N/A'}</div>
+            </div>
+          </div>
+
+          {v.practice_tips && v.practice_tips.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase text-emerald-600 mb-1">Practice Tips</div>
+              <ul className="text-xs text-slate-700 space-y-0.5">
+                {v.practice_tips.map((t, i) => <li key={i} className="flex gap-1.5"><span className="text-emerald-500">→</span> {t}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {v.defenses && v.defenses.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase text-red-500 mb-1">Common Defenses</div>
+              <ul className="text-xs text-slate-700 space-y-0.5">
+                {v.defenses.map((d, i) => <li key={i} className="flex gap-1.5"><span className="text-red-400">⚠</span> {d}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {v.case_citations && v.case_citations.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Case Citations</div>
+              {v.case_citations.map((c, i) => (
+                <div key={i} className="text-xs text-slate-700 bg-slate-50 rounded p-2 mb-1">
+                  <div className="font-medium">{c.case} — {c.cite}</div>
+                  <div className="text-slate-500 mt-0.5">{c.holding}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AI Memory Tab
 // ---------------------------------------------------------------------------
 
@@ -1668,6 +1976,8 @@ export default function Settings() {
         return <ProfileTab />;
       case 'memory':
         return <MemoryTab />;
+      case 'knowledge':
+        return <KnowledgeBaseTab />;
       case 'defendants':
         return <DefendantsTab />;
       case 'pipeline':
