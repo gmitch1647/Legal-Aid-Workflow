@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   startDraft, getDraftStatus, getDraftResult, downloadDraftDocx, reviseDraft,
-  analyzeCreditReport, streamDisputeChat,
+  analyzeCreditReport, analyzeCreditReportPDF, streamDisputeChat,
   getDisputeSessions, getDisputeSession, createDisputeSession,
   updateDisputeSession, deleteDisputeSession,
 } from '../../lib/api';
@@ -240,19 +240,26 @@ export default function DisputeLetters() {
     setParsingBureaus(prev => ({ ...prev, [bureau]: true }));
     setParseError(null);
     try {
-      const { text, isScanned } = await extractTextFromPDF(file);
-      if (isScanned) {
-        setParseError(`${bureau}: This PDF appears to be a scan. Try pasting the text manually.`);
-        setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
-        return;
+      // Try server-side PDF extraction first (most reliable for annual credit reports)
+      let result;
+      try {
+        result = await analyzeCreditReportPDF(file, bureau);
+      } catch (serverErr) {
+        // Fallback to client-side extraction
+        console.log('Server-side PDF extraction failed, trying client-side:', serverErr.message);
+        const { text, isScanned } = await extractTextFromPDF(file);
+        if (isScanned) {
+          setParseError(`${bureau}: This PDF appears to be a scan. Try pasting the text manually.`);
+          setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
+          return;
+        }
+        if (!text || text.length < 50) {
+          setParseError(`${bureau}: Could not extract text. Try pasting the text manually.`);
+          setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
+          return;
+        }
+        result = await analyzeCreditReport(text, bureau);
       }
-      if (!text || text.length < 50) {
-        setParseError(`${bureau}: Could not extract text. Try pasting the text manually.`);
-        setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
-        return;
-      }
-
-      const result = await analyzeCreditReport(text, bureau);
       if (result.accounts && result.accounts.length > 0) {
         const newAccounts = result.accounts.map((a, i) => ({
           ...a,

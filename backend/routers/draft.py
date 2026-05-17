@@ -1201,6 +1201,70 @@ RULES:
 
 
 # ---------------------------------------------------------------------------
+# POST /analyze-credit-report-pdf — upload PDF, extract text server-side, analyze
+# ---------------------------------------------------------------------------
+
+
+@router.post("/analyze-credit-report-pdf")
+async def analyze_credit_report_pdf_endpoint(
+    file: UploadFile = File(...),
+    bureau: str = Form(""),
+    authorization: str = Header(default=None),
+):
+    """Upload a credit report PDF. Server extracts text and sends to Claude."""
+    import io
+
+    content = await file.read()
+    text = ""
+
+    # Try PyPDF2 first
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(content))
+        pages = []
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                pages.append(page_text)
+        text = "\n\n--- PAGE BREAK ---\n\n".join(pages)
+        logger.info(f"PDF extracted via PyPDF2: {len(text)} chars from {len(pages)} pages")
+    except Exception as e:
+        logger.warning(f"PyPDF2 extraction failed: {e}")
+
+    # Fallback: try pymupdf if PyPDF2 failed
+    if not text or len(text) < 100:
+        try:
+            import fitz
+            doc = fitz.open(stream=content, filetype="pdf")
+            pages = []
+            for page in doc:
+                page_text = page.get_text()
+                if page_text:
+                    pages.append(page_text)
+            text = "\n\n--- PAGE BREAK ---\n\n".join(pages)
+            logger.info(f"PDF extracted via pymupdf: {len(text)} chars from {len(pages)} pages")
+        except Exception as e:
+            logger.warning(f"pymupdf extraction failed: {e}")
+
+    if not text or len(text) < 50:
+        raise HTTPException(status_code=400, detail="Could not extract text from this PDF. Try pasting the report text manually.")
+
+    try:
+        from agents.credit_analyzer import analyze_credit_report
+        accounts = await analyze_credit_report(text)
+
+        if bureau:
+            for acc in accounts:
+                if not acc.get("bureau"):
+                    acc["bureau"] = bureau
+
+        return {"accounts": accounts, "count": len(accounts), "text_length": len(text)}
+    except Exception as e:
+        logger.exception("Credit report PDF analysis failed")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {type(e).__name__}: {str(e)[:300]}")
+
+
+# ---------------------------------------------------------------------------
 # POST /analyze-credit-report — AI analysis of credit report text
 # ---------------------------------------------------------------------------
 

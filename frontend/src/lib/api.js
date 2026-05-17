@@ -473,6 +473,16 @@ export async function analyzeCreditReport(reportText, bureau = '') {
   });
 }
 
+export async function analyzeCreditReportPDF(file, bureau = '') {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('bureau', bureau);
+  return request('/draft/analyze-credit-report-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
 export async function streamDisputeChat(message, letterText, accountsContext, history, onToken) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/draft/dispute-chat`, {
