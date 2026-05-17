@@ -985,7 +985,7 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
         full_response = ""
         try:
             with client.messages.stream(
-                model="claude-haiku-4-5",
+                model="claude-sonnet-4-5",
                 max_tokens=16384,
                 system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                 messages=messages,
@@ -1152,8 +1152,8 @@ RULES:
     async def generate():
         try:
             with client.messages.stream(
-                model="claude-haiku-4-5",
-                max_tokens=8192,
+                model="claude-sonnet-4-5",
+                max_tokens=16384,
                 system=system_prompt,
                 messages=messages,
             ) as stream:
