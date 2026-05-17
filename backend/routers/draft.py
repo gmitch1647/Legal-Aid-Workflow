@@ -920,13 +920,14 @@ WHEN ANSWERING QUESTIONS OR GIVING OPINIONS:
 - NEVER say you can only handle one document type — you handle ALL types
 
 WHEN REVISING THE DOCUMENT:
-- Start your response with "REVISED DOCUMENT:" followed by the complete updated text
-- Maintain proper formatting for the document type:
-  * Complaints: numbered paragraphs, counts, damages language
-  * Discovery: numbered requests, definitions section, instructions section, answer spaces
-  * Motions: proper heading, argument sections, prayer for relief
-  * Demand letters: formal letter format, demand terms, deadline
+- Start your response with "REVISED DOCUMENT:" followed by the COMPLETE updated text
+- You MUST return the ENTIRE document from start to finish — do NOT truncate, skip sections, or use "..." or "[remainder unchanged]"
+- Every numbered paragraph must be present. Every count must be complete. Every section header must appear.
+- If the complaint is long, that's fine — return ALL of it. Do not abbreviate.
+- Maintain proper formatting: numbered paragraphs, section headers, counts with full content
 - NO markdown — plain text only
+- Do NOT add any commentary before or after the revised document
+- The document must start with "IN THE UNITED STATES DISTRICT COURT" and end with the signature block
 
 DISCOVERY-SPECIFIC KNOWLEDGE:
 - All interrogatories must include space/instructions for answering
@@ -970,9 +971,9 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
     # Current user message
     user_content = ""
     if complaint_text:
-        user_content += f"CURRENT COMPLAINT (v latest):\n---\n{complaint_text[:12000]}\n---\n\n"
+        user_content += f"CURRENT COMPLAINT (v latest):\n---\n{complaint_text}\n---\n\n"
     if case_facts:
-        user_content += f"CASE FACTS:\n{case_facts[:3000]}\n\n"
+        user_content += f"CASE FACTS:\n{case_facts[:5000]}\n\n"
     if attachment_text:
         user_content += f"ATTACHMENTS:\n{attachment_text}\n\n"
     user_content += f"ATTORNEY: {message}"
