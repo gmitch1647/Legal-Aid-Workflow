@@ -1249,6 +1249,25 @@ async def analyze_credit_report_pdf_endpoint(
     if not text or len(text) < 50:
         raise HTTPException(status_code=400, detail="Could not extract text from this PDF. Try pasting the report text manually.")
 
+    # Pre-process: strip noisy web-captured formatting from TransUnion/Equifax/Experian online reports
+    import re
+    # Remove repeated column headers (Balance, Past Due, Remarks, Rating on every line)
+    text = re.sub(r'\nBalance\n', '\n', text)
+    text = re.sub(r'\nPast Due\n', '\n', text)
+    text = re.sub(r'\nScheduled\nPayment\n', '\n', text)
+    text = re.sub(r'\nRemarks\n', '\n', text)
+    text = re.sub(r'\nRating\n', '\n', text)
+    # Remove "Chat Now" and navigation elements
+    text = re.sub(r'Chat Now\n.*?View Credit Report.*?\d+/\d+', '', text, flags=re.DOTALL)
+    text = re.sub(r'Skip to main content', '', text)
+    text = re.sub(r'Feedback\n', '', text)
+    # Collapse multiple blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Remove "- - -" placeholder values
+    text = re.sub(r'- - -', '', text)
+
+    logger.info(f"PDF text after cleanup: {len(text)} chars (was {len(text)} before)")
+
     try:
         from agents.credit_analyzer import analyze_credit_report
         accounts = await analyze_credit_report(text)
