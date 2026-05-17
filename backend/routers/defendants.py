@@ -113,3 +113,33 @@ async def update_defendant_endpoint(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# DELETE /{defendant_id} -- delete defendant (attorney only)
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/{defendant_id}")
+async def delete_defendant_endpoint(
+    defendant_id: str,
+    authorization: str = Header(...),
+):
+    """Attorney deletes a defendant record."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    # Remove from case_defendants junction table first
+    try:
+        supabase.table("case_defendants").delete().eq("defendant_id", defendant_id).execute()
+    except Exception:
+        pass
+
+    # Delete the defendant
+    resp = supabase.table("defendants").delete().eq("id", defendant_id).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Defendant not found")
+
+    return {"deleted": True}

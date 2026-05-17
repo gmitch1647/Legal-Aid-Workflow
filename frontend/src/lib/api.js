@@ -168,6 +168,10 @@ export async function updateDefendant(id, data) {
   });
 }
 
+export async function deleteDefendant(id) {
+  return request(`/defendants/${id}`, { method: 'DELETE' });
+}
+
 // ---------------------------------------------------------------------------
 // Documents
 // ---------------------------------------------------------------------------

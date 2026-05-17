@@ -26,6 +26,7 @@ import {
   getDefendants,
   createDefendant,
   updateDefendant,
+  deleteDefendant,
   reindexReferenceCases,
   getReindexStatus,
   getPipelineStages,
@@ -40,6 +41,7 @@ import {
   seedViolationPatterns,
   getViolationPatterns,
   getCaseLaw,
+  getCaseLawEntry,
   uploadCaseLaw,
   bulkUploadCaseLaw,
   reprocessAllCaseLaw,
@@ -366,9 +368,7 @@ function DefendantsTab() {
   const handleDelete = async (id) => {
     try {
       setActionLoading(true);
-      // Use supabase directly for delete, or API if available
-      const { error: delErr } = await supabase.from('defendants').delete().eq('id', id);
-      if (delErr) throw delErr;
+      await deleteDefendant(id);
       setDeleteConfirm(null);
       await fetchDefendants();
     } catch (err) {
@@ -1743,31 +1743,76 @@ function KnowledgeBaseTab() {
               {caseLawEntries
                 .filter(c => !filterCategory || (c.tags || []).includes(filterCategory))
                 .map(c => (
-                <div key={c.id} className="bg-white rounded-lg border border-slate-200 p-3 flex items-start gap-3 group hover:border-slate-300">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-slate-900">{c.case_name}</div>
-                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 flex-wrap">
-                      {c.citation && <span>{c.citation}</span>}
-                      {c.court && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-medium">{c.court}</span>}
-                      {c.year && <span>{c.year}</span>}
-                      {(c.statutes || []).map(s => (
-                        <span key={s} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full text-[10px] font-medium">{s}</span>
-                      ))}
-                      {(c.tags || []).filter(t => categories.includes(t)).map(t => (
-                        <span key={t} className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-medium">{t}</span>
-                      ))}
-                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${c.indexed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {c.indexed ? 'Indexed' : 'Processing'}
-                      </span>
-                    </div>
-                    {c.holding && <p className="text-xs text-slate-600 mt-1 line-clamp-2">{c.holding}</p>}
-                  </div>
-                  <button onClick={() => handleDeleteCaseLaw(c.id)}
-                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <CaseLawCard key={c.id} entry={c} onDelete={() => handleDeleteCaseLaw(c.id)} categories={categories} />
               ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CaseLawCard({ entry: c, onDelete, categories }) {
+  const [expanded, setExpanded] = useState(false);
+  const [fullText, setFullText] = useState(null);
+  const [loadingFull, setLoadingFull] = useState(false);
+
+  async function loadFullText() {
+    if (fullText !== null) { setExpanded(!expanded); return; }
+    setExpanded(true);
+    setLoadingFull(true);
+    try {
+      const data = await getCaseLawEntry(c.id);
+      setFullText(data.full_text || data.summary || 'No content available.');
+    } catch (err) {
+      setFullText('Failed to load content.');
+    } finally {
+      setLoadingFull(false);
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <div className="p-3 flex items-start gap-3 cursor-pointer hover:bg-slate-50 transition" onClick={loadFullText}>
+        <ChevronRight className={`w-4 h-4 text-slate-400 mt-0.5 shrink-0 transition ${expanded ? 'rotate-90' : ''}`} />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-slate-900">{c.case_name}</div>
+          <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 flex-wrap">
+            {c.citation && <span>{c.citation}</span>}
+            {c.court && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-medium">{c.court}</span>}
+            {c.year && <span>{c.year}</span>}
+            {(c.statutes || []).map(s => (
+              <span key={s} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full text-[10px] font-medium">{s}</span>
+            ))}
+            {(c.tags || []).filter(t => categories.includes(t)).map(t => (
+              <span key={t} className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-medium">{t}</span>
+            ))}
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${c.indexed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              {c.indexed ? 'Indexed' : 'Processing'}
+            </span>
+          </div>
+          {c.holding && <p className="text-xs text-slate-600 mt-1 line-clamp-2">{c.holding}</p>}
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0">
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-slate-200 p-4 bg-slate-50">
+          {loadingFull ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500 py-4"><Loader2 className="w-4 h-4 animate-spin" /> Loading full text...</div>
+          ) : (
+            <div className="max-h-[500px] overflow-y-auto">
+              {c.summary && (
+                <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="text-[10px] font-bold uppercase text-blue-600 mb-1">Summary</div>
+                  <p className="text-xs text-slate-800">{c.summary}</p>
+                </div>
+              )}
+              <pre className="text-xs text-slate-700 whitespace-pre-wrap font-sans leading-relaxed">{fullText}</pre>
             </div>
           )}
         </div>
