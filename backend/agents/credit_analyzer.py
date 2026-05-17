@@ -145,12 +145,39 @@ Be EXTREMELY SPECIFIC in findings — cite exact numbers, dates, account details
 
 Return ONLY a JSON array. No markdown. No explanation. Just the array of account objects.
 
+CREDIT REPORT FORMAT GUIDANCE:
+Annual credit reports (annualcreditreport.com) use specific formatting:
+
+TransUnion format:
+- Accounts listed under "Account Information" or "Trade Lines"
+- Each account shows: creditor name, account number, account type, payment status
+- Late payments shown in "Payment History" grid or "Payment Pattern"
+- Collections listed under "Collection Accounts" or "Adverse Accounts"
+- Look for: "30 days late", "60 days late", "90 days late", "120 days late"
+- Look for: "Charge-off", "Collection", "Repossession", "Foreclosure"
+- Look for: "Account Status: Derogatory" or "Rating: Derogatory"
+
+Equifax format:
+- Accounts under "Account Information"
+- Payment status shown as codes or text descriptions
+- Collections may be listed separately
+- Look for payment history grids showing months with late indicators
+
+Experian format:
+- Accounts listed with "Status" field showing current condition
+- Payment history shown as monthly grid
+- "Potentially Negative" section contains all adverse accounts
+- Collections under "Collections" section
+
 CRITICAL INSTRUCTIONS:
 - Extract EVERY account with ANY negative mark. Do not skip ANY.
 - Include: collections, charge-offs, late payments (even one 30-day late), public records, inquiries, bankruptcies, repossessions, judgments, tax liens, and ANY account that is NOT in perfect standing.
 - If an account has even ONE late payment in its history, include it.
 - If an account is closed with a balance, include it.
 - If an account has been transferred to collections, include BOTH the original and the collection.
+- Look at the ENTIRE report — negative accounts may appear in different sections.
+- Do NOT stop after finding the first few accounts — read through ALL pages.
+- If the text is garbled or formatting is messy, do your best to extract accounts — imperfect data is better than missing accounts.
 - Apply Metro 2 knowledge to identify violations that a consumer would not normally catch.
 - Count your accounts at the end and verify you haven't missed any.\
 """
@@ -341,7 +368,7 @@ async def analyze_credit_report(report_text: str) -> list:
                 )
 
             response = client.messages.create(
-                model="claude-haiku-4-5",
+                model="claude-sonnet-4-5",
                 max_tokens=16384,
                 system=system_with_memory,
                 messages=[{
