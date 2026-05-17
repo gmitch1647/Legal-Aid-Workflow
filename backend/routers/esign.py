@@ -124,6 +124,7 @@ class SignatureRequestPayload(BaseModel):
     case_id: Optional[str] = None
     client_id: Optional[str] = None
     document_type: str = "general"
+    custom_fields: Optional[dict] = None  # Auto-populate fields on the template
 
 
 @router.post("/send")
@@ -142,7 +143,40 @@ async def send_signature_request(
     supabase = get_supabase()
 
     if payload.template_id:
-        # Send from template
+        # Auto-populate custom fields from client profile
+        custom_fields = {}
+        if payload.client_id:
+            try:
+                client_resp = supabase.table("profiles").select("*").eq("id", payload.client_id).limit(1).execute()
+                if client_resp.data:
+                    c = client_resp.data[0]
+                    custom_fields = {
+                        "client_name": c.get("full_name", payload.signer_name),
+                        "client_email": c.get("email", payload.signer_email),
+                        "client_phone": c.get("phone", ""),
+                        "client_address": c.get("address", ""),
+                        "client_city": c.get("county", ""),
+                        "client_state": c.get("state", ""),
+                    }
+            except Exception as e:
+                logger.warning(f"Could not load client profile for auto-fill: {e}")
+
+        # Get attorney info for auto-fill
+        try:
+            custom_fields["attorney_name"] = profile.get("full_name", "")
+            custom_fields["attorney_email"] = profile.get("email", "")
+            custom_fields["attorney_phone"] = profile.get("phone", "")
+            custom_fields["firm_name"] = profile.get("firm_name", "")
+            custom_fields["bar_number"] = profile.get("bar_number", "")
+            custom_fields["date"] = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+        except Exception:
+            pass
+
+        # Merge with any explicitly provided custom fields
+        if payload.custom_fields:
+            custom_fields.update(payload.custom_fields)
+
+        # Build the request
         request_data = {
             "template_ids": [payload.template_id],
             "title": payload.title,
@@ -157,6 +191,13 @@ async def send_signature_request(
             ],
             "test_mode": 0,
         }
+
+        # Add custom fields to pre-fill the template
+        if custom_fields:
+            request_data["custom_fields"] = [
+                {"name": k, "value": v} for k, v in custom_fields.items() if v
+            ]
+
         if _get_client_id():
             request_data["client_id"] = _get_client_id()
 
