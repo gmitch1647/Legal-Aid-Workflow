@@ -941,10 +941,20 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
         except Exception as e:
             logger.debug(f"[fast_draft] Memory retrieval skipped: {e}")
 
-        # Load discovery knowledge base if drafting discovery
+        # Load knowledge base content relevant to this draft
         discovery_knowledge = ""
         if document_type == "discovery":
             discovery_knowledge = _load_discovery_knowledge(case_facts)
+
+        # Load relevant legal knowledge (statutes, case law, rules) for ALL document types
+        legal_knowledge = ""
+        try:
+            from agents.interactive_agent import _search_knowledge_base
+            legal_knowledge = _search_knowledge_base(case_facts, max_chars=15000)
+            if legal_knowledge:
+                logger.info(f"[fast_draft] Loaded {len(legal_knowledge)} chars of legal knowledge")
+        except Exception as e:
+            logger.debug(f"[fast_draft] Legal knowledge search skipped: {e}")
 
         # Build system prompt with caching
         system_blocks = [
@@ -958,6 +968,11 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             system_blocks.append({
                 "type": "text",
                 "text": discovery_knowledge,
+            })
+        if legal_knowledge:
+            system_blocks.append({
+                "type": "text",
+                "text": f"\n--- LEGAL REFERENCE (statutes, case law, rules) ---\n{legal_knowledge}",
             })
         if reference_context:
             system_blocks.append({
