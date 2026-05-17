@@ -100,6 +100,8 @@ The court applied the well-established principle that "reasonableness" under § 
 
 The court noted that a CRA's knowing violation of an unambiguous statutory requirement (like the certification prerequisite for reinsertion) may support a finding of willfulness under § 1681n, entitling the consumer to statutory damages of $100–$1,000 and punitive damages without proof of actual damages. This is because § 1681i(a)(5)(B) does not involve any reasonableness standard — it is a clear mandate that either was or was not followed.
 
+The distinction between reinsertion violations and general accuracy claims is critical for willfulness: general accuracy claims under § 1681e(b) require showing the CRA's procedures were "unreasonable," which inherently involves judgment and makes willfulness harder to prove. But reinsertion without certification involves no judgment — the statute says "may not" without exception. Under the Supreme Court's later *Safeco* framework (2007), a CRA that violates a clear statutory prohibition acts at minimum with "reckless disregard" because no objectively reasonable reading of § 1681i(a)(5)(B) permits reinsertion without certification. This makes reinsertion claims among the strongest vehicles for willful noncompliance claims and punitive damages in FCRA litigation.
+
 ---
 
 ## Application to LegalFlow Cases
