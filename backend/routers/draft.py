@@ -1249,24 +1249,66 @@ async def analyze_credit_report_pdf_endpoint(
     if not text or len(text) < 50:
         raise HTTPException(status_code=400, detail="Could not extract text from this PDF. Try pasting the report text manually.")
 
-    # Pre-process: strip noisy web-captured formatting from TransUnion/Equifax/Experian online reports
+    # Smart extraction for web-captured credit reports (TransUnion/Equifax/Experian online)
+    # These are 50-80+ page PDFs with massive formatting noise
     import re
-    # Remove repeated column headers (Balance, Past Due, Remarks, Rating on every line)
-    text = re.sub(r'\nBalance\n', '\n', text)
-    text = re.sub(r'\nPast Due\n', '\n', text)
-    text = re.sub(r'\nScheduled\nPayment\n', '\n', text)
-    text = re.sub(r'\nRemarks\n', '\n', text)
-    text = re.sub(r'\nRating\n', '\n', text)
-    # Remove "Chat Now" and navigation elements
-    text = re.sub(r'Chat Now\n.*?View Credit Report.*?\d+/\d+', '', text, flags=re.DOTALL)
-    text = re.sub(r'Skip to main content', '', text)
-    text = re.sub(r'Feedback\n', '', text)
-    # Collapse multiple blank lines
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    # Remove "- - -" placeholder values
-    text = re.sub(r'- - -', '', text)
+    if len(text) > 40000:
+        logger.info(f"[PDF] Large report ({len(text)} chars), applying smart extraction")
+        lines = text.split('\n')
+        accounts = []
+        current = []
 
-    logger.info(f"PDF text after cleanup: {len(text)} chars (was {len(text)} before)")
+        important = {'Address', 'Phone', 'Date Opened', 'Date Updated', 'Date Closed',
+            'Pay Status', 'Balance', 'Credit Limit', 'High Balance', 'Loan Type',
+            'Monthly Payment', 'Last Payment Made', 'Terms', 'Remarks', 'Responsibility',
+            'Account Type', 'Estimated month and year this item will be removed',
+            'High Balance (Hist.)', 'Credit Limit (Hist.)', 'Original Creditor'}
+
+        i = 0
+        while i < len(lines):
+            s = lines[i].strip()
+
+            if re.match(r'^[A-Z][A-Z\s&/\.\'-]+\s+\d{4,}[\d\*]+$', s):
+                if current:
+                    accounts.append('\n'.join(current))
+                current = [f'ACCOUNT: {s}']
+                i += 1
+                continue
+
+            for field in important:
+                if s == field or s.startswith(field):
+                    if i + 2 < len(lines):
+                        val = lines[i + 2].strip()
+                        if val and val not in important and not val.startswith('Chat'):
+                            current.append(f'{field}: {val}')
+                            i += 3
+                            break
+                    i += 1
+                    break
+            else:
+                if s in ('30', '60', '90', '120', 'C/O', 'COL', 'FC', 'RPO', 'VS'):
+                    for k in range(i - 1, max(i - 6, 0), -1):
+                        m = re.match(r'^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$', lines[k].strip())
+                        if m:
+                            current.append(f'LATE: {m.group()} = {s}')
+                            break
+                if '>' in s and '<' in s:
+                    current.append(s)
+                i += 1
+
+        if current:
+            accounts.append('\n'.join(current))
+        accounts = [a for a in accounts if 'ACCOUNT:' in a and len(a) > 30]
+
+        # Also extract public records
+        pr = ''
+        if 'Public Records' in text:
+            pr_start = text.index('Public Records')
+            pr_end = min(pr_start + 2000, text.index('Accounts', pr_start) if 'Accounts' in text[pr_start:pr_start + 3000] else pr_start + 2000)
+            pr = text[pr_start:pr_end]
+
+        text = f"CREDIT REPORT - {len(accounts)} accounts found\n\nPUBLIC RECORDS:\n{pr}\n\n" + '\n\n'.join(accounts)
+        logger.info(f"[PDF] Smart extraction: {len(accounts)} accounts, {len(text)} chars")
 
     try:
         from agents.credit_analyzer import analyze_credit_report
