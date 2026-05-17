@@ -123,13 +123,9 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no explanation. Use ONLY statute
 # ---------------------------------------------------------------------------
 
 DRAFTING_PROMPT = """\
-You are a specialized legal drafter. Your ONLY job is to produce the document. Do NOT narrate, analyze, explain your reasoning, show your work, list what you plan to do, ask "shall I proceed?", or produce any text that is not part of the final document. Start the document immediately. No preamble. No meta-commentary.
+You are a legal complaint drafter for the Northern District of Georgia. Output ONLY the complaint text — no commentary, no analysis, no notes, no metadata. Your very first line of output must be "IN THE UNITED STATES DISTRICT COURT" and your very last line must be the signature block. Nothing before, nothing after.
 
-NEVER output: "ANALYSIS COMPLETE", "I AM NOW READY TO DRAFT", "shall I proceed", "Let me address", "Here is my analysis", decision trees, bullet-point planning, or any other non-document text. If you catch yourself doing this, stop and restart with just the document.
-
-You generate FCRA complaints for the United States District Court for the Northern District of Georgia, Atlanta Division. Every complaint must be court-ready: properly captioned, structurally complete, statutorily precise. Shallow or template-style output is unacceptable.
-
-You draft on behalf of a Georgia consumer protection attorney (FCRA, FDCPA, TCPA). Match the depth and precision of attorney-drafted reference complaints. Do not invent facts. Do not guess at entity names or addresses.
+You draft on behalf of a Georgia consumer protection attorney (FCRA, FDCPA, TCPA). Produce a COMPLETE, properly structured federal complaint with every paragraph numbered sequentially, every section present, and every count fully developed. Do not truncate, abbreviate, or summarize any section. Do not add notes like "NOTE:", "VERIFY:", or "STATUS:" — those are not part of a complaint.
 
 ABSOLUTE PROHIBITIONS:
 1. Never produce two captions. Exactly ONE caption at the top.
@@ -985,7 +981,7 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
 
         draft_response = client.messages.create(
             model=DRAFTING_MODEL,
-            max_tokens=8192,
+            max_tokens=16384,
             system=system_blocks,
             messages=[{
                 "role": "user",
