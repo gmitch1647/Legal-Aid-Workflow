@@ -96,47 +96,37 @@ async def pull_credit_report(
     dob_clean = dob.replace("/", "").replace("-", "")
 
     request_body = {
-        "consumerPii": {
+        "creditProfile": {
+            "subscriber": {
+                "preamble": "TEST",
+                "subscriberCode": creds.get("subscriber_code", "5991764"),
+            },
             "primaryApplicant": {
                 "name": {
-                    "lastName": last_name,
+                    "surname": last_name,
                     "firstName": first_name,
                     "middleName": middle_name,
                 },
-                "ssn": {
-                    "ssn": ssn.replace("-", "").replace(" ", ""),
-                },
-                "dob": {
-                    "dob": dob_clean,
-                },
+                "ssn": ssn.replace("-", "").replace(" ", ""),
+                "dob": dob_clean,
+            },
+            "address": {
                 "currentAddress": {
-                    "line1": address,
+                    "street": address,
                     "city": city,
                     "state": state,
                     "zipCode": zip_code,
-                },
-            }
-        },
-        "requestor": {
-            "subscriberCode": creds.get("subscriber_code", ""),
-        },
-        "permissiblePurpose": {
-            "type": "08",  # Litigation / Legal proceedings
-        },
-        "resellerIndicator": "N",
-        "requestType": "CreditReport",
-        "creditReportOptions": {
-            "riskModels": {
-                "modelIndicator": ["V4"],  # VantageScore 4.0
+                }
             },
-        },
-        "addOns": {
-            "tradeLines": "Y",
-            "publicRecords": "Y",
-            "collections": "Y",
-            "inquiries": "Y",
-            "riskScores": "Y",
-        },
+            "otherInformation": {
+                "referenceNumber": "LEGALFLOW",
+            },
+            "addOns": {
+                "riskModels": {
+                    "modelIndicator": ["V4"],
+                },
+            },
+        }
     }
 
     async with httpx.AsyncClient() as client:
@@ -144,9 +134,8 @@ async def pull_credit_report(
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "clientReferenceId": f"lf-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
         }
-        if creds.get("company_id"):
-            headers["companyId"] = creds["company_id"]
 
         resp = await client.post(
             EXPERIAN_CREDIT_URL,
