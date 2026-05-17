@@ -62,6 +62,32 @@ const EVIDENCE_OPTIONS = [
   { value: 'no', label: 'No — I do not have documents yet' },
 ];
 
+const DEFAULT_DOC_CATEGORIES = [
+  { key: 'credit_report', label: 'Credit Report' },
+  { key: 'collection_letter', label: 'Collection Letter' },
+  { key: 'screenshots', label: 'Screenshots' },
+  { key: 'call_logs', label: 'Call Logs' },
+  { key: 'other', label: 'Other Documents' },
+];
+
+const FORM_CONFIG_KEY = 'case_submission_config';
+
+function loadFormConfig() {
+  try {
+    const saved = localStorage.getItem(FORM_CONFIG_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return {
+    violationCategories: [...VIOLATION_CATEGORIES.filter(c => c.value)],
+    violationTypes: { ...VIOLATION_TYPES },
+    docCategories: [...DEFAULT_DOC_CATEGORIES],
+  };
+}
+
+function saveFormConfig(config) {
+  try { localStorage.setItem(FORM_CONFIG_KEY, JSON.stringify(config)); } catch {}
+}
+
 const EMPTY_VIOLATION = { category: '', type: '', description: '', date: '' };
 
 export default function CaseSubmission() {
@@ -69,6 +95,12 @@ export default function CaseSubmission() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+  const [editMode, setEditMode] = useState(false);
+  const [formConfig, setFormConfig] = useState(loadFormConfig);
+  const [newCatName, setNewCatName] = useState('');
+  const [newTypeName, setNewTypeName] = useState('');
+  const [editingCategory, setEditingCategory] = useState('');
+  const [newDocCat, setNewDocCat] = useState('');
 
   const [consumer, setConsumer] = useState({
     full_name: '', state: '', phone: '', email: '',
@@ -84,6 +116,61 @@ export default function CaseSubmission() {
     credit_report: [], collection_letter: [], screenshots: [],
     call_logs: [], other: [],
   });
+
+  // Config management
+  function addViolationCategory(name) {
+    if (!name.trim()) return;
+    const value = name.trim().toUpperCase().replace(/\s+/g, '_');
+    const updated = { ...formConfig };
+    updated.violationCategories = [...updated.violationCategories, { value, label: name.trim() }];
+    updated.violationTypes[value] = [{ value: '', label: '— Select Type —' }];
+    setFormConfig(updated);
+    saveFormConfig(updated);
+    setNewCatName('');
+  }
+
+  function removeViolationCategory(value) {
+    const updated = { ...formConfig };
+    updated.violationCategories = updated.violationCategories.filter(c => c.value !== value);
+    delete updated.violationTypes[value];
+    setFormConfig(updated);
+    saveFormConfig(updated);
+  }
+
+  function addViolationType(category, name) {
+    if (!name.trim() || !category) return;
+    const value = name.trim();
+    const updated = { ...formConfig };
+    updated.violationTypes[category] = [...(updated.violationTypes[category] || []), { value, label: name.trim() }];
+    setFormConfig(updated);
+    saveFormConfig(updated);
+    setNewTypeName('');
+  }
+
+  function removeViolationType(category, value) {
+    const updated = { ...formConfig };
+    updated.violationTypes[category] = (updated.violationTypes[category] || []).filter(t => t.value !== value);
+    setFormConfig(updated);
+    saveFormConfig(updated);
+  }
+
+  function addDocCategory(name) {
+    if (!name.trim()) return;
+    const key = name.trim().toLowerCase().replace(/\s+/g, '_');
+    const updated = { ...formConfig };
+    updated.docCategories = [...updated.docCategories, { key, label: name.trim() }];
+    setFormConfig(updated);
+    saveFormConfig(updated);
+    setDocs(prev => ({ ...prev, [key]: [] }));
+    setNewDocCat('');
+  }
+
+  function removeDocCategory(key) {
+    const updated = { ...formConfig };
+    updated.docCategories = updated.docCategories.filter(c => c.key !== key);
+    setFormConfig(updated);
+    saveFormConfig(updated);
+  }
 
   function updateConsumer(field, value) {
     setConsumer(prev => ({ ...prev, [field]: value }));
@@ -203,8 +290,17 @@ export default function CaseSubmission() {
       <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 mb-3">
         <ArrowLeft className="w-4 h-4" /> Back to Dashboard
       </button>
-      <h1 className="text-2xl font-bold text-slate-900">Submit New Case</h1>
-      <p className="text-sm text-slate-500 mt-1 mb-6">Fill out all required fields to submit a consumer case for review.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Submit New Case</h1>
+          <p className="text-sm text-slate-500 mt-1">Fill out all required fields to submit a consumer case for review.</p>
+        </div>
+        <button onClick={() => setEditMode(!editMode)}
+          className={`px-3 py-2 rounded-lg text-xs font-medium transition ${editMode ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+          {editMode ? '✏️ Editing Form' : '⚙️ Customize'}
+        </button>
+      </div>
+      <div className="mb-6" />
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* ═══ Consumer Information ═══ */}
@@ -277,6 +373,52 @@ export default function CaseSubmission() {
             </div>
           </div>
 
+          {/* Edit Mode: Manage Categories & Types */}
+          {editMode && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-4">
+              <h3 className="text-sm font-bold text-amber-800">Customize Violation Categories</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {formConfig.violationCategories.map(c => (
+                  <span key={c.value} className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-amber-200 rounded-full text-xs">
+                    {c.label}
+                    <button onClick={() => removeViolationCategory(c.value)} className="text-amber-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input value={newCatName} onChange={e => setNewCatName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addViolationCategory(newCatName); } }}
+                  placeholder="New category name..." className="flex-1 rounded-lg border border-amber-300 px-3 py-1.5 text-sm" />
+                <button onClick={() => addViolationCategory(newCatName)} className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium">Add</button>
+              </div>
+
+              <h3 className="text-sm font-bold text-amber-800 pt-2">Customize Violation Types</h3>
+              <select value={editingCategory} onChange={e => setEditingCategory(e.target.value)}
+                className="w-full rounded-lg border border-amber-300 px-3 py-1.5 text-sm">
+                <option value="">— Select category to edit types —</option>
+                {formConfig.violationCategories.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+              {editingCategory && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(formConfig.violationTypes[editingCategory] || []).filter(t => t.value).map(t => (
+                      <span key={t.value} className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-amber-200 rounded-full text-xs">
+                        {t.label}
+                        <button onClick={() => removeViolationType(editingCategory, t.value)} className="text-amber-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input value={newTypeName} onChange={e => setNewTypeName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addViolationType(editingCategory, newTypeName); } }}
+                      placeholder="New violation type..." className="flex-1 rounded-lg border border-amber-300 px-3 py-1.5 text-sm" />
+                    <button onClick={() => addViolationType(editingCategory, newTypeName)} className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium">Add</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mb-2">
             <label className="text-sm font-semibold text-slate-900">Violations <span className="text-red-500">*</span></label>
             <span className="text-xs text-slate-400 ml-2">Add one or more violations below</span>
@@ -296,7 +438,8 @@ export default function CaseSubmission() {
                     <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Category <span className="text-red-500">*</span></label>
                     <select value={v.category} onChange={e => updateViolation(idx, 'category', e.target.value)}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                      {VIOLATION_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                      <option value="">— Select —</option>
+                      {formConfig.violationCategories.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                     </select>
                   </div>
                   <div>
@@ -304,7 +447,7 @@ export default function CaseSubmission() {
                     <select value={v.type} onChange={e => updateViolation(idx, 'type', e.target.value)}
                       disabled={!v.category}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50">
-                      {(VIOLATION_TYPES[v.category] || [{ value: '', label: '— Select category first —' }]).map(t =>
+                      {(formConfig.violationTypes[v.category] || [{ value: '', label: '— Select category first —' }]).map(t =>
                         <option key={t.value} value={t.value}>{t.label}</option>
                       )}
                     </select>
@@ -345,21 +488,36 @@ export default function CaseSubmission() {
           <h2 className="text-lg font-semibold text-slate-900 mb-1">Supporting Documents</h2>
           <p className="text-xs text-slate-400 mb-4">Accepted formats: PDF, PNG, JPG, DOC, DOCX, CSV, TXT · Max 20 MB per file · Multiple files allowed per category</p>
 
+          {editMode && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+              <h3 className="text-sm font-bold text-amber-800">Customize Document Categories</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {formConfig.docCategories.map(c => (
+                  <span key={c.key} className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-amber-200 rounded-full text-xs">
+                    {c.label}
+                    <button onClick={() => removeDocCategory(c.key)} className="text-amber-400 hover:text-red-500"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input value={newDocCat} onChange={e => setNewDocCat(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addDocCategory(newDocCat); } }}
+                  placeholder="New document category..." className="flex-1 rounded-lg border border-amber-300 px-3 py-1.5 text-sm" />
+                <button onClick={() => addDocCategory(newDocCat)} className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium">Add</button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {[
-              { key: 'credit_report', label: 'Credit Report' },
-              { key: 'collection_letter', label: 'Collection Letter' },
-              { key: 'screenshots', label: 'Screenshots' },
-              { key: 'call_logs', label: 'Call Logs' },
-            ].map(cat => (
+            {formConfig.docCategories.map(cat => (
               <div key={cat.key}>
                 <label className="block text-xs font-bold uppercase text-slate-600 mb-1">{cat.label}</label>
                 <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.csv,.txt"
                   onChange={e => handleFileChange(cat.key, e)}
                   className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border file:border-slate-300 file:text-sm file:font-medium file:bg-white file:text-slate-700 hover:file:bg-slate-50" />
-                {docs[cat.key].length > 0 && (
+                {(docs[cat.key] || []).length > 0 && (
                   <div className="mt-1 space-y-1">
-                    {docs[cat.key].map((f, i) => (
+                    {(docs[cat.key] || []).map((f, i) => (
                       <div key={i} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded px-2 py-1">
                         <FileText className="w-3 h-3" />
                         <span className="truncate flex-1">{f.name}</span>
@@ -372,25 +530,6 @@ export default function CaseSubmission() {
                 )}
               </div>
             ))}
-            <div className="md:col-span-2">
-              <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Other Documents</label>
-              <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.csv,.txt"
-                onChange={e => handleFileChange('other', e)}
-                className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border file:border-slate-300 file:text-sm file:font-medium file:bg-white file:text-slate-700 hover:file:bg-slate-50" />
-              {docs.other.length > 0 && (
-                <div className="mt-1 space-y-1">
-                  {docs.other.map((f, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded px-2 py-1">
-                      <FileText className="w-3 h-3" />
-                      <span className="truncate flex-1">{f.name}</span>
-                      <button type="button" onClick={() => removeFile('other', i)} className="text-slate-400 hover:text-red-500">
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
         </section>
 
