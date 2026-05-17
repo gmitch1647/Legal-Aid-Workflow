@@ -2,10 +2,10 @@
   
 **Purpose.** This corpus is a RAG-ready reference on the Fair Credit Reporting Act (FCRA), 15 U.S.C. §§ 1681–1681x, and its implementing regulation (CFPB Regulation V, 12 C.F.R. Part 1022). It is designed to ground a consumer-law chatbot in primary-source authority — statute citations, agency guidance, and federal case law — rather than copyrighted treatise text.  
   
-**Corpus version:** 1.0  
-**Last updated:** May 16, 2026  
-**File count:** 15 markdown files (this index + 14 substantive files)  
-**Total length:** ~40,000 words  
+**Corpus version:** 1.1  
+**Last updated:** May 17, 2026  
+**File count:** 25 markdown files (this index + 24 substantive files)  
+**Total length:** ~70,000 words  
   
 ---  
   
@@ -39,7 +39,17 @@ For a chatbot, ingest all files together — they cross-reference each other del
 | 12 | `12_Regulation_V_Summary.md` | CFPB Reg V, 12 C.F.R. Part 1022, subpart-by-subpart | — |  
 | 13 | `13_FCRA_Agency_Guidance.md` | FTC 40 Years report; CFPB advisory opinions, supervisory highlights, enforcement | — |  
 | 14 | `14_FCRA_Remedies_Damages_SOL.md` | Civil liability, damages, statute of limitations | §§ 1681n, 1681o, 1681p |  
-| 15 | `15_FCRA_Employment_and_Tenant_Screening.md` | Background-check rules, stand-alone disclosure | § 1681b(b); § 1681k; § 1681d |  
+| 15 | `15_FCRA_Employment_and_Tenant_Screening.md` | Background-check rules, stand-alone disclosure | § 1681b(b); § 1681k; § 1681d |
+| 16 | `16_Cushman_v_Trans_Union.md` | CRA reinvestigation must go beyond furnisher; perfunctory reinvestigation | § 1681i(a); § 1681e(b); § 1681n |
+| 17 | `17_TransUnion_v_Ramirez.md` | Standing / Article III injury for FCRA plaintiffs | § 1681e(b) |
+| 18 | `18_Chaitoff_v_Experian.md` | Technically accurate but misleading reports; completeness | § 1681e(b); § 1681i(a) |
+| 19 | `19_Pittman_v_Experian.md` | Omission of forbearance/modification; reasonableness is jury question | § 1681e(b); § 1681i(a); § 1681s-2(b) |
+| 20 | `20_Hinkle_v_Midland_Credit.md` | **11th Cir. BINDING** — Furnisher rubber-stamping is unreasonable | § 1681s-2(b) |
+| 21 | `21_Losch_v_Nationstar.md` | **11th Cir. BINDING** — Reasonableness is a jury question; defeats MSJ | § 1681e(b); § 1681s-2(b) |
+| 22 | `22_Saunders_v_Branch_Banking.md` | Mere verification ≠ investigation; must access underlying records | § 1681s-2(b) |
+| 23 | `23_Gorman_v_Wolpoff.md` | Cannot rubber-stamp; must review documentation; 5-factor test | § 1681s-2(b) |
+| 24 | `24_Johnson_v_MBNA.md` | Foundational case — furnisher must review underlying documents | § 1681s-2(b) |
+| 25 | `25_Hinkle_v_TransUnion.md` | **11th Cir. BINDING** — CRA cannot rely solely on ACDV/furnisher verification | § 1681i(a); § 1681e(b) |  
   
 ---  
   

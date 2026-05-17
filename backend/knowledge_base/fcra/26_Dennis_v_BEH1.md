@@ -176,6 +176,14 @@ Cite *Dennis* in any case where:
 
 7. **Pattern evidence for punitive damages:** If you can show through discovery that the CRA routinely reinserts without certification (a systemic practice rather than an isolated error), this significantly strengthens punitive damages arguments. Request Rule 30(b)(6) testimony on the CRA's general reinsertion practices.
 
+8. **E-OSCAR system limitations:** In NDGA practice, CRAs frequently argue that their e-OSCAR system constitutes a "reasonable" reinvestigation because it is the industry-standard automated dispute platform. Use *Dennis* to argue that automated verification through e-OSCAR — where the CRA merely sends a standardized form to the furnisher and accepts whatever response comes back — does not satisfy § 1681i(a) when the consumer has provided specific reasons to doubt the furnisher's accuracy. The e-OSCAR system is designed for speed and efficiency, not for thorough investigation, and *Dennis* makes clear that a system focused on efficiency over accuracy does not satisfy the statute.
+
+9. **Equifax reinsertion practices in NDGA:** Equifax (headquartered in Atlanta, within NDGA) has faced multiple lawsuits involving reinsertion without proper certification. When filing against Equifax in NDGA, request Equifax's internal policies governing reinsertion, including its procedures for obtaining and documenting furnisher certification. If Equifax's system automatically reinserts data when a furnisher subsequently reports the same tradeline (without specific certification), this constitutes a systemic policy of violating § 1681i(a)(5)(B).
+
+10. **Damages enhancement through reinsertion timeline:** Create a detailed timeline showing: (a) original dispute date, (b) deletion date, (c) reinsertion date, (d) dates the reinserted inaccuracy was disseminated to third parties after reinsertion. Each credit pull after reinsertion represents a new publication of the inaccurate information — strengthening both actual damages (emotional distress from learning the information returned) and the willfulness argument (the CRA reinstated without certification and then continued disseminating).
+
+11. **Motion in limine to exclude "good faith" defense:** For reinsertion claims, the CRA may argue "good faith" compliance. File a motion in limine to exclude good faith evidence on the reinsertion claim, arguing that § 1681i(a)(5)(B) is a bright-line rule: either certification was obtained or it was not. Good faith is irrelevant to whether the CRA complied with an unambiguous procedural requirement.
+
 ---
 
 ## Related Cases
