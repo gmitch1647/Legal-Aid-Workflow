@@ -28,6 +28,7 @@ def _get_credentials():
         "username": os.environ.get("EXPERIAN_USERNAME", ""),
         "password": os.environ.get("EXPERIAN_PASSWORD", ""),
         "subscriber_code": os.environ.get("EXPERIAN_SUBSCRIBER_CODE", ""),
+        "company_id": os.environ.get("EXPERIAN_COMPANY_ID", ""),
     }
 
 
@@ -139,13 +140,17 @@ async def pull_credit_report(
     }
 
     async with httpx.AsyncClient() as client:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if creds.get("company_id"):
+            headers["companyId"] = creds["company_id"]
+
         resp = await client.post(
             EXPERIAN_CREDIT_URL,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
+            headers=headers,
             json=request_body,
             timeout=30,
         )
