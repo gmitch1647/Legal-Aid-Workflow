@@ -1254,61 +1254,78 @@ async def analyze_credit_report_pdf_endpoint(
     import re
     if len(text) > 40000:
         logger.info(f"[PDF] Large report ({len(text)} chars), applying smart extraction")
+        import re
         lines = text.split('\n')
-        accounts = []
-        current = []
 
-        important = {'Address', 'Phone', 'Date Opened', 'Date Updated', 'Date Closed',
-            'Pay Status', 'Balance', 'Credit Limit', 'High Balance', 'Loan Type',
-            'Monthly Payment', 'Last Payment Made', 'Terms', 'Remarks', 'Responsibility',
-            'Account Type', 'Estimated month and year this item will be removed',
-            'High Balance (Hist.)', 'Credit Limit (Hist.)', 'Original Creditor'}
+        # Detect format: TransUnion (web) vs Equifax (standard PDF)
+        is_transunion_web = 'Chat Now' in text or 'transunion.com/dss' in text
+        is_equifax = 'equifax.com' in text.lower() or 'Confirmation #' in text
 
-        i = 0
-        while i < len(lines):
-            s = lines[i].strip()
+        if is_transunion_web:
+            # TransUnion web-captured format: CREDITOR NAME ACCOUNTNUMBER****
+            accounts = []
+            current = []
+            important = {'Address', 'Phone', 'Date Opened', 'Date Updated', 'Date Closed',
+                'Pay Status', 'Balance', 'Credit Limit', 'High Balance', 'Loan Type',
+                'Monthly Payment', 'Last Payment Made', 'Terms', 'Remarks', 'Responsibility',
+                'Account Type', 'Estimated month and year this item will be removed',
+                'High Balance (Hist.)', 'Credit Limit (Hist.)', 'Original Creditor'}
 
-            if re.match(r'^[A-Z][A-Z\s&/\.\'-]+\s+\d{4,}[\d\*]+$', s):
-                if current:
-                    accounts.append('\n'.join(current))
-                current = [f'ACCOUNT: {s}']
-                i += 1
-                continue
-
-            for field in important:
-                if s == field or s.startswith(field):
-                    if i + 2 < len(lines):
-                        val = lines[i + 2].strip()
-                        if val and val not in important and not val.startswith('Chat'):
-                            current.append(f'{field}: {val}')
-                            i += 3
-                            break
+            i = 0
+            while i < len(lines):
+                s = lines[i].strip()
+                if re.match(r'^[A-Z][A-Z\s&/\.\'-]+\s+\d{4,}[\d\*]+$', s):
+                    if current:
+                        accounts.append('\n'.join(current))
+                    current = [f'ACCOUNT: {s}']
                     i += 1
-                    break
-            else:
-                if s in ('30', '60', '90', '120', 'C/O', 'COL', 'FC', 'RPO', 'VS'):
-                    for k in range(i - 1, max(i - 6, 0), -1):
-                        m = re.match(r'^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$', lines[k].strip())
-                        if m:
-                            current.append(f'LATE: {m.group()} = {s}')
-                            break
-                if '>' in s and '<' in s:
-                    current.append(s)
-                i += 1
+                    continue
+                for field in important:
+                    if s == field or s.startswith(field):
+                        if i + 2 < len(lines):
+                            val = lines[i + 2].strip()
+                            if val and val not in important and not val.startswith('Chat'):
+                                current.append(f'{field}: {val}')
+                                i += 3
+                                break
+                        i += 1
+                        break
+                else:
+                    if s in ('30', '60', '90', '120', 'C/O', 'COL', 'FC', 'RPO', 'VS'):
+                        for k in range(i - 1, max(i - 6, 0), -1):
+                            m = re.match(r'^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$', lines[k].strip())
+                            if m:
+                                current.append(f'LATE: {m.group()} = {s}')
+                                break
+                    if '>' in s and '<' in s:
+                        current.append(s)
+                    i += 1
+            if current:
+                accounts.append('\n'.join(current))
+            accounts = [a for a in accounts if 'ACCOUNT:' in a and len(a) > 30]
 
-        if current:
-            accounts.append('\n'.join(current))
-        accounts = [a for a in accounts if 'ACCOUNT:' in a and len(a) > 30]
+            pr = ''
+            if 'Public Records' in text:
+                pr_start = text.index('Public Records')
+                pr_end = min(pr_start + 2000, text.index('Accounts', pr_start) if 'Accounts' in text[pr_start:pr_start + 3000] else pr_start + 2000)
+                pr = text[pr_start:pr_end]
 
-        # Also extract public records
-        pr = ''
-        if 'Public Records' in text:
-            pr_start = text.index('Public Records')
-            pr_end = min(pr_start + 2000, text.index('Accounts', pr_start) if 'Accounts' in text[pr_start:pr_start + 3000] else pr_start + 2000)
-            pr = text[pr_start:pr_end]
+            text = f"CREDIT REPORT (TransUnion) - {len(accounts)} accounts found\n\nPUBLIC RECORDS:\n{pr}\n\n" + '\n\n'.join(accounts)
+            logger.info(f"[PDF] TransUnion smart extraction: {len(accounts)} accounts, {len(text)} chars")
 
-        text = f"CREDIT REPORT - {len(accounts)} accounts found\n\nPUBLIC RECORDS:\n{pr}\n\n" + '\n\n'.join(accounts)
-        logger.info(f"[PDF] Smart extraction: {len(accounts)} accounts, {len(text)} chars")
+        elif is_equifax:
+            # Equifax format: clean structured PDF, just strip noise
+            # Remove repeated payment history legends, page headers/footers
+            text = re.sub(r'Prepared for:.*?Confirmation #\s*\d+', '', text)
+            text = re.sub(r'\d{10,}-DISC\nPage \d+ of \d+\n\S+', '', text)
+            text = re.sub(r'Paid on Time\n30\n30 Days Past Due.*?No Data Available', '', text, flags=re.DOTALL)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            logger.info(f"[PDF] Equifax cleanup: {len(text)} chars")
+
+        else:
+            # Generic large report: just strip common noise
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            logger.info(f"[PDF] Generic cleanup: {len(text)} chars")
 
     try:
         from agents.credit_analyzer import analyze_credit_report
