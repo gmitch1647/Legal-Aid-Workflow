@@ -25,6 +25,8 @@ def _get_credentials():
     return {
         "client_id": os.environ.get("EXPERIAN_CLIENT_ID", ""),
         "client_secret": os.environ.get("EXPERIAN_CLIENT_SECRET", ""),
+        "username": os.environ.get("EXPERIAN_USERNAME", ""),
+        "password": os.environ.get("EXPERIAN_PASSWORD", ""),
         "subscriber_code": os.environ.get("EXPERIAN_SUBSCRIBER_CODE", ""),
     }
 
@@ -35,22 +37,32 @@ def is_configured():
 
 
 async def get_access_token() -> str:
-    """Get OAuth2 access token from Experian."""
+    """Get OAuth2 access token from Experian using Password Grant."""
     creds = _get_credentials()
+
+    auth_body = {
+        "client_id": creds["client_id"],
+        "client_secret": creds["client_secret"],
+    }
+
+    # If username/password are provided, use Password Grant
+    if creds["username"] and creds["password"]:
+        auth_body["username"] = creds["username"]
+        auth_body["password"] = creds["password"]
+        auth_body["grant_type"] = "password"
+    else:
+        auth_body["grant_type"] = "client_credentials"
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             EXPERIAN_AUTH_URL,
             headers={"Content-Type": "application/json"},
-            json={
-                "client_id": creds["client_id"],
-                "client_secret": creds["client_secret"],
-            },
+            json=auth_body,
         )
 
         if resp.status_code != 200:
             logger.error(f"Experian auth failed: {resp.status_code} {resp.text}")
-            raise Exception(f"Experian authentication failed: {resp.status_code}")
+            raise Exception(f"Experian authentication failed: {resp.status_code} — {resp.text[:200]}")
 
         data = resp.json()
         return data.get("access_token", "")
