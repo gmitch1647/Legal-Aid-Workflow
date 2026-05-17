@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { submitCase, uploadDocument } from '../../lib/api';
+import { submitCase, uploadDocument, registerClient } from '../../lib/api';
 import { X, Plus, FileText, Loader2, CheckCircle2, AlertCircle, ArrowLeft } from 'lucide-react';
 
 const US_STATES = [
@@ -218,6 +218,26 @@ export default function CaseSubmission() {
     setSubmitting(true);
 
     try {
+      // Step 1: Register as a client (creates auth user + profile)
+      let clientId = null;
+      if (consumer.email) {
+        try {
+          const clientResult = await registerClient({
+            email: consumer.email,
+            full_name: consumer.full_name,
+            phone: consumer.phone || null,
+            address: consumer.street_address || null,
+            county: consumer.city || null,
+            state: consumer.state || null,
+          });
+          clientId = clientResult?.profile?.id || clientResult?.id || null;
+        } catch (err) {
+          // Client may already exist — that's okay, continue with case submission
+          console.log('Client registration skipped (may already exist):', err.message);
+        }
+      }
+
+      // Step 2: Build case facts
       const caseFacts = violations.map((v, i) =>
         `Violation ${i + 1}: [${v.category}] ${v.type} — ${v.description}${v.date ? ` (Date: ${v.date})` : ''}`
       ).join('\n\n');
@@ -230,6 +250,7 @@ export default function CaseSubmission() {
         `VIOLATIONS:\n${caseFacts}\n\n` +
         (notes ? `ADDITIONAL NOTES:\n${notes}` : '');
 
+      // Step 3: Submit the case (linked to client if created)
       const result = await submitCase({
         full_name: consumer.full_name,
         email: consumer.email,
@@ -241,6 +262,7 @@ export default function CaseSubmission() {
         description: fullDescription,
         start_date: violations[0]?.date || '',
         harm_description: violations.map(v => v.description).join('; '),
+        client_id: clientId,
       });
 
       const caseId = result?.id || result?.case_id;
