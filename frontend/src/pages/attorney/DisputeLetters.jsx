@@ -226,30 +226,32 @@ export default function DisputeLetters() {
   }
 
   // Account management
-  // PDF upload and parsing
-  const [parsing, setParsing] = useState(false);
+  // PDF upload and parsing — per-bureau so you can upload multiple simultaneously
+  const [parsingBureaus, setParsingBureaus] = useState({});
   const [parseError, setParseError] = useState(null);
-  const [showPasteModal, setShowPasteModal] = useState(null); // bureau id
+  const [showPasteModal, setShowPasteModal] = useState(null);
   const [pasteText, setPasteText] = useState('');
 
+  function isBureauParsing(bureau) {
+    return parsingBureaus[bureau] || false;
+  }
+
   async function handlePDFUpload(file, bureau) {
-    setParsing(true);
+    setParsingBureaus(prev => ({ ...prev, [bureau]: true }));
     setParseError(null);
     try {
-      // Step 1: Extract text from PDF client-side
       const { text, isScanned } = await extractTextFromPDF(file);
       if (isScanned) {
-        setParseError('This PDF appears to be a scan. Please upload a text-based PDF or paste the report text manually.');
-        setParsing(false);
+        setParseError(`${bureau}: This PDF appears to be a scan. Try pasting the text manually.`);
+        setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
         return;
       }
       if (!text || text.length < 50) {
-        setParseError('Could not extract text from this PDF. Try pasting the text manually.');
-        setParsing(false);
+        setParseError(`${bureau}: Could not extract text. Try pasting the text manually.`);
+        setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
         return;
       }
 
-      // Step 2: Send to Claude for AI analysis
       const result = await analyzeCreditReport(text, bureau);
       if (result.accounts && result.accounts.length > 0) {
         const newAccounts = result.accounts.map((a, i) => ({
@@ -266,15 +268,15 @@ export default function DisputeLetters() {
         setParseError('No negative accounts found. Try adding accounts manually.');
       }
     } catch (err) {
-      setParseError(`Analysis failed: ${err.message}`);
+      setParseError(`${bureau}: Analysis failed: ${err.message}`);
     } finally {
-      setParsing(false);
+      setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
     }
   }
 
   async function handlePasteSubmit(bureau) {
     if (!pasteText.trim()) return;
-    setParsing(true);
+    setParsingBureaus(prev => ({ ...prev, [bureau]: true }));
     setParseError(null);
     try {
       const result = await analyzeCreditReport(pasteText, bureau);
@@ -292,9 +294,9 @@ export default function DisputeLetters() {
         setParseError('No negative accounts found in pasted text. Try adding manually.');
       }
     } catch (err) {
-      setParseError(`Analysis failed: ${err.message}`);
+      setParseError(`${bureau}: Analysis failed: ${err.message}`);
     } finally {
-      setParsing(false);
+      setParsingBureaus(prev => ({ ...prev, [bureau]: false }));
       setShowPasteModal(null);
       setPasteText('');
     }
@@ -755,9 +757,9 @@ PART TWO: Consumer statements for accounts marked with Include Consumer Statemen
                 }}
                 className="flex-1 border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition"
               >
-                {parsing ? (
+                {isBureauParsing(activeTab) ? (
                   <div className="flex items-center justify-center gap-2 text-sm text-blue-600">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing credit report with AI...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing {BUREAUS.find(b => b.id === activeTab)?.label} report with AI...
                   </div>
                 ) : (
                   <>
