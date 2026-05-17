@@ -17,8 +17,8 @@ from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
-EXPERIAN_AUTH_URL = "https://us-api.experian.com/oauth2/v1/token"
-EXPERIAN_CREDIT_URL = "https://us-api.experian.com/consumerservices/credit-profile/v2/credit-report"
+EXPERIAN_AUTH_URL = "https://sandbox-us-api.experian.com/oauth2/v1/token"
+EXPERIAN_CREDIT_URL = "https://sandbox-us-api.experian.com/consumerservices/credit-profile/v2/credit-report"
 
 
 def _get_credentials():
