@@ -789,6 +789,37 @@ export async function reorderPipelineStages(stageIds) {
 // Public Intake Form
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Credit Reports (Experian API)
+// ---------------------------------------------------------------------------
+
+export async function getCreditReportConfig() {
+  return request('/credit-reports/config');
+}
+
+export async function pullCreditReport(data) {
+  return request('/credit-reports/pull', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getClientCreditReports(clientId) {
+  return request(`/credit-reports/client/${clientId}`);
+}
+
+export async function getClientScoreHistory(clientId) {
+  return request(`/credit-reports/client/${clientId}/scores`);
+}
+
+export async function deleteCreditReport(id) {
+  return request(`/credit-reports/report/${id}`, { method: 'DELETE' });
+}
+
+// ---------------------------------------------------------------------------
+// Public Intake Form
+// ---------------------------------------------------------------------------
+
 export async function submitIntakeForm(formData) {
   // This is a public endpoint — no auth needed
   const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
