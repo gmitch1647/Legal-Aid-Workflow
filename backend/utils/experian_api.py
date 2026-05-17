@@ -130,19 +130,29 @@ async def pull_credit_report(
     }
 
     async with httpx.AsyncClient() as client:
-        company_id = os.environ.get("EXPERIAN_COMPANY_ID") or os.environ.get("EXPERIAN_CLIENT_ID") or "0"
-        logger.info(f"[Experian] Using companyId: {company_id[:8]}...")
+        company_id = os.environ.get("EXPERIAN_COMPANY_ID") or os.environ.get("EXPERIAN_CLIENT_ID") or ""
 
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
             "clientReferenceId": "LEGALFLOW",
-            "companyId": company_id,
         }
+        # Only add companyId if we have one — some API versions don't need it
+        if company_id:
+            headers["companyId"] = company_id
+
+        # Try the Consumer Credit Profile endpoint
+        credit_url = os.environ.get(
+            "EXPERIAN_CREDIT_URL",
+            "https://sandbox-us-api.experian.com/consumerservices/credit-profile/v2/credit-report"
+        )
+
+        logger.info(f"[Experian] Pulling from: {credit_url}")
+        logger.info(f"[Experian] Headers: {', '.join(k for k in headers.keys())}")
 
         resp = await client.post(
-            EXPERIAN_CREDIT_URL,
+            credit_url,
             headers=headers,
             json=request_body,
             timeout=30,
