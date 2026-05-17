@@ -784,9 +784,9 @@ async def draft_chat_stream(
     request: Request,
     authorization: str = Header(default=None),
 ):
-    """Full conversational assistant for drafts — streams responses.
-    Can revise the complaint, answer questions, discuss case law, or give opinions.
-    If it revises, the response starts with REVISED COMPLAINT: prefix."""
+    """Full conversational assistant for any document type — streams responses.
+    Can revise complaints/discovery/motions, answer questions, discuss case law, or give opinions.
+    If it revises, the response starts with REVISED DOCUMENT: or REVISED COMPLAINT: prefix."""
     from fastapi.responses import StreamingResponse
     import anthropic
 
@@ -877,28 +877,61 @@ async def draft_chat_stream(
         except Exception:
             pass
 
-    system_prompt = """You are a senior legal assistant for a consumer protection attorney in the Northern District of Georgia. You specialize in FCRA, FDCPA, and TCPA litigation.
+    # Determine document type from the case record
+    doc_type = "document"
+    try:
+        dt_resp = supabase.table("cases").select("case_facts").eq("id", session_id).limit(1).execute()
+        if dt_resp.data:
+            facts = dt_resp.data[0].get("case_facts", "")
+            if "MOTION TYPE:" in facts:
+                doc_type = "motion"
+            elif "DISCOVERY TYPE:" in facts:
+                doc_type = "discovery"
+            elif "DISPUTE TYPE:" in facts:
+                doc_type = "dispute letter"
+            elif "demand" in facts.lower()[:200]:
+                doc_type = "demand letter"
+            else:
+                doc_type = "complaint"
+    except Exception:
+        pass
+
+    system_prompt = f"""You are a senior legal assistant for a consumer protection attorney in the Northern District of Georgia. You specialize in FCRA, FDCPA, and TCPA litigation.
+
+The attorney is currently working on a {doc_type.upper()}. You are an expert at drafting, revising, and advising on ALL legal document types: complaints, motions, discovery requests, demand letters, and dispute letters.
 
 You serve TWO roles in this conversation:
-1. LEGAL ADVISOR — Answer questions, give opinions, discuss case law, strategize, analyze issues
-2. COMPLAINT REVISER — When asked to change/add/remove content from the complaint
+1. LEGAL ADVISOR — Answer ANY question about law, strategy, formatting, procedure, discovery practice, or case analysis. You are all-knowing in consumer protection law.
+2. DOCUMENT REVISER — When asked to change/add/remove content from the current {doc_type}
 
 WHEN ANSWERING QUESTIONS OR GIVING OPINIONS:
-- Be direct and specific
-- Cite relevant statutes and case law
+- Be direct, specific, and authoritative
+- Cite relevant statutes, case law, and rules of procedure
 - Give honest assessments of strengths and weaknesses
-- Reference the current complaint and case facts when relevant
-- Share strategic insights about litigation approach
+- Reference the current document and case facts when relevant
+- Share strategic insights — you are a litigation expert
+- If asked about discovery formatting, rules, or practice — answer fully
+- NEVER say you can only handle one document type — you handle ALL types
 
-WHEN REVISING THE COMPLAINT:
-- Start your response with "REVISED COMPLAINT:" followed by the complete updated text
-- NEVER add defendants, parties, or facts not requested
-- CONDENSE counts: same violation by multiple defendants = ONE count
-- Number ALL paragraphs sequentially
+WHEN REVISING THE DOCUMENT:
+- Start your response with "REVISED DOCUMENT:" followed by the complete updated text
+- Maintain proper formatting for the document type:
+  * Complaints: numbered paragraphs, counts, damages language
+  * Discovery: numbered requests, definitions section, instructions section, answer spaces
+  * Motions: proper heading, argument sections, prayer for relief
+  * Demand letters: formal letter format, demand terms, deadline
 - NO markdown — plain text only
-- Use standard damages language and willful/negligent closing in every count
 
-VALID FCRA STATUTES FOR COUNTS:
+DISCOVERY-SPECIFIC KNOWLEDGE:
+- All interrogatories must include space/instructions for answering
+- RFPs should include instructions, definitions, and numbered requests
+- RFAs should be clear yes/no propositions
+- Always include a "INSTRUCTIONS TO RESPONDING PARTY" section
+- Include standard definitions (Documents, Communications, Identify, Relate to)
+- Federal Rules: 33 (interrogatories, max 25), 34 (RFPs), 36 (RFAs)
+- N.D. Ga. Local Rules apply (L.R. 26.1, 33.1, 34.1, 37.1)
+
+VALID FCRA STATUTES:
 CRA: §1681e(b), §1681i(a)(1)(A), §1681i(a)(2)(A), §1681i(a)(4), §1681i(a)(5)(A), §1681i(a)(5)(B), §1681g, §1681i(c)
 Furnishers: §1681s-2(b) (NEVER §1681s-2(a))
 FDCPA: §1692c(c), §1692e, §1692f, §1692g
@@ -906,11 +939,11 @@ TCPA: §227(b)(1)(A)(iii), §227(b)(1)(B), §227(c)
 Georgia FBPA: O.C.G.A. §10-1-390 et seq. (NEVER §34-6-2)
 
 HOW TO DETERMINE YOUR RESPONSE:
-- If the message is clearly asking for a revision/change/addition/removal → revise and return full complaint with "REVISED COMPLAINT:" prefix
-- If the message is a question, request for opinion, or discussion → just answer conversationally
-- If unclear, answer the question AND ask if they want you to revise the complaint based on your answer
+- If asking for a revision/change/addition/removal → revise and return full document with "REVISED DOCUMENT:" prefix
+- If asking a question about law, procedure, strategy, formatting → answer conversationally and thoroughly
+- If unclear, answer the question AND ask if they want you to revise the document based on your answer
 
-Be concise but thorough. The attorney's time is valuable."""
+Be concise but thorough. The attorney's time is valuable. You are an expert — act like one."""
 
     if reference_context:
         system_prompt += f"\n\n--- REFERENCE CASE STYLE ---\n{reference_context}"
@@ -985,9 +1018,15 @@ Be concise but thorough. The attorney's time is valuable."""
             except Exception:
                 pass
 
-            # If it's a revision, save new complaint version
-            if "REVISED COMPLAINT:" in full_response:
-                revised = full_response.split("REVISED COMPLAINT:", 1)[1].strip()
+            # If it's a revision, save new document version
+            revision_marker = None
+            if "REVISED DOCUMENT:" in full_response:
+                revision_marker = "REVISED DOCUMENT:"
+            elif "REVISED COMPLAINT:" in full_response:
+                revision_marker = "REVISED COMPLAINT:"
+
+            if revision_marker:
+                revised = full_response.split(revision_marker, 1)[1].strip()
                 if len(revised) > 1000:
                     try:
                         version_q = supabase.table("complaints").select("version").eq("case_id", session_id).order("version", desc=True).limit(1).execute()

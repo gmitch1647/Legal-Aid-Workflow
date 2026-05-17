@@ -1610,17 +1610,18 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
         prev.map((m) => m._streamId === streamId ? { ...m, _streamId: undefined } : m)
       );
 
-      // If the response contains a revised complaint, update it
-      if (fullText.includes('REVISED COMPLAINT:')) {
-        const revised = fullText.split('REVISED COMPLAINT:')[1].trim();
-        if (revised.length > 1000 && onComplaintUpdate) {
+      // If the response contains a revised document, update it
+      const revisionMarker = fullText.includes('REVISED DOCUMENT:') ? 'REVISED DOCUMENT:'
+        : fullText.includes('REVISED COMPLAINT:') ? 'REVISED COMPLAINT:' : null;
+      if (revisionMarker) {
+        const revised = fullText.split(revisionMarker)[1].trim();
+        if (revised.length > 200 && onComplaintUpdate) {
           onComplaintUpdate(revised);
-          // Append a note to the message
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.role === 'assistant') {
-              const summary = fullText.split('REVISED COMPLAINT:')[0].trim();
-              return [...prev.slice(0, -1), { ...last, content: (summary || '✅ Complaint revised.') + '\n\n✅ Complaint updated above.' }];
+              const summary = fullText.split(revisionMarker)[0].trim();
+              return [...prev.slice(0, -1), { ...last, content: (summary || '✅ Document revised.') + '\n\n✅ Document updated above.' }];
             }
             return prev;
           });
