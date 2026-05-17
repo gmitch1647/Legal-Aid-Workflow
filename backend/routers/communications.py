@@ -67,6 +67,7 @@ async def get_config(authorization: str = Header(...)):
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
+    resend_configured = bool(os.environ.get("RESEND_API_KEY"))
     smtp_configured = bool(
         os.environ.get("SMTP_HOST") and os.environ.get("SMTP_USER")
     )
@@ -77,7 +78,8 @@ async def get_config(authorization: str = Header(...)):
     )
 
     return {
-        "email": smtp_configured,
+        "email": resend_configured or smtp_configured,
+        "email_provider": "resend" if resend_configured else ("smtp" if smtp_configured else "none"),
         "sms": twilio_configured,
         "smtp_from": os.environ.get("EMAIL_FROM", ""),
         "twilio_number": os.environ.get("TWILIO_PHONE_NUMBER", "")[-4:] if os.environ.get("TWILIO_PHONE_NUMBER") else "",
@@ -124,14 +126,15 @@ async def send_email(
 
     supabase = get_supabase()
 
+    resend_key = os.environ.get("RESEND_API_KEY")
     smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_user = os.environ.get("SMTP_USER")
     smtp_pass = os.environ.get("SMTP_PASSWORD")
-    email_from = os.environ.get("EMAIL_FROM", smtp_user)
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    email_from = os.environ.get("EMAIL_FROM", smtp_user or "noreply@example.com")
+    from_name = profile.get('firm_name') or profile.get('full_name', 'LegalFlow')
 
-    if not smtp_host or not smtp_user:
-        # Still log it even if we can't send
+    if not resend_key and not (smtp_host and smtp_user):
         record = supabase.table("communications").insert({
             "client_id": payload.client_id,
             "case_id": payload.case_id,
@@ -141,36 +144,66 @@ async def send_email(
             "subject": payload.subject,
             "body": payload.body,
             "status": "failed",
-            "error_message": "SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASSWORD to Railway.",
+            "error_message": "Email not configured. Add RESEND_API_KEY or SMTP settings to Railway.",
             "sent_by": profile["id"],
         }).execute()
         return {
             "status": "failed",
-            "error": "SMTP not configured",
+            "error": "Email not configured",
             "record": record.data[0] if record.data else None,
         }
-
-    # Build and send the email
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{profile.get('firm_name') or profile.get('full_name', 'LegalFlow')} <{email_from}>"
-    msg["To"] = payload.to_email
-    msg["Subject"] = payload.subject
-    msg.attach(MIMEText(payload.body, "plain"))
-    msg.attach(MIMEText(f"<div style='font-family:sans-serif;font-size:14px;'>{payload.body.replace(chr(10), '<br>')}</div>", "html"))
 
     error_message = None
     send_status = "sent"
 
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-        logger.info(f"Email sent to {payload.to_email}: {payload.subject}")
-    except Exception as e:
-        error_message = str(e)
-        send_status = "failed"
-        logger.error(f"Email failed to {payload.to_email}: {e}")
+    if resend_key:
+        # Send via Resend API
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {resend_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": f"{from_name} <{email_from}>",
+                        "to": [payload.to_email],
+                        "subject": payload.subject,
+                        "html": f"<div style='font-family:sans-serif;font-size:14px;line-height:1.6;'>{payload.body.replace(chr(10), '<br>')}</div>",
+                        "text": payload.body,
+                    },
+                )
+                if resp.status_code in (200, 201):
+                    logger.info(f"Email sent via Resend to {payload.to_email}: {payload.subject}")
+                else:
+                    error_message = resp.text
+                    send_status = "failed"
+                    logger.error(f"Resend failed: {resp.status_code} {resp.text}")
+        except Exception as e:
+            error_message = str(e)
+            send_status = "failed"
+            logger.error(f"Resend error: {e}")
+    else:
+        # Fallback to SMTP
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{from_name} <{email_from}>"
+        msg["To"] = payload.to_email
+        msg["Subject"] = payload.subject
+        msg.attach(MIMEText(payload.body, "plain"))
+        msg.attach(MIMEText(f"<div style='font-family:sans-serif;font-size:14px;'>{payload.body.replace(chr(10), '<br>')}</div>", "html"))
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+            logger.info(f"Email sent via SMTP to {payload.to_email}: {payload.subject}")
+        except Exception as e:
+            error_message = str(e)
+            send_status = "failed"
+            logger.error(f"SMTP failed to {payload.to_email}: {e}")
 
     # Log the communication
     record = supabase.table("communications").insert({
