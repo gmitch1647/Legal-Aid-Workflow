@@ -636,40 +636,15 @@ async def stream_chat(
             }
         ]
 
-        # Include web search tool so the AI can look up current info
-        tools = [
-            {
-                "type": "web_search",
-                "name": "web_search",
-                "max_uses": 3,
-            }
-        ]
-
         with client.messages.stream(
             model=MODEL,
             max_tokens=4096,
             system=system_blocks,
             messages=messages,
-            tools=tools,
         ) as stream:
-            for event in stream:
-                if hasattr(event, 'type'):
-                    if event.type == 'content_block_delta' and hasattr(event, 'delta'):
-                        if hasattr(event.delta, 'text'):
-                            full_response += event.delta.text
-                            yield event.delta.text
-                elif hasattr(event, 'text'):
-                    full_response += event
-                    yield event
-
-        # If stream didn't yield text (tool-use only response), get final text
-        if not full_response:
-            # Fallback: get the final message
-            final_msg = stream.get_final_message()
-            for block in final_msg.content:
-                if hasattr(block, 'text'):
-                    full_response += block.text
-                    yield block.text
+            for text in stream.text_stream:
+                full_response += text
+                yield text
 
         # Save full response to DB
         supabase.table("conversation_messages").insert({
