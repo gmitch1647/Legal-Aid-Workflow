@@ -43,26 +43,24 @@ async def get_access_token() -> str:
     auth_body = {
         "client_id": creds["client_id"],
         "client_secret": creds["client_secret"],
+        "username": creds["username"],
+        "password": creds["password"],
     }
-
-    # If username/password are provided, use Password Grant
-    if creds["username"] and creds["password"]:
-        auth_body["username"] = creds["username"]
-        auth_body["password"] = creds["password"]
-        auth_body["grant_type"] = "password"
-    else:
-        auth_body["grant_type"] = "client_credentials"
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             EXPERIAN_AUTH_URL,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Grant_type": "password",
+            },
             json=auth_body,
         )
 
         if resp.status_code != 200:
             logger.error(f"Experian auth failed: {resp.status_code} {resp.text}")
-            raise Exception(f"Experian authentication failed: {resp.status_code} — {resp.text[:200]}")
+            raise Exception(f"Experian authentication failed: {resp.status_code} — {resp.text[:300]}")
 
         data = resp.json()
         return data.get("access_token", "")
