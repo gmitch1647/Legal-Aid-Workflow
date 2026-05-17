@@ -283,7 +283,7 @@ export async function streamAgentMessage(conversationId, message, onToken) {
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
         if (data === '[DONE]') break;
-        fullText += data;
+        try { fullText += JSON.parse(data); } catch { fullText += data; }
         onToken(fullText);
       }
     }
@@ -409,7 +409,7 @@ export async function streamDraftChat(sessionId, message, complaintText, attachm
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
         if (data === '[DONE]') break;
-        fullText += data;
+        try { fullText += JSON.parse(data); } catch { fullText += data; }
         onToken(fullText);
       }
     }
@@ -504,7 +504,7 @@ export async function streamDisputeChat(message, letterText, accountsContext, hi
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
         if (data === '[DONE]') break;
-        fullText += data;
+        try { fullText += JSON.parse(data); } catch { fullText += data; }
         onToken(fullText);
       }
     }

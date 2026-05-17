@@ -5,6 +5,7 @@ Provides endpoints for interactive agent chat sessions where the
 attorney can converse with specialized AI agents.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -241,7 +242,7 @@ async def stream_chat_message(
             user_message=body.message,
             case_id=convo.get("case_id"),
         ):
-            yield f"data: {token}\n\n"
+            yield f"data: {json.dumps(token)}\n\n"
         yield "data: [DONE]\n\n"
 
     # Update conversation timestamp
