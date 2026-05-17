@@ -168,6 +168,8 @@ async def root():
             "ANTHROPIC_API_KEY": "set" if os.environ.get("ANTHROPIC_API_KEY") else "MISSING",
             "VOYAGE_API_KEY": "set" if os.environ.get("VOYAGE_API_KEY") else "MISSING",
             "DROPBOX_SIGN_API_KEY": "set" if os.environ.get("DROPBOX_SIGN_API_KEY") else "MISSING",
+            "EXPERIAN_CLIENT_ID": "set" if os.environ.get("EXPERIAN_CLIENT_ID") else "MISSING",
+            "EXPERIAN_COMPANY_ID": os.environ.get("EXPERIAN_COMPANY_ID", "MISSING"),
         },
     }
 
