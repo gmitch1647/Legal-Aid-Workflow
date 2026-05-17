@@ -26,13 +26,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-DROPBOX_SIGN_API_KEY = os.environ.get("DROPBOX_SIGN_API_KEY", "")
-DROPBOX_SIGN_CLIENT_ID = os.environ.get("DROPBOX_SIGN_CLIENT_ID", "")
 DROPBOX_SIGN_BASE = "https://api.hellosign.com/v3"
 
 
+def _get_api_key():
+    return os.environ.get("DROPBOX_SIGN_API_KEY", "")
+
+
+def _get_client_id():
+    return os.environ.get("DROPBOX_SIGN_CLIENT_ID", "")
+
+
 def _is_configured() -> bool:
-    return bool(DROPBOX_SIGN_API_KEY)
+    return bool(_get_api_key())
 
 
 async def _get_current_user(authorization: str) -> dict:
@@ -47,7 +53,7 @@ def _require_attorney(profile: dict):
 
 def _api_headers():
     return {
-        "Authorization": f"Basic {DROPBOX_SIGN_API_KEY}",
+        "Authorization": f"Basic {_get_api_key()}",
         "Content-Type": "application/json",
     }
 
@@ -62,7 +68,7 @@ async def get_esign_config(authorization: str = Header(default=None)):
     _require_attorney(profile)
     return {
         "configured": _is_configured(),
-        "client_id": DROPBOX_SIGN_CLIENT_ID or None,
+        "client_id": _get_client_id() or None,
     }
 
 
@@ -83,7 +89,7 @@ async def list_templates(authorization: str = Header(default=None)):
         resp = await client.get(
             f"{DROPBOX_SIGN_BASE}/template/list",
             params={"page": 1, "page_size": 50},
-            auth=(DROPBOX_SIGN_API_KEY, ""),
+            auth=(_get_api_key(), ""),
         )
         if resp.status_code != 200:
             logger.error(f"Dropbox Sign list templates failed: {resp.status_code} {resp.text}")
@@ -151,14 +157,14 @@ async def send_signature_request(
             ],
             "test_mode": 0,
         }
-        if DROPBOX_SIGN_CLIENT_ID:
-            request_data["client_id"] = DROPBOX_SIGN_CLIENT_ID
+        if _get_client_id():
+            request_data["client_id"] = _get_client_id()
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{DROPBOX_SIGN_BASE}/signature_request/send_with_template",
                 json=request_data,
-                auth=(DROPBOX_SIGN_API_KEY, ""),
+                auth=(_get_api_key(), ""),
             )
     else:
         raise HTTPException(status_code=400, detail="template_id is required")
@@ -250,7 +256,7 @@ async def get_signature_request(
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{DROPBOX_SIGN_BASE}/signature_request/{request_id}",
-            auth=(DROPBOX_SIGN_API_KEY, ""),
+            auth=(_get_api_key(), ""),
         )
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail="Failed to fetch signature request")
@@ -307,7 +313,7 @@ async def remind_signer(
         resp = await client.post(
             f"{DROPBOX_SIGN_BASE}/signature_request/remind/{request_id}",
             json={"email_address": email},
-            auth=(DROPBOX_SIGN_API_KEY, ""),
+            auth=(_get_api_key(), ""),
         )
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail="Failed to send reminder")
@@ -334,7 +340,7 @@ async def cancel_signature_request(
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{DROPBOX_SIGN_BASE}/signature_request/cancel/{request_id}",
-            auth=(DROPBOX_SIGN_API_KEY, ""),
+            auth=(_get_api_key(), ""),
         )
         if resp.status_code not in (200, 204):
             raise HTTPException(status_code=resp.status_code, detail="Failed to cancel request")
@@ -372,7 +378,7 @@ async def download_signed_document(
         resp = await client.get(
             f"{DROPBOX_SIGN_BASE}/signature_request/files/{request_id}",
             params={"file_type": "pdf"},
-            auth=(DROPBOX_SIGN_API_KEY, ""),
+            auth=(_get_api_key(), ""),
         )
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail="Failed to download signed document")
