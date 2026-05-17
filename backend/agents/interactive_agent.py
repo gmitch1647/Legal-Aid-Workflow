@@ -243,6 +243,124 @@ def _load_conversation_history(conversation_id: str, limit: int = 50) -> list[di
 
 
 # ---------------------------------------------------------------------------
+# Knowledge base search — searches on-disk files for relevant content
+# ---------------------------------------------------------------------------
+
+def _search_knowledge_base(query: str, max_chars: int = 12000) -> str:
+    """Search the on-disk knowledge base files for content matching the query.
+
+    Searches both FCRA knowledge base and discovery toolkit files.
+    Uses keyword matching to find the most relevant sections.
+    """
+    from pathlib import Path
+
+    if not query or len(query) < 3:
+        return ""
+
+    # Find knowledge base directories
+    possible_roots = [
+        Path(__file__).resolve().parent.parent / "knowledge_base",
+        Path.cwd() / "knowledge_base",
+        Path.cwd() / "backend" / "knowledge_base",
+        Path("/app") / "knowledge_base",
+    ]
+
+    kb_root = None
+    for p in possible_roots:
+        if p.exists():
+            kb_root = p
+            break
+
+    if not kb_root:
+        return ""
+
+    # Extract keywords from query
+    stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'how', 'does',
+                  'do', 'can', 'should', 'would', 'for', 'to', 'in', 'of', 'and', 'or',
+                  'on', 'at', 'by', 'with', 'from', 'about', 'this', 'that', 'it', 'i',
+                  'me', 'my', 'we', 'our', 'you', 'your', 'they', 'their', 'have', 'has'}
+    keywords = [w.lower().strip('?.,!') for w in query.split() if w.lower().strip('?.,!') not in stop_words and len(w) > 2]
+
+    if not keywords:
+        return ""
+
+    # Score each file by keyword matches
+    scored_files = []
+    for md_file in kb_root.rglob("*.md"):
+        try:
+            text = md_file.read_text(encoding="utf-8")
+            text_lower = text.lower()
+            score = sum(text_lower.count(kw) for kw in keywords)
+            if score > 0:
+                scored_files.append((score, md_file, text))
+        except Exception:
+            pass
+
+    if not scored_files:
+        return ""
+
+    # Sort by relevance score and take top files
+    scored_files.sort(key=lambda x: x[0], reverse=True)
+
+    parts = []
+    total = 0
+    for score, filepath, text in scored_files[:5]:
+        # Find the most relevant sections within the file
+        relevant_sections = _extract_relevant_sections(text, keywords, max_section_chars=3000)
+        if relevant_sections:
+            section_text = relevant_sections[:max_chars - total]
+            parts.append(f"[{filepath.stem}]\n{section_text}")
+            total += len(section_text)
+            if total >= max_chars:
+                break
+
+    return "\n\n".join(parts) if parts else ""
+
+
+def _extract_relevant_sections(text: str, keywords: list, max_section_chars: int = 3000) -> str:
+    """Extract the most relevant sections from a document based on keywords."""
+    # Split by headers
+    lines = text.split('\n')
+    sections = []
+    current_section = []
+    current_header = ""
+
+    for line in lines:
+        if line.startswith('#'):
+            if current_section:
+                sections.append((current_header, '\n'.join(current_section)))
+            current_header = line
+            current_section = [line]
+        else:
+            current_section.append(line)
+
+    if current_section:
+        sections.append((current_header, '\n'.join(current_section)))
+
+    # Score sections
+    scored = []
+    for header, content in sections:
+        content_lower = content.lower()
+        score = sum(content_lower.count(kw) * (3 if kw in header.lower() else 1) for kw in keywords)
+        if score > 0:
+            scored.append((score, content))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Return top sections up to char limit
+    result = []
+    total = 0
+    for _, content in scored[:4]:
+        if total + len(content) > max_section_chars:
+            result.append(content[:max_section_chars - total])
+            break
+        result.append(content)
+        total += len(content)
+
+    return "\n---\n".join(result)
+
+
+# ---------------------------------------------------------------------------
 # Main chat function
 # ---------------------------------------------------------------------------
 
@@ -464,6 +582,37 @@ async def stream_chat(
         if case_context:
             system_prompt += f"\n\n--- CASE CONTEXT ---\n{case_context}"
 
+    # Inject relevant knowledge base content (on-disk files)
+    kb_context = _search_knowledge_base(user_message)
+    if kb_context:
+        system_prompt += f"\n\n--- KNOWLEDGE BASE ---\n{kb_context}"
+
+    # Inject relevant case law via semantic search
+    try:
+        from utils.embeddings import embed_text, is_configured as _emb_configured
+        if _emb_configured() and user_message:
+            query_emb = embed_text(user_message[:500])
+            cl_resp = supabase.rpc("match_case_law_chunks", {
+                "query_embedding": query_emb,
+                "match_threshold": 0.6,
+                "match_count": 3,
+            }).execute()
+            if cl_resp.data:
+                cl_parts = ["\n\n--- RELEVANT CASE LAW (from indexed library) ---"]
+                for chunk in cl_resp.data:
+                    case_info = supabase.table("case_law").select(
+                        "case_name, citation, court, year"
+                    ).eq("id", chunk["case_law_id"]).limit(1).execute()
+                    info = case_info.data[0] if case_info.data else {}
+                    cl_parts.append(
+                        f"\n[{info.get('case_name', 'Unknown')}] "
+                        f"({info.get('citation', '')}, {info.get('court', '')} {info.get('year', '')})\n"
+                        f"{chunk['content'][:1500]}"
+                    )
+                system_prompt += "\n".join(cl_parts)
+    except Exception as e:
+        logger.debug(f"Case law RAG unavailable in stream: {e}")
+
     # Load conversation history
     history = _load_conversation_history(conversation_id)
     messages = history + [{"role": "user", "content": user_message}]
@@ -487,15 +636,40 @@ async def stream_chat(
             }
         ]
 
+        # Include web search tool so the AI can look up current info
+        tools = [
+            {
+                "type": "web_search",
+                "name": "web_search",
+                "max_uses": 3,
+            }
+        ]
+
         with client.messages.stream(
             model=MODEL,
             max_tokens=4096,
             system=system_blocks,
             messages=messages,
+            tools=tools,
         ) as stream:
-            for text in stream.text_stream:
-                full_response += text
-                yield text
+            for event in stream:
+                if hasattr(event, 'type'):
+                    if event.type == 'content_block_delta' and hasattr(event, 'delta'):
+                        if hasattr(event.delta, 'text'):
+                            full_response += event.delta.text
+                            yield event.delta.text
+                elif hasattr(event, 'text'):
+                    full_response += event
+                    yield event
+
+        # If stream didn't yield text (tool-use only response), get final text
+        if not full_response:
+            # Fallback: get the final message
+            final_msg = stream.get_final_message()
+            for block in final_msg.content:
+                if hasattr(block, 'text'):
+                    full_response += block.text
+                    yield block.text
 
         # Save full response to DB
         supabase.table("conversation_messages").insert({

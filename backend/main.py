@@ -96,6 +96,26 @@ app.include_router(pipeline_stages.router,  prefix="/pipeline-stages",  tags=["P
 
 
 # ---------------------------------------------------------------------------
+# Auto-ingest knowledge base files on startup
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+async def auto_ingest_kb():
+    """Ingest any new knowledge base files into the case_law table."""
+    import asyncio
+
+    async def _run():
+        await asyncio.sleep(15)  # Wait for DB to be ready
+        try:
+            from utils.kb_auto_ingest import auto_ingest_knowledge_base
+            await auto_ingest_knowledge_base()
+        except Exception as e:
+            logger.warning(f"KB auto-ingest failed: {e}")
+
+    asyncio.create_task(_run())
+
+
+# ---------------------------------------------------------------------------
 # Background SuiteDash poller — runs automatically every 5 minutes
 # ---------------------------------------------------------------------------
 
