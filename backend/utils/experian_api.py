@@ -130,12 +130,15 @@ async def pull_credit_report(
     }
 
     async with httpx.AsyncClient() as client:
+        company_id = os.environ.get("EXPERIAN_COMPANY_ID") or os.environ.get("EXPERIAN_CLIENT_ID") or "0"
+        logger.info(f"[Experian] Using companyId: {company_id[:8]}...")
+
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
             "clientReferenceId": "LEGALFLOW",
-            "companyId": os.environ.get("EXPERIAN_COMPANY_ID", "") or os.environ.get("EXPERIAN_CLIENT_ID", ""),
+            "companyId": company_id,
         }
 
         resp = await client.post(
