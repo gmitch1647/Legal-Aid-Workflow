@@ -396,7 +396,16 @@ Section 1681a(d) defines a "consumer report" by (i) communication of information
 **Court:** Eleventh Circuit, 1998  
 **Facts:** A motor-vehicle report obtained by GEICO during an insurance quote process was challenged as a "consumer report."  
 **Holding:** Motor-vehicle records obtained from state DMVs used for insurance underwriting are "consumer reports" within § 1681a(d) when used for an FCRA-listed purpose.  
-**Why it matters:** Confirms that information obtained from a public agency, when channeled through an FCRA-listed-purpose use, is a consumer report. Important for insurance and employment contexts.  
+**Why it matters:** Confirms that information obtained from a public agency, when channeled through an FCRA-listed-purpose use, is a consumer report. Important for insurance and employment contexts.
+
+#### Application to LegalFlow Cases
+
+**When to Cite This Case:**
+- When the defendant argues that the information at issue is not a "consumer report" because it originated from a public source — Yang (binding 11th Cir.) holds that even public-agency data becomes a consumer report when used for an FCRA-listed purpose.
+- When establishing that the FCRA's broad definition of "consumer report" encompasses all data bearing on creditworthiness that is used for credit, insurance, or employment decisions — regardless of the data's original source.
+
+**Strategic Notes:**
+- **Broad "consumer report" definition in 11th Cir.:** Yang confirms that the Eleventh Circuit construes "consumer report" broadly. This supports the position that any data included in a credit report furnished to a lender, regardless of its original source (public record, furnisher submission, data aggregator), is subject to § 1681e(b) accuracy requirements.  
   
 ### Trans Union Corp. v. FTC, 81 F.3d 228 (D.C. Cir. 1996); 245 F.3d 809 (D.C. Cir. 2001)  
 **Court:** D.C. Circuit  
@@ -449,7 +458,16 @@ Section 1681b limits when a CRA may furnish a report and § 1681b(f) prohibits a
 **Court:** Seventh Circuit, 2004  
 **Facts:** A car dealer obtained credit reports on prospective customers to prescreen them for credit offers.  
 **Holding:** A "firm offer of credit" within § 1681b(c)(1)(B) must have sufficient value to the consumer to constitute a real offer — not a sham used merely to obtain the consumer's contact information. The dealer's "offer" was found insufficiently substantive.  
-**Why it matters:** Sets meaningful-offer requirement for prescreening. Used to police pretextual permissible-purpose claims.  
+**Why it matters:** Sets meaningful-offer requirement for prescreening. Used to police pretextual permissible-purpose claims.
+
+#### Application to LegalFlow Cases
+
+**When to Cite This Case:**
+- When a client's credit report was pulled under a claimed "prescreened offer" or "firm offer of credit" that was actually a pretext for obtaining the consumer's information — Cole holds that sham offers do not constitute permissible purposes.
+- When an unauthorized inquiry appears and the pulling entity claims it was for a prescreened offer — investigate whether any actual offer was extended to the consumer. If not, the pull lacked a permissible purpose.
+
+**Strategic Notes:**
+- **Limited direct application:** Most LegalFlow cases center on accuracy and reinvestigation, not prescreening abuses. However, Cole is useful when investigating unexplained hard inquiries on a client's report: if the entity claims "firm offer of credit" but no real offer was made, the inquiry was unauthorized.  
   
 ### Trikas v. Universal Card Services Corp., 351 F. Supp. 2d 37 (E.D.N.Y. 2005)  
 **Court:** Eastern District of New York, 2005 (often cited at the circuit level for the principle)  
