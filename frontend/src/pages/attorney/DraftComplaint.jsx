@@ -1286,6 +1286,7 @@ function OutputPanel({
           sessionId={sessionId}
           complaintText={complaintResult.complaint_text}
           onComplaintUpdate={onComplaintUpdate}
+          caseDocuments={uploadedDocs}
         />
       </div>
     );
@@ -1556,7 +1557,7 @@ function DownloadDocxButton({ sessionId, version }) {
 // Revision Chat — inline chat for iterating on the drafted complaint
 // ---------------------------------------------------------------------------
 
-function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
+function RevisionChat({ sessionId, complaintText, onComplaintUpdate, caseDocuments = [] }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -1612,11 +1613,16 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate }) {
     setMessages((prev) => [...prev, { role: 'assistant', content: '', _streamId: streamId }]);
 
     try {
+      // Combine chat attachments + case documents
+      const allPaths = [
+        ...currentAttachments.map((a) => a.storage_path),
+        ...caseDocuments.filter(d => d.storage_path && !d.storage_path.startsWith('__')).map(d => d.storage_path),
+      ];
       const fullText = await streamDraftChat(
         sessionId,
         userMsg,
         complaintText,
-        currentAttachments.map((a) => a.storage_path),
+        allPaths,
         messages.slice(-10),
         (partial) => {
           setMessages((prev) =>
