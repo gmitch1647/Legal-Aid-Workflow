@@ -33,6 +33,10 @@ import {
   getCommsHistory,
   sendClientEmail,
   sendClientSMS,
+  getCreditReportConfig,
+  pullCreditReport,
+  getClientCreditReports,
+  getClientScoreHistory,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -469,6 +473,9 @@ export default function ClientProfile() {
             clientCases={clientCases}
           />
 
+          {/* Credit Reports */}
+          <CreditReportSection clientId={id} client={client} />
+
           {/* Documents */}
           <DocumentsSection
             documents={documents}
@@ -524,6 +531,219 @@ export default function ClientProfile() {
 
 // ---------------------------------------------------------------------------
 // Documents Section with Upload
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Credit Report Section
+// ---------------------------------------------------------------------------
+
+function CreditReportSection({ clientId, client }) {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [pulling, setPulling] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [showPullForm, setShowPullForm] = useState(false);
+  const [pullForm, setPullForm] = useState({
+    ssn: '', dob: '', address: '', city: '', state: '', zip_code: '',
+  });
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadData();
+  }, [clientId]);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [configResp, reportsResp] = await Promise.allSettled([
+        getCreditReportConfig(),
+        getClientCreditReports(clientId),
+      ]);
+      if (configResp.status === 'fulfilled') setConfigured(configResp.value?.experian);
+      if (reportsResp.status === 'fulfilled') setReports(reportsResp.value || []);
+    } catch {} finally { setLoading(false); }
+  }
+
+  async function handlePull() {
+    if (!pullForm.ssn || !pullForm.dob) {
+      setError('SSN and date of birth are required');
+      return;
+    }
+    setPulling(true);
+    setError('');
+    try {
+      const result = await pullCreditReport({
+        client_id: clientId,
+        first_name: (client.full_name || '').split(' ')[0],
+        last_name: (client.full_name || '').split(' ').slice(-1)[0],
+        middle_name: (client.full_name || '').split(' ').length > 2 ? (client.full_name || '').split(' ')[1] : '',
+        ssn: pullForm.ssn,
+        dob: pullForm.dob,
+        address: pullForm.address || client.address || '',
+        city: pullForm.city || client.county || '',
+        state: pullForm.state || client.state || '',
+        zip_code: pullForm.zip_code || '',
+      });
+      setReports(prev => [result, ...prev]);
+      setShowPullForm(false);
+      loadData();
+    } catch (err) {
+      setError(err.message || 'Credit pull failed');
+    } finally {
+      setPulling(false);
+    }
+  }
+
+  const latestScores = {};
+  for (const r of reports) {
+    if (r.scores && !latestScores[r.bureau]) {
+      latestScores[r.bureau] = r.scores;
+    }
+  }
+
+  function getScoreColor(score) {
+    if (score >= 740) return 'text-emerald-600';
+    if (score >= 670) return 'text-blue-600';
+    if (score >= 580) return 'text-amber-600';
+    return 'text-red-600';
+  }
+
+  return (
+    <div className="card">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+          <Shield className="h-5 w-5 text-slate-400" />
+          Credit Reports
+        </h2>
+        {configured && (
+          <button onClick={() => setShowPullForm(!showPullForm)}
+            className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">
+            <Plus className="h-3 w-3" /> Pull Experian
+          </button>
+        )}
+      </div>
+
+      {/* Score Display */}
+      {Object.keys(latestScores).length > 0 && (
+        <div className="mb-3 grid grid-cols-1 gap-2">
+          {Object.entries(latestScores).map(([bureau, scores]) => {
+            const firstModel = Object.values(scores)[0];
+            const score = firstModel?.score;
+            if (!score) return null;
+            return (
+              <div key={bureau} className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-200">
+                <div>
+                  <div className="text-xs font-bold uppercase text-slate-500">{bureau}</div>
+                  <div className="text-[10px] text-slate-400">
+                    {reports.find(r => r.bureau === bureau)?.pulled_at
+                      ? `Pulled ${formatDate(reports.find(r => r.bureau === bureau)?.pulled_at)}`
+                      : ''}
+                  </div>
+                </div>
+                <div className={`text-2xl font-bold ${getScoreColor(score)}`}>{score}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pull Form */}
+      {showPullForm && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-2">
+          <div className="text-xs font-bold text-blue-800">Pull Experian Credit Report</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-600">SSN *</label>
+              <input type="password" value={pullForm.ssn} onChange={e => setPullForm(p => ({ ...p, ssn: e.target.value }))}
+                placeholder="123456789" className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-600">DOB *</label>
+              <input value={pullForm.dob} onChange={e => setPullForm(p => ({ ...p, dob: e.target.value }))}
+                placeholder="MM/DD/YYYY" className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-600">Address</label>
+              <input value={pullForm.address || client.address || ''} onChange={e => setPullForm(p => ({ ...p, address: e.target.value }))}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-600">City</label>
+              <input value={pullForm.city || client.county || ''} onChange={e => setPullForm(p => ({ ...p, city: e.target.value }))}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-600">State</label>
+              <input value={pullForm.state || client.state || ''} onChange={e => setPullForm(p => ({ ...p, state: e.target.value }))}
+                maxLength={2} className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-600">Zip</label>
+              <input value={pullForm.zip_code} onChange={e => setPullForm(p => ({ ...p, zip_code: e.target.value }))}
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+            </div>
+          </div>
+          {error && <div className="text-xs text-red-600"><AlertCircle className="w-3 h-3 inline mr-1" />{error}</div>}
+          <div className="flex gap-2">
+            <button onClick={handlePull} disabled={pulling}
+              className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+              {pulling ? <><Loader2 className="w-3 h-3 animate-spin inline mr-1" />Pulling...</> : 'Pull Report'}
+            </button>
+            <button onClick={() => setShowPullForm(false)} className="px-3 py-1.5 text-xs text-slate-600">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Report History */}
+      {loading ? (
+        <div className="py-4 text-center text-sm text-slate-400"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /></div>
+      ) : reports.length === 0 ? (
+        <div className="py-6 text-center">
+          <Shield className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+          <p className="text-xs text-slate-500">No credit reports on file</p>
+          {configured && (
+            <button onClick={() => setShowPullForm(true)} className="mt-2 text-xs text-blue-600 font-medium">Pull first report →</button>
+          )}
+          {!configured && (
+            <p className="text-[10px] text-slate-400 mt-1">Add EXPERIAN_CLIENT_ID to Railway to enable</p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {reports.map(r => (
+            <div key={r.id} className="rounded-lg border border-slate-200 p-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-semibold capitalize text-slate-700">{r.bureau}</span>
+                  <span className="text-[10px] text-slate-400 ml-2">{formatDateTime(r.pulled_at)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {r.accounts && (
+                    <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-medium">
+                      {Array.isArray(r.accounts) ? r.accounts.length : 0} negative
+                    </span>
+                  )}
+                </div>
+              </div>
+              {r.scores && Object.entries(r.scores).map(([model, data]) => (
+                <div key={model} className="flex items-center gap-2 mt-1">
+                  <span className="text-[10px] text-slate-500">{model}:</span>
+                  <span className={`text-sm font-bold ${getScoreColor(data.score)}`}>{data.score}</span>
+                  {data.factors && data.factors.length > 0 && (
+                    <span className="text-[10px] text-slate-400 truncate">{data.factors[0]?.description}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Documents Section
 // ---------------------------------------------------------------------------
 
 function DocumentsSection({ documents, clientCases, onUploadComplete }) {
