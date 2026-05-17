@@ -26,22 +26,51 @@ export async function extractTextFromPDF(file) {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
 
-  let fullText = '';
+  let layoutText = '';
+  let simpleText = '';
   const pageCount = pdf.numPages;
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = extractWithLayout(content.items, page.getViewport({ scale: 1.0 }));
-    fullText += pageText + '\n\n--- PAGE BREAK ---\n\n';
+
+    // Method 1: Layout-preserving extraction
+    try {
+      const pageLayout = extractWithLayout(content.items, page.getViewport({ scale: 1.0 }));
+      layoutText += pageLayout + '\n\n--- PAGE BREAK ---\n\n';
+    } catch {}
+
+    // Method 2: Simple concatenation (fallback)
+    const pageSimple = content.items
+      .map(item => item.str)
+      .join(' ')
+      .replace(/\s{3,}/g, '\t')
+      .replace(/\s+/g, ' ')
+      .trim();
+    simpleText += pageSimple + '\n\n';
   }
 
-  // Detect if PDF is scanned (image-based)
-  const cleanedLength = fullText.replace(/[\s\-|_PAGE BREAK]/g, '').length;
-  const isScanned = cleanedLength < 100 && pageCount > 0;
+  // Use layout version if it produced substantial content, otherwise use simple
+  const layoutClean = layoutText.replace(/[\s\-|_PAGE BREAK]/g, '').length;
+  const simpleClean = simpleText.replace(/\s/g, '').length;
+
+  let finalText;
+  if (layoutClean > simpleClean * 0.7) {
+    finalText = layoutText;
+  } else {
+    // Layout extraction lost too much — use simple text
+    finalText = simpleText;
+  }
+
+  // If both methods produced very little, combine them
+  if (layoutClean < 500 && simpleClean < 500 && pageCount > 0) {
+    finalText = layoutText + '\n\n=== ALTERNATE EXTRACTION ===\n\n' + simpleText;
+  }
+
+  const isScanned = Math.max(layoutClean, simpleClean) < 100 && pageCount > 0;
 
   return {
-    text: fullText.trim(),
+    text: finalText.trim(),
     pages: pageCount,
     isScanned,
   };
@@ -71,8 +100,9 @@ function extractWithLayout(items, viewport) {
 
   if (positioned.length === 0) return '';
 
-  // Group items into lines by Y-coordinate (items within 3px are same line)
-  const lineThreshold = 3;
+  // Group items into lines by Y-coordinate (items within 5px are same line)
+  // Equifax reports have tighter spacing than TransUnion/Experian
+  const lineThreshold = 5;
   const lines = [];
   let currentLine = [positioned[0]];
   let currentY = positioned[0].y;
