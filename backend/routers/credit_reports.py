@@ -118,7 +118,7 @@ async def pull_credit_report(
 
     except Exception as e:
         logger.exception("Experian credit pull failed")
-        raise HTTPException(status_code=500, detail=f"Credit pull failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Credit pull failed: {str(e)[:500]}")
 
 
 # ---------------------------------------------------------------------------

@@ -152,7 +152,7 @@ async def pull_credit_report(
 
         if resp.status_code != 200:
             logger.error(f"Experian credit pull failed: {resp.status_code} {resp.text}")
-            raise Exception(f"Experian credit pull failed: {resp.status_code}")
+            raise Exception(f"Experian credit pull failed: {resp.status_code} — {resp.text[:500]}")
 
         return resp.json()
 
