@@ -135,6 +135,7 @@ async def pull_credit_report(
             "Content-Type": "application/json",
             "Accept": "application/json",
             "clientReferenceId": "LEGALFLOW",
+            "companyId": creds.get("company_id") or creds.get("client_id", ""),
         }
 
         resp = await client.post(
