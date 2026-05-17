@@ -39,17 +39,21 @@ export default function ESignatures() {
   async function loadData() {
     setLoading(true);
     try {
-      const [configResp, reqsResp] = await Promise.all([
-        getEsignConfig(),
-        getSignatureRequests(),
-      ]);
+      const configResp = await getEsignConfig();
       setConfigured(configResp.configured);
+    } catch (err) {
+      console.error('E-sign config check failed:', err);
+      // If the endpoint errors, try checking if it's just an auth issue
+      setConfigured(false);
+    }
+    try {
+      const reqsResp = await getSignatureRequests();
       setRequests(reqsResp);
     } catch (err) {
-      console.error('Failed to load e-sign data:', err);
-    } finally {
-      setLoading(false);
+      console.error('Failed to load e-sign requests:', err);
+      setRequests([]);
     }
+    setLoading(false);
   }
 
   async function loadTemplates() {
