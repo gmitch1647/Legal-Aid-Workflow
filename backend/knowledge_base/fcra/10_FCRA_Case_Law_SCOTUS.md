@@ -261,7 +261,34 @@ The Court rejected any presumption that all federal statutes of limitations are 
   
 ### Related statute sections  
 15 U.S.C. § 1681p (jurisdiction and limitations); FACTA amendments (Pub. L. 108-159) (2003)  
-  
+
+### Application to LegalFlow Cases
+
+#### When to Cite This Case
+- When opposing a statute-of-limitations defense — TRW is the historical backdrop that Congress overruled with FACTA's discovery rule; cite it to explain why the modern two-year-from-discovery clock applies.
+- When establishing that the limitations period runs from when the consumer actually discovered (or reasonably should have discovered) the violation — not from when the violation first occurred.
+- When arguing that a consumer who only learned of inaccurate reporting upon pulling their own credit report or receiving a denial notice discovered the violation on that date, triggering the two-year clock.
+- When a defendant argues that the limitations period began on the date of the original inaccuracy (pre-FACTA logic) — cite TRW to show that Congress specifically rejected that approach in 2003.
+- When arguing that each new dissemination of inaccurate information is a separate violation with its own limitations period (the "republication" theory).
+
+#### Ready-Made Pleading Language
+"Plaintiff's claims are timely under the current version of 15 U.S.C. § 1681p, as amended by FACTA in 2003. The limitations period is the earlier of '2 years after the date of discovery by the plaintiff of the violation that is the basis for such liability' or '5 years after the date on which the violation that is the basis for such liability occurs.' § 1681p. Plaintiff first discovered the inaccurate reporting on or about [date], when [Plaintiff pulled his/her own credit report / received an adverse action notice from (creditor) / was denied (credit/housing/employment)]. This action was filed on [date], well within the two-year discovery period. Congress adopted this discovery rule in direct response to the Supreme Court's holding in TRW Inc. v. Andrews, 534 U.S. 19 (2001), which had rejected an implied discovery rule under the prior statutory text. The current statutory text controls."
+
+"Moreover, each dissemination of the inaccurate consumer report to a third party constitutes a separate violation of § 1681e(b), and each failure to correct following a dispute constitutes a separate violation of § 1681i(a). The most recent violation occurred on or about [date of most recent third-party pull or post-dispute reporting], well within the five-year absolute bar. Defendant's limitations defense is without merit."
+
+#### Strategic Notes
+- **The modern rule (post-FACTA):** Two years from discovery, hard-capped at five years from the violation. For ongoing inaccuracies that are repeatedly disseminated, the five-year cap rarely applies because each new furnishing is a new violation.
+- **Discovery date for intake purposes:** The "discovery" date is when the consumer first learned of the specific FCRA violation (not just the underlying debt or event). Document this carefully at intake: When did the client first see the inaccurate information on a credit report? When did they first receive a denial? Keep the intake memo specific.
+- **Continuing violation theory:** Each time the CRA furnishes an inaccurate report to a third party after a failed reinvestigation, a new § 1681e(b) violation occurs with a fresh limitations period. Each time the CRA fails to conduct a reasonable reinvestigation upon a new dispute, a new § 1681i(a) violation occurs. This is critical for cases where the original inaccuracy is old but the reporting and reinvestigation failures are recent.
+- **Reinsertion claims (§ 1681i(a)(5)(B)):** The reinsertion itself is a discrete new violation — it cannot be time-barred by reference to the original reporting. The limitations clock starts on the date of reinsertion (or the date of discovery of reinsertion).
+- **Practical tip:** Always plead the specific date of discovery and the factual basis for that discovery. If the client has pulled credit reports on multiple dates, identify the first report showing the inaccuracy AND the most recent dissemination to a third party.
+
+#### Discovery Requests Informed by This Case
+- **Interrogatory:** "State the earliest date on which Defendant first reported the disputed information concerning Plaintiff to any consumer reporting agency, and identify the consumer reporting agency or agencies to which such information was reported."
+- **Interrogatory:** "State each date on which Defendant furnished, updated, or transmitted information concerning the disputed account to any consumer reporting agency from [five years before filing] to present."
+- **RFP:** "Produce all records reflecting the dates on which Defendant transmitted data concerning Plaintiff's account to any consumer reporting agency, including Metro 2 reporting records, account history tapes, and any correction or deletion communications."
+- **RFP:** "Produce all records reflecting when Plaintiff first disputed the accuracy of the reported information, including the date of any dispute letter, online dispute submission, or telephone dispute, and all internal records documenting Defendant's receipt of such dispute."
+
 ---  
   
 ## Sources and verification  
