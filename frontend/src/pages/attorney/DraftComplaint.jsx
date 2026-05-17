@@ -999,7 +999,11 @@ export default function DraftComplaint() {
                 </>
               ) : (
                 <>
-                  Draft Complaint
+                  {documentType === 'complaint' ? 'Draft Complaint' :
+                   documentType === 'motion' ? `Draft Motion${motionType ? ` — ${motionType}` : ''}` :
+                   documentType === 'discovery' ? `Draft Discovery${discoveryType ? ` — ${discoveryType}` : ''}` :
+                   documentType === 'demand_letter' ? 'Draft Demand Letter' :
+                   'Draft Document'}
                   <Send className="w-4 h-4" />
                 </>
               )}

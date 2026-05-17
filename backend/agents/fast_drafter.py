@@ -936,6 +936,15 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
                 "text": f"\n--- ATTORNEY PREFERENCES (apply these to your drafting) ---\n{memory_context}",
             })
 
+        # Build user message based on document type
+        draft_instruction = {
+            "complaint": "Draft a complete federal complaint",
+            "motion": "Draft a complete motion",
+            "discovery": "Draft complete discovery requests",
+            "demand_letter": "Draft a complete pre-litigation demand letter",
+            "dispute_letter": "Draft a complete dispute letter",
+        }.get(document_type, f"Draft a complete {doc_label}")
+
         draft_response = client.messages.create(
             model=DRAFTING_MODEL,
             max_tokens=8192,
@@ -943,7 +952,7 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             messages=[{
                 "role": "user",
                 "content": (
-                    "Draft a complete federal complaint using this case analysis:\n\n"
+                    f"{draft_instruction} using this case analysis:\n\n"
                     f"{json.dumps(analysis, indent=2)}\n\n"
                     f"ORIGINAL CASE FACTS:\n{case_facts}\n\n"
                     f"DAMAGES:\n{damages_description}"
