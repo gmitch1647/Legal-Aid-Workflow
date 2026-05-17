@@ -4,6 +4,7 @@ import {
   Plus,
   X,
   Upload,
+  Trash2,
   Send,
   Download,
   Copy,
@@ -27,6 +28,7 @@ import {
   listDrafts,
   listDraftVersions,
   restoreDraftVersion,
+  deleteCase,
   getCases,
   getCase,
   getDocuments,
@@ -573,47 +575,65 @@ export default function DraftComplaint() {
                 </div>
               ) : (
                 recentDrafts.map((draft) => (
-                  <button
+                  <div
                     key={draft.session_id}
-                    onClick={() => handleOpenDraft(draft)}
-                    className="w-full text-left p-3 rounded-lg hover:bg-slate-50 border-b border-slate-100 transition"
+                    className="w-full text-left p-3 rounded-lg hover:bg-slate-50 border-b border-slate-100 transition flex items-start gap-2"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-sm text-slate-900 truncate">
-                          {draft.plaintiff_name}
-                          {draft.defendants && draft.defendants.length > 0 && (
-                            <span className="font-normal text-slate-500">
-                              {' '}v. {draft.defendants.slice(0, 3).join(', ')}
-                              {draft.defendants.length > 3 ? ` +${draft.defendants.length - 3}` : ''}
+                    <button
+                      onClick={() => handleOpenDraft(draft)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-sm text-slate-900 truncate">
+                            {draft.plaintiff_name}
+                            {draft.defendants && draft.defendants.length > 0 && (
+                              <span className="font-normal text-slate-500">
+                                {' '}v. {draft.defendants.slice(0, 3).join(', ')}
+                                {draft.defendants.length > 3 ? ` +${draft.defendants.length - 3}` : ''}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-1 flex items-center gap-3">
+                            <span>
+                              {draft.created_at
+                                ? new Date(draft.created_at).toLocaleDateString('en-US', {
+                                    month: 'short', day: 'numeric', year: 'numeric',
+                                    hour: 'numeric', minute: '2-digit',
+                                  })
+                                : ''}
                             </span>
-                          )}
+                            {draft.version && <span>· v{draft.version}</span>}
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-500 mt-1 flex items-center gap-3">
-                          <span>
-                            {draft.created_at
-                              ? new Date(draft.created_at).toLocaleDateString('en-US', {
-                                  month: 'short', day: 'numeric', year: 'numeric',
-                                  hour: 'numeric', minute: '2-digit',
-                                })
-                              : ''}
-                          </span>
-                          {draft.version && <span>· v{draft.version}</span>}
-                        </div>
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase ${
+                            draft.status === 'draft_ready' ? 'bg-amber-100 text-amber-700' :
+                            draft.status === 'approved' || draft.status === 'filed' ? 'bg-green-100 text-green-700' :
+                            draft.status === 'error' ? 'bg-red-100 text-red-700' :
+                            draft.status === 'agents_processing' ? 'bg-blue-100 text-blue-700' :
+                            'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {draft.status?.replace(/_/g, ' ') || 'draft'}
+                        </span>
                       </div>
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase ${
-                          draft.status === 'draft_ready' ? 'bg-amber-100 text-amber-700' :
-                          draft.status === 'approved' || draft.status === 'filed' ? 'bg-green-100 text-green-700' :
-                          draft.status === 'error' ? 'bg-red-100 text-red-700' :
-                          draft.status === 'agents_processing' ? 'bg-blue-100 text-blue-700' :
-                          'bg-slate-100 text-slate-600'
-                        }`}
-                      >
-                        {draft.status?.replace(/_/g, ' ') || 'draft'}
-                      </span>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!confirm('Delete this draft?')) return;
+                        try {
+                          await deleteCase(draft.session_id);
+                          setRecentDrafts(prev => prev.filter(d => d.session_id !== draft.session_id));
+                        } catch (err) { console.error('Delete failed:', err); }
+                      }}
+                      className="shrink-0 p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
+                      title="Delete draft"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 ))
               )}
             </div>
