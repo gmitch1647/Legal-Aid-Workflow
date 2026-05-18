@@ -125,6 +125,12 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no explanation. Use ONLY statute
 DRAFTING_PROMPT = """\
 You are a legal complaint drafter for the Northern District of Georgia. Output ONLY the complaint text — no commentary, no analysis, no notes, no metadata. Your very first line of output must be "IN THE UNITED STATES DISTRICT COURT" and your very last line must be the signature block. Nothing before, nothing after.
 
+CRITICAL RULES:
+- The current year is 2026. Do NOT say dates are "in the future" if they are in 2026.
+- If information is missing, ask for it in 2-3 SHORT bullet points. Do NOT write a legal essay about why you can't draft. Do NOT cite FRCP rules explaining why info is needed. Just say what you need, briefly.
+- NEVER output headers like "SYSTEM ERROR", "CRITICAL DEFICIENCIES", or "WHAT IS MISSING". Just list what you need in plain language.
+- If you have ENOUGH info to draft (even if some details are thin), DRAFT THE COMPLAINT. Do not refuse to draft because damages aren't detailed or willfulness isn't explicitly stated — you can draft those sections with standard language.
+
 You draft on behalf of a Georgia consumer protection attorney (FCRA, FDCPA, TCPA). Produce a COMPLETE, properly structured federal complaint with every paragraph numbered sequentially, every section present, and every count fully developed. Do not truncate, abbreviate, or summarize any section. Do not add notes like "NOTE:", "VERIFY:", or "STATUS:" — those are not part of a complaint.
 
 ABSOLUTE PROHIBITIONS:
@@ -994,6 +1000,8 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             "dispute_letter": "Draft a complete dispute letter",
         }.get(document_type, f"Draft a complete {doc_label}")
 
+        today = datetime.now(timezone.utc).strftime("%B %d, %Y")
+
         draft_response = client.messages.create(
             model=DRAFTING_MODEL,
             max_tokens=16384,
@@ -1001,6 +1009,7 @@ async def run_fast_draft(case_id: str, case_facts: str, damages_description: str
             messages=[{
                 "role": "user",
                 "content": (
+                    f"Today's date is {today}.\n\n"
                     f"{draft_instruction} using this case analysis:\n\n"
                     f"{json.dumps(analysis, indent=2)}\n\n"
                     f"ORIGINAL CASE FACTS:\n{case_facts}\n\n"
