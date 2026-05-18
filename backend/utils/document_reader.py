@@ -52,6 +52,42 @@ def _read_txt(data: bytes) -> str:
 _IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp"}
 
 
+def _read_image_with_vision(data: bytes, ext: str, storage_path: str) -> str:
+    """Use Claude Vision to extract text from an image."""
+    import base64
+    import anthropic
+
+    b64 = base64.standard_b64encode(data).decode("utf-8")
+    media_type = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
+
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=4096,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Extract ALL text from this image. Include every word, number, date, name, and message visible. If this is a screenshot of text messages, include the sender name, timestamp, and full message text for each message. Return ONLY the extracted text, nothing else.",
+                },
+            ],
+        }],
+    )
+
+    extracted = response.content[0].text.strip()
+    logger.info(f"Vision extracted {len(extracted)} chars from {storage_path}")
+    return extracted
+
+
 def read_document(storage_path: str, file_type: str) -> str:
     """Download a file from Supabase Storage and return its text content.
 
@@ -93,14 +129,14 @@ def read_document(storage_path: str, file_type: str) -> str:
     if ft in ("txt", "text/plain", "text", "csv", "text/csv"):
         return _read_txt(data)
 
-    # Check for image types
+    # Check for image types — use Claude Vision to extract text
     ext = ft.split("/")[-1] if "/" in ft else ft
     if ext in _IMAGE_EXTENSIONS:
-        return (
-            f"[Image file received: {storage_path}] "
-            "Image content cannot be extracted as text. "
-            "Please review the image directly in the document viewer."
-        )
+        try:
+            return _read_image_with_vision(data, ext, storage_path)
+        except Exception as e:
+            logger.warning(f"Vision extraction failed for {storage_path}: {e}")
+            return f"[Image file: {storage_path}. Could not extract text automatically.]"
 
     # Fallback – attempt plain-text decode
     logger.warning(
