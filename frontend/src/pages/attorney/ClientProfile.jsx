@@ -134,6 +134,8 @@ export default function ClientProfile() {
       setDocuments(allDocs);
     } catch {}
   }, [clientCases]);
+
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);

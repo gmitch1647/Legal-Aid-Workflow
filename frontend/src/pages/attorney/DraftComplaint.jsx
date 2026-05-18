@@ -271,14 +271,20 @@ export default function DraftComplaint() {
   async function handleOpenDraft(draft) {
     setShowDraftsList(false);
     setSessionId(draft.session_id);
-    setOutputState('running');
     try {
       const result = await getDraftResult(draft.session_id);
-      setComplaintResult(result);
-      setOutputState('complete');
+      if (result && result.complaint_text) {
+        setComplaintResult(result);
+        setOutputState('complete');
+      } else {
+        // Draft exists but has no complaint yet — might still be processing
+        setOutputState('running');
+        startPolling(draft.session_id);
+      }
     } catch (err) {
       console.error('Failed to open draft:', err);
       setOutputState('idle');
+      setSessionId(null);
       alert('Could not open this draft: ' + (err.message || 'Unknown error'));
     }
   }
