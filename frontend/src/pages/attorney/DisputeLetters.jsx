@@ -394,7 +394,7 @@ export default function DisputeLetters() {
 
       const accountDetails = bureauAccounts.map((a, i) => {
         const findings = [
-          ...(a.negativeFindings || []).map(f => f.description || f),
+          ...(a.negativeFindings || []).filter(f => f.selected !== false).map(f => f.description || f),
           ...(a.customFindings || []),
         ];
         return `Account ${i + 1}:
@@ -1292,26 +1292,43 @@ function AccountCard({ account, onUpdate, onDelete, onAddFinding, onRemoveFindin
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] font-semibold uppercase text-amber-600">
-                  Auto-Detected Issues ({account.negativeFindings.length})
+                  Auto-Detected Issues ({account.negativeFindings.filter(f => f.selected !== false).length}/{account.negativeFindings.length} selected)
                 </label>
-                {onReanalyze && (
-                  <button onClick={onReanalyze} className="text-[10px] text-blue-600 hover:text-blue-700 flex items-center gap-1">
-                    <RefreshCw className="w-3 h-3" /> Re-analyze
+                <div className="flex items-center gap-2">
+                  <button onClick={() => {
+                    const allSelected = account.negativeFindings.every(f => f.selected !== false);
+                    onUpdate('negativeFindings', account.negativeFindings.map(f => ({ ...f, selected: !allSelected })));
+                  }} className="text-[10px] text-blue-600 hover:text-blue-700">
+                    {account.negativeFindings.every(f => f.selected !== false) ? 'Deselect All' : 'Select All'}
                   </button>
-                )}
+                  {onReanalyze && (
+                    <button onClick={onReanalyze} className="text-[10px] text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                      <RefreshCw className="w-3 h-3" /> Re-analyze
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="space-y-1 mb-2">
                 {account.negativeFindings.map((f, i) => (
-                  <div key={i} className={`flex items-center gap-2 rounded p-2 text-xs ${
+                  <label key={i} className={`flex items-start gap-2 rounded p-2 text-xs cursor-pointer transition ${
+                    f.selected === false ? 'bg-slate-50 border border-slate-200 text-slate-400 opacity-60' :
                     f.severity === 'high' ? 'bg-red-50 border border-red-200 text-red-800' :
                     f.severity === 'medium' ? 'bg-amber-50 border border-amber-200 text-amber-800' :
                     'bg-slate-50 border border-slate-200 text-slate-700'
                   }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    <input type="checkbox" checked={f.selected !== false}
+                      onChange={() => {
+                        const updated = [...account.negativeFindings];
+                        updated[i] = { ...updated[i], selected: !(updated[i].selected !== false) };
+                        onUpdate('negativeFindings', updated);
+                      }}
+                      className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 ${
+                      f.selected === false ? 'bg-slate-300' :
                       f.severity === 'high' ? 'bg-red-500' : f.severity === 'medium' ? 'bg-amber-500' : 'bg-slate-400'
                     }`} />
-                    <span className="flex-1">{f.description}</span>
-                  </div>
+                    <span className={`flex-1 ${f.selected === false ? 'line-through' : ''}`}>{f.description}</span>
+                  </label>
                 ))}
               </div>
             </div>
