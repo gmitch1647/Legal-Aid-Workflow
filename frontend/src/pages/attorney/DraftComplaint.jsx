@@ -109,6 +109,7 @@ export default function DraftComplaint() {
   const [clientCases, setClientCases] = useState([]);
   const [loadingClients, setLoadingClients] = useState(false);
   const [existingComplaint, setExistingComplaint] = useState('');
+  const [availableDocs, setAvailableDocs] = useState([]);
 
   async function loadClients() {
     setLoadingClients(true);
@@ -194,7 +195,7 @@ export default function DraftComplaint() {
       } catch {}
 
       if (allDocs.length > 0) {
-        setUploadedDocs(prev => [...prev.filter(d => !d.fromCase), ...allDocs]);
+        setAvailableDocs(allDocs);
       }
     } catch (err) {
       console.error('Failed to load client cases:', err);
@@ -927,20 +928,44 @@ export default function DraftComplaint() {
                 className="hidden"
               />
             </div>
+            {/* Attached documents */}
             {uploadedDocs.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {uploadedDocs.map((doc, i) => (
-                  <div key={i} className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-full text-xs">
-                    <FileText className="w-3 h-3 text-slate-500" />
-                    <span className="max-w-[200px] truncate">{doc.name}</span>
-                    <button
-                      onClick={() => removeUploadedDoc(i)}
-                      className="text-slate-400 hover:text-red-500"
-                    >
-                      <X className="w-3 h-3" />
+              <div className="mt-3">
+                <div className="text-[10px] font-bold uppercase text-emerald-600 mb-1">Attached ({uploadedDocs.length})</div>
+                <div className="flex flex-wrap gap-2">
+                  {uploadedDocs.map((doc, i) => (
+                    <div key={i} className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-full text-xs">
+                      <FileText className="w-3 h-3 text-emerald-600" />
+                      <span className="max-w-[200px] truncate text-emerald-800">{doc.name}</span>
+                      <button
+                        onClick={() => removeUploadedDoc(i)}
+                        className="text-emerald-400 hover:text-red-500"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Available from client — click to attach */}
+            {availableDocs.length > 0 && (
+              <div className="mt-3">
+                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Available from Client (click to attach)</div>
+                <div className="flex flex-wrap gap-2">
+                  {availableDocs
+                    .filter(d => !uploadedDocs.some(u => u.storage_path === d.storage_path))
+                    .map((doc, i) => (
+                    <button key={i}
+                      onClick={() => setUploadedDocs(prev => [...prev, doc])}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs hover:bg-blue-50 hover:border-blue-300 transition">
+                      <Plus className="w-3 h-3 text-slate-400" />
+                      <FileText className="w-3 h-3 text-slate-400" />
+                      <span className="max-w-[200px] truncate text-slate-600">{doc.name}</span>
                     </button>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </Card>
