@@ -1077,6 +1077,7 @@ export default function DraftComplaint() {
             onStartOver={handleStartOver}
             onCopyText={handleCopyText}
             onDownload={handleDownload}
+            caseDocuments={uploadedDocs}
             onComplaintUpdate={(newText, version) => {
               setComplaintResult((prev) => ({
                 ...prev,
@@ -1234,6 +1235,7 @@ function OutputPanel({
   onCopyText,
   onDownload,
   onComplaintUpdate,
+  caseDocuments,
 }) {
   if (state === 'error') {
     return (
@@ -1317,7 +1319,7 @@ function OutputPanel({
           sessionId={sessionId}
           complaintText={complaintResult.complaint_text}
           onComplaintUpdate={onComplaintUpdate}
-          caseDocuments={uploadedDocs}
+          caseDocuments={caseDocuments || []}
         />
       </div>
     );
