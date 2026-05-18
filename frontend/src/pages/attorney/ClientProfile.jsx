@@ -119,7 +119,21 @@ export default function ClientProfile() {
   const [newNote, setNewNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
 
-  const fetchData = useCallback(async () => {
+  const refreshDocuments = useCallback(async () => {
+    try {
+      const allDocs = [];
+      for (const c of clientCases.slice(0, 10)) {
+        try {
+          const docsData = await getDocuments(c.id);
+          const docs = Array.isArray(docsData) ? docsData : docsData?.documents ?? docsData?.items ?? [];
+          docs.forEach((d) => {
+            allDocs.push({ ...d, case_id: c.id, case_name: c.plaintiff_name || c.client_name || 'Case' });
+          });
+        } catch {}
+      }
+      setDocuments(allDocs);
+    } catch {}
+  }, [clientCases]);
     try {
       setLoading(true);
       setError(null);
@@ -480,7 +494,7 @@ export default function ClientProfile() {
           <DocumentsSection
             documents={documents}
             clientCases={clientCases}
-            onUploadComplete={fetchData}
+            onUploadComplete={refreshDocuments}
           />
 
           {/* Attorney Notes */}
@@ -777,7 +791,10 @@ function DocumentsSection({ documents, clientCases, onUploadComplete }) {
       }
     }
     setUploading(false);
+    // Refresh just the documents without resetting the whole page
     if (onUploadComplete) onUploadComplete();
+    // Reset file input so the same file can be uploaded again
+    if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
   return (
