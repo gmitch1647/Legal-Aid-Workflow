@@ -95,12 +95,24 @@ class DraftStartPayload(BaseModel):
 
 def _format_case_facts(payload: DraftStartPayload) -> str:
     """Build an enriched case_facts string that includes plaintiff info,
-    court/statute preferences, and damages — so the agent pipeline can
-    read everything it needs from one field."""
+    defendant info, court/statute preferences, and damages."""
     parts = [
         "=== PLAINTIFF ===",
         f"Name: {payload.plaintiff_name}",
         f"County of Residence: {payload.plaintiff_county}, Georgia",
+        "",
+        "=== DEFENDANTS ===",
+    ]
+    for i, d in enumerate(payload.defendants):
+        if d.name.strip():
+            parts.append(f"Defendant {i+1}: {d.name}")
+            if d.entity_type:
+                parts.append(f"  Entity Type: {d.entity_type}")
+            if d.principal_address:
+                parts.append(f"  Address: {d.principal_address}")
+            if d.ga_registered_agent:
+                parts.append(f"  GA Registered Agent: {d.ga_registered_agent}")
+    parts.extend([
         "",
         "=== ATTORNEY PREFERENCES ===",
         f"Preferred Court: {payload.court or 'Agent to recommend'}",
@@ -113,7 +125,7 @@ def _format_case_facts(payload: DraftStartPayload) -> str:
         "",
         "=== DAMAGES DESCRIBED ===",
         payload.damages_description,
-    ]
+    ])
     return "\n".join(parts)
 
 
