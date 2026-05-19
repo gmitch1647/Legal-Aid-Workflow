@@ -1069,16 +1069,22 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
             except Exception:
                 pass
 
-            # If it's a revision, save new document version
+            # If it's a revision or a full complaint, save new document version
             revision_marker = None
+            complaint_text = None
+
             if "REVISED DOCUMENT:" in full_response:
                 revision_marker = "REVISED DOCUMENT:"
+                complaint_text = full_response.split(revision_marker, 1)[1].strip()
             elif "REVISED COMPLAINT:" in full_response:
                 revision_marker = "REVISED COMPLAINT:"
+                complaint_text = full_response.split(revision_marker, 1)[1].strip()
+            elif "IN THE UNITED STATES DISTRICT COURT" in full_response:
+                # The assistant drafted a full complaint inline — save it
+                start_idx = full_response.index("IN THE UNITED STATES DISTRICT COURT")
+                complaint_text = full_response[start_idx:].strip()
 
-            if revision_marker:
-                revised = full_response.split(revision_marker, 1)[1].strip()
-                if len(revised) > 1000:
+            if complaint_text and len(complaint_text) > 500:
                     try:
                         version_q = supabase.table("complaints").select("version").eq("case_id", session_id).order("version", desc=True).limit(1).execute()
                         next_v = (version_q.data[0]["version"] + 1) if version_q.data else 1

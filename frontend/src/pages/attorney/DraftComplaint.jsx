@@ -1669,18 +1669,38 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate, caseDocumen
         prev.map((m) => m._streamId === streamId ? { ...m, _streamId: undefined } : m)
       );
 
-      // If the response contains a revised document, update it
+      // If the response contains a revised document or a full complaint, update it
       const revisionMarker = fullText.includes('REVISED DOCUMENT:') ? 'REVISED DOCUMENT:'
         : fullText.includes('REVISED COMPLAINT:') ? 'REVISED COMPLAINT:' : null;
+
+      let complaintDetected = false;
+
       if (revisionMarker) {
         const revised = fullText.split(revisionMarker)[1].trim();
         if (revised.length > 200 && onComplaintUpdate) {
           onComplaintUpdate(revised);
+          complaintDetected = true;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.role === 'assistant') {
               const summary = fullText.split(revisionMarker)[0].trim();
               return [...prev.slice(0, -1), { ...last, content: (summary || '✅ Document revised.') + '\n\n✅ Document updated above.' }];
+            }
+            return prev;
+          });
+        }
+      }
+
+      // Also detect if the assistant drafted a full complaint inline (no marker prefix)
+      if (!complaintDetected && fullText.includes('IN THE UNITED STATES DISTRICT COURT') && fullText.length > 1000) {
+        const startIdx = fullText.indexOf('IN THE UNITED STATES DISTRICT COURT');
+        const complaintText = fullText.slice(startIdx).trim();
+        if (complaintText.length > 500 && onComplaintUpdate) {
+          onComplaintUpdate(complaintText);
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === 'assistant') {
+              return [...prev.slice(0, -1), { ...last, content: '✅ Complaint drafted and loaded above. You can download it from the output panel.' }];
             }
             return prev;
           });
