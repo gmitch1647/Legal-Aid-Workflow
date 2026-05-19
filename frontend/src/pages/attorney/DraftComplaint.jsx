@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import {
   getDefendants,
+  getAttorneys,
+  createAttorney,
   uploadDraftDocument,
   startDraft,
   getDraftStatus,
@@ -95,6 +97,10 @@ export default function DraftComplaint() {
   const [juryDemand, setJuryDemand] = useState(true);
   const [gaClaims, setGaClaims] = useState('include');
   const [draftMode, setDraftMode] = useState('fast');
+  const [knownAttorneys, setKnownAttorneys] = useState([]);
+  const [selectedAttorneyId, setSelectedAttorneyId] = useState('');
+  const [showAddAttorney, setShowAddAttorney] = useState(false);
+  const [newAttorney, setNewAttorney] = useState({ full_name: '', bar_number: '', firm_name: '', address: '', phone: '', email: '' });
   const [documentType, setDocumentType] = useState('complaint');
   const [motionType, setMotionType] = useState('');
   const [discoveryType, setDiscoveryType] = useState('');
@@ -293,6 +299,7 @@ export default function DraftComplaint() {
     loadKnownDefendants();
     loadRecentDrafts();
     loadClients();
+    loadAttorneys();
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
@@ -304,6 +311,31 @@ export default function DraftComplaint() {
       setKnownDefendants(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load defendants:', err);
+    }
+  }
+
+  async function loadAttorneys() {
+    try {
+      const data = await getAttorneys();
+      const list = Array.isArray(data) ? data : [];
+      setKnownAttorneys(list);
+      const def = list.find(a => a.is_default);
+      if (def && !selectedAttorneyId) setSelectedAttorneyId(def.id);
+    } catch (err) {
+      console.error('Failed to load attorneys:', err);
+    }
+  }
+
+  async function handleAddAttorney() {
+    if (!newAttorney.full_name) return;
+    try {
+      const created = await createAttorney(newAttorney);
+      setKnownAttorneys(prev => [...prev, created]);
+      setSelectedAttorneyId(created.id);
+      setShowAddAttorney(false);
+      setNewAttorney({ full_name: '', bar_number: '', firm_name: '', address: '', phone: '', email: '' });
+    } catch (err) {
+      console.error('Failed to add attorney:', err);
     }
   }
 
@@ -445,6 +477,7 @@ export default function DraftComplaint() {
       mode: draftMode,
       document_type: documentType,
       client_id: selectedClientId || null,
+      attorney_id: selectedAttorneyId || null,
     };
 
     try {
@@ -740,6 +773,62 @@ export default function DraftComplaint() {
                 error={validationErrors.plaintiffCounty}
               />
             </div>
+          </Card>
+
+          {/* Attorney on Case */}
+          <Card>
+            <SectionLabel>ATTORNEY ON CASE</SectionLabel>
+            <div className="flex items-center gap-3">
+              <select value={selectedAttorneyId} onChange={(e) => setSelectedAttorneyId(e.target.value)}
+                className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">— Select Attorney —</option>
+                {knownAttorneys.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.full_name}{a.firm_name ? ` — ${a.firm_name}` : ''}{a.is_default ? ' (Default)' : ''}
+                  </option>
+                ))}
+              </select>
+              <button onClick={() => setShowAddAttorney(!showAddAttorney)}
+                className="shrink-0 px-3 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 hover:bg-slate-50">
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            {selectedAttorneyId && (() => {
+              const a = knownAttorneys.find(x => x.id === selectedAttorneyId);
+              return a ? (
+                <div className="mt-2 text-xs text-slate-500 bg-slate-50 rounded-lg p-2">
+                  {a.bar_number && <div>Bar #: {a.bar_number}</div>}
+                  {a.firm_name && <div>{a.firm_name}</div>}
+                  {a.address && <div>{a.address}</div>}
+                  {a.phone && <div>{a.phone}</div>}
+                  {a.email && <div>{a.email}</div>}
+                </div>
+              ) : null;
+            })()}
+            {showAddAttorney && (
+              <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-bold text-blue-800">Add New Attorney</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={newAttorney.full_name} onChange={e => setNewAttorney(p => ({ ...p, full_name: e.target.value }))}
+                    placeholder="Full Name *" className="rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                  <input value={newAttorney.bar_number} onChange={e => setNewAttorney(p => ({ ...p, bar_number: e.target.value }))}
+                    placeholder="Bar Number" className="rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                  <input value={newAttorney.firm_name} onChange={e => setNewAttorney(p => ({ ...p, firm_name: e.target.value }))}
+                    placeholder="Firm Name" className="rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                  <input value={newAttorney.email} onChange={e => setNewAttorney(p => ({ ...p, email: e.target.value }))}
+                    placeholder="Email" className="rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                  <input value={newAttorney.phone} onChange={e => setNewAttorney(p => ({ ...p, phone: e.target.value }))}
+                    placeholder="Phone" className="rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                  <input value={newAttorney.address} onChange={e => setNewAttorney(p => ({ ...p, address: e.target.value }))}
+                    placeholder="Address" className="rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleAddAttorney} disabled={!newAttorney.full_name}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50">Save Attorney</button>
+                  <button onClick={() => setShowAddAttorney(false)} className="px-3 py-1.5 text-xs text-slate-600">Cancel</button>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* Defendants */}

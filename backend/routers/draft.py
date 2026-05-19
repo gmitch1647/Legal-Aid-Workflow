@@ -86,6 +86,7 @@ class DraftStartPayload(BaseModel):
     mode: str = "fast"  # "fast" (2-call, ~15s) or "thorough" (7-agent, ~90s)
     document_type: str = "complaint"  # complaint | motion | discovery | demand_letter
     client_id: Optional[str] = None  # Link draft to a client profile
+    attorney_id: Optional[str] = None  # Attorney for signature block
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +127,28 @@ def _format_case_facts(payload: DraftStartPayload) -> str:
         "=== DAMAGES DESCRIBED ===",
         payload.damages_description,
     ])
+
+    # Add attorney info if provided
+    if payload.attorney_id:
+        try:
+            supabase = get_supabase()
+            atty_resp = supabase.table("attorneys").select("*").eq("id", payload.attorney_id).limit(1).execute()
+            if atty_resp.data:
+                a = atty_resp.data[0]
+                parts.extend([
+                    "",
+                    "=== ATTORNEY FOR SIGNATURE BLOCK ===",
+                    f"Name: {a.get('full_name', '')}",
+                    f"Bar Number: {a.get('bar_number', '')}",
+                    f"Firm: {a.get('firm_name', '')}",
+                    f"Address: {a.get('address', '')}",
+                    f"Phone: {a.get('phone', '')}",
+                    f"Email: {a.get('email', '')}",
+                    "USE THIS INFORMATION IN THE SIGNATURE BLOCK. Do NOT use placeholders.",
+                ])
+        except Exception:
+            pass
+
     return "\n".join(parts)
 
 

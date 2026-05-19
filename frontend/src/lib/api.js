@@ -154,6 +154,26 @@ export async function getDefendants() {
   return request('/defendants');
 }
 
+// ---------------------------------------------------------------------------
+// Attorneys
+// ---------------------------------------------------------------------------
+
+export async function getAttorneys() {
+  return request('/attorneys');
+}
+
+export async function createAttorney(data) {
+  return request('/attorneys', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateAttorney(id, data) {
+  return request(`/attorneys/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteAttorneyRecord(id) {
+  return request(`/attorneys/${id}`, { method: 'DELETE' });
+}
+
 export async function createDefendant(data) {
   return request('/defendants', {
     method: 'POST',
