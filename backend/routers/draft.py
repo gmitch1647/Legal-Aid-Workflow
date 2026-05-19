@@ -280,6 +280,45 @@ async def start_draft(
 
     supabase = get_supabase()
 
+    # Auto-create client profile if no client_id provided
+    client_id = payload.client_id
+    if not client_id and payload.plaintiff_name:
+        try:
+            # Check if client already exists by name
+            existing = supabase.table("profiles").select("id").eq("full_name", payload.plaintiff_name).eq("role", "client").limit(1).execute()
+            if existing.data:
+                client_id = existing.data[0]["id"]
+            else:
+                # Create new client profile
+                from routers.auth import _generate_temp_password
+                import secrets
+                temp_email = f"client-{secrets.token_hex(4)}@legalflow.local"
+
+                try:
+                    # Try creating via Supabase auth
+                    auth_resp = supabase.auth.admin.create_user({
+                        "email": temp_email,
+                        "password": _generate_temp_password(),
+                        "email_confirm": True,
+                    })
+                    new_user_id = auth_resp.user.id if auth_resp.user else None
+
+                    if new_user_id:
+                        supabase.table("profiles").insert({
+                            "id": str(new_user_id),
+                            "full_name": payload.plaintiff_name,
+                            "county": payload.plaintiff_county,
+                            "state": "Georgia",
+                            "role": "client",
+                            "email": temp_email,
+                        }).execute()
+                        client_id = str(new_user_id)
+                        logger.info(f"Auto-created client profile for {payload.plaintiff_name}: {client_id}")
+                except Exception as e:
+                    logger.warning(f"Could not auto-create client: {e}")
+        except Exception as e:
+            logger.warning(f"Client lookup failed: {e}")
+
     # Create a case row linked to the client (or attorney as fallback).
     case_facts = _format_case_facts(payload)
 
@@ -288,7 +327,7 @@ async def start_draft(
         supabase.table("cases")
         .insert(
             {
-                "client_id": payload.client_id or profile["id"],
+                "client_id": client_id or profile["id"],
                 "status": "approved_for_processing",
                 "court": payload.court or "",
                 "jury_demand": payload.jury_demand,
