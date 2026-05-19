@@ -854,6 +854,24 @@ export async function submitIntakeForm(formData) {
   return response.json();
 }
 
+export async function inviteStaffAttorney(data) {
+  return request('/auth/invite-attorney', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getStaffAttorneys() {
+  return request('/auth/staff-attorneys');
+}
+
+export async function assignAttorneyToClient(clientId, attorneyId) {
+  return request('/auth/assign-attorney', {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId, attorney_id: attorneyId }),
+  });
+}
+
 export async function registerClient(data) {
   return request('/auth/register', {
     method: 'POST',

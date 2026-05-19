@@ -257,6 +257,14 @@ async def list_cases(
 
     if profile["role"] == "client":
         query = query.eq("client_id", profile["id"])
+    elif profile["role"] == "staff_attorney":
+        # Staff attorneys only see cases for clients assigned to them
+        assigned_clients = supabase.table("profiles").select("id").eq("assigned_attorney_id", profile["id"]).execute()
+        client_ids = [c["id"] for c in (assigned_clients.data or [])]
+        if client_ids:
+            query = query.in_("client_id", client_ids)
+        else:
+            return []
     else:
         if client_id:
             query = query.eq("client_id", client_id)

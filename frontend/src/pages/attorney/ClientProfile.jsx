@@ -37,6 +37,8 @@ import {
   pullCreditReport,
   getClientCreditReports,
   getClientScoreHistory,
+  getStaffAttorneys,
+  assignAttorneyToClient,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -356,6 +358,9 @@ export default function ClientProfile() {
         </div>
       </div>
 
+      {/* Attorney Assignment */}
+      <AssignedAttorneySection clientId={id} currentAttorneyId={client.assigned_attorney_id} />
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Cases List - Left 2/3 */}
         <div className="space-y-6 lg:col-span-2">
@@ -548,6 +553,67 @@ export default function ClientProfile() {
 // ---------------------------------------------------------------------------
 // Documents Section with Upload
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Assigned Attorney Section
+// ---------------------------------------------------------------------------
+
+function AssignedAttorneySection({ clientId, currentAttorneyId }) {
+  const [attorneys, setAttorneys] = useState([]);
+  const [selectedId, setSelectedId] = useState(currentAttorneyId || '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadAttorneys();
+  }, []);
+
+  useEffect(() => {
+    setSelectedId(currentAttorneyId || '');
+  }, [currentAttorneyId]);
+
+  async function loadAttorneys() {
+    try {
+      const data = await getStaffAttorneys();
+      setAttorneys(data || []);
+    } catch {}
+  }
+
+  async function handleAssign(attorneyId) {
+    setSaving(true);
+    try {
+      await assignAttorneyToClient(clientId, attorneyId);
+      setSelectedId(attorneyId);
+    } catch (err) {
+      console.error('Assignment failed:', err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (attorneys.length === 0) return null;
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <Briefcase className="h-4 w-4 text-slate-400" />
+          Assigned Attorney
+        </h3>
+        <select
+          value={selectedId}
+          onChange={(e) => handleAssign(e.target.value)}
+          disabled={saving}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">— Not Assigned —</option>
+          {attorneys.map(a => (
+            <option key={a.id} value={a.id}>{a.full_name}{a.bar_number ? ` (Bar #${a.bar_number})` : ''}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Credit Report Section

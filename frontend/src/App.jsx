@@ -153,7 +153,7 @@ function ProtectedRoute({ allowedRoles, children }) {
 
   if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
     // Redirect to appropriate portal based on actual role
-    const target = profile.role === 'attorney' ? '/attorney/dashboard' : '/client/dashboard';
+    const target = (profile.role === 'attorney' || profile.role === 'staff_attorney') ? '/attorney/dashboard' : '/client/dashboard';
     return <Navigate to={target} replace />;
   }
 
@@ -169,7 +169,7 @@ function RootRedirect() {
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
 
-  if (profile?.role === 'attorney') return <Navigate to="/attorney/dashboard" replace />;
+  if (profile?.role === 'attorney' || profile?.role === 'staff_attorney') return <Navigate to="/attorney/dashboard" replace />;
   if (profile?.role === 'client') return <Navigate to="/client/dashboard" replace />;
 
   return <Navigate to="/login" replace />;
@@ -511,7 +511,7 @@ export default function App() {
           <Route
             path="/attorney"
             element={
-              <ProtectedRoute allowedRoles={['attorney']}>
+              <ProtectedRoute allowedRoles={['attorney', 'staff_attorney']}>
                 <AttorneyLayout />
               </ProtectedRoute>
             }
