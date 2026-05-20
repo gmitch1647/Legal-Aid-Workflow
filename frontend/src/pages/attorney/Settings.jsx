@@ -42,6 +42,9 @@ import {
   seedViolationPatterns,
   inviteStaffAttorney,
   getStaffAttorneys,
+  getReferralPartners,
+  createReferralPartner,
+  deleteReferralPartner,
   getViolationPatterns,
   getCaseLaw,
   getCaseLawEntry,
@@ -64,6 +67,7 @@ const TABS = [
   { key: 'pipeline', label: 'Pipeline Stages', icon: RefreshCw },
   { key: 'defendants', label: 'Defendant Database', icon: Database },
   { key: 'reference_cases', label: 'Reference Cases', icon: BookOpen },
+  { key: 'referrals', label: 'Referral Partners', icon: Users },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'branding', label: 'Branding', icon: Building2 },
 ];
@@ -1915,6 +1919,162 @@ function ViolationCard({ violation: v }) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Referral Partners Tab
+// ---------------------------------------------------------------------------
+
+function ReferralsTab() {
+  const [partners, setPartners] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ full_name: '', company: '', email: '', phone: '', referral_fee_type: 'percentage', referral_fee_amount: 0, notes: '' });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { loadPartners(); }, []);
+
+  async function loadPartners() {
+    setLoading(true);
+    try {
+      const data = await getReferralPartners();
+      setPartners(data || []);
+    } catch {} finally { setLoading(false); }
+  }
+
+  async function handleAdd() {
+    if (!form.full_name) return;
+    setSaving(true);
+    try {
+      await createReferralPartner(form);
+      setForm({ full_name: '', company: '', email: '', phone: '', referral_fee_type: 'percentage', referral_fee_amount: 0, notes: '' });
+      setShowAdd(false);
+      loadPartners();
+    } catch (err) { console.error(err); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(id) {
+    if (!confirm('Delete this referral partner?')) return;
+    try {
+      await deleteReferralPartner(id);
+      setPartners(prev => prev.filter(p => p.id !== id));
+    } catch {}
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-slate-900">Referral Partners</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          People and firms who refer cases to you. Assign referred clients to track where cases come from.
+        </p>
+      </div>
+
+      <button onClick={() => setShowAdd(!showAdd)}
+        className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+        <Plus className="w-4 h-4" /> Add Referral Partner
+      </button>
+
+      {showAdd && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+          <div className="text-sm font-bold text-blue-800">New Referral Partner</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Full Name *</label>
+              <input value={form.full_name} onChange={e => setForm(p => ({ ...p, full_name: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Company / Firm</label>
+              <input value={form.company} onChange={e => setForm(p => ({ ...p, company: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Email</label>
+              <input type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Phone</label>
+              <input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Referral Fee Type</label>
+              <select value={form.referral_fee_type} onChange={e => setForm(p => ({ ...p, referral_fee_type: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                <option value="percentage">Percentage</option>
+                <option value="flat">Flat Fee</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Fee Amount</label>
+              <input type="number" value={form.referral_fee_amount} onChange={e => setForm(p => ({ ...p, referral_fee_amount: Number(e.target.value) }))}
+                placeholder={form.referral_fee_type === 'percentage' ? 'e.g. 33' : 'e.g. 500'}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Notes</label>
+              <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
+                rows={2} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm resize-y" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleAdd} disabled={saving || !form.full_name}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save Partner'}
+            </button>
+            <button onClick={() => setShowAdd(false)} className="px-4 py-2 text-sm text-slate-600">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {partners.length === 0 ? (
+        <div className="text-center py-10 bg-white rounded-xl border border-slate-200">
+          <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+          <p className="text-sm text-slate-500">No referral partners yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {partners.map(p => (
+            <div key={p.id} className="bg-white rounded-lg border border-slate-200 p-4 flex items-center gap-4 group">
+              <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+                <span className="text-sm font-bold text-purple-700">
+                  {(p.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-semibold text-slate-900">{p.full_name}</div>
+                <div className="text-xs text-slate-500 flex items-center gap-3 flex-wrap">
+                  {p.company && <span>{p.company}</span>}
+                  {p.email && <span>{p.email}</span>}
+                  {p.phone && <span>{p.phone}</span>}
+                  {p.referral_fee_type !== 'none' && p.referral_fee_amount > 0 && (
+                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">
+                      {p.referral_fee_type === 'percentage' ? `${p.referral_fee_amount}%` : `$${p.referral_fee_amount}`} fee
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  {p.client_count || 0} clients · {p.case_count || 0} cases
+                </div>
+              </div>
+              <button onClick={() => handleDelete(p.id)}
+                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Attorney Team Tab
 // ---------------------------------------------------------------------------
 
@@ -2280,6 +2440,8 @@ export default function Settings() {
         return <TeamTab />;
       case 'memory':
         return <MemoryTab />;
+      case 'referrals':
+        return <ReferralsTab />;
       case 'knowledge':
         return <KnowledgeBaseTab />;
       case 'defendants':

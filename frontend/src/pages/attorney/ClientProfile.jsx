@@ -39,6 +39,8 @@ import {
   getClientScoreHistory,
   getStaffAttorneys,
   assignAttorneyToClient,
+  getReferralPartners,
+  assignReferral,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -358,8 +360,11 @@ export default function ClientProfile() {
         </div>
       </div>
 
-      {/* Attorney Assignment */}
-      <AssignedAttorneySection clientId={id} currentAttorneyId={client.assigned_attorney_id} />
+      {/* Attorney & Referral Assignment */}
+      <div className="flex gap-4">
+        <div className="flex-1"><AssignedAttorneySection clientId={id} currentAttorneyId={client.assigned_attorney_id} /></div>
+        <div className="flex-1"><ReferralPartnerSection clientId={id} currentPartnerId={client.referral_partner_id} /></div>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Cases List - Left 2/3 */}
@@ -553,6 +558,46 @@ export default function ClientProfile() {
 // ---------------------------------------------------------------------------
 // Documents Section with Upload
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Referral Partner Section
+// ---------------------------------------------------------------------------
+
+function ReferralPartnerSection({ clientId, currentPartnerId }) {
+  const [partners, setPartners] = useState([]);
+  const [selectedId, setSelectedId] = useState(currentPartnerId || '');
+
+  useEffect(() => {
+    getReferralPartners().then(data => setPartners(data || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => { setSelectedId(currentPartnerId || ''); }, [currentPartnerId]);
+
+  async function handleAssign(partnerId) {
+    try {
+      await assignReferral({ client_id: clientId, partner_id: partnerId });
+      setSelectedId(partnerId);
+    } catch (err) { console.error(err); }
+  }
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <User className="h-4 w-4 text-slate-400" />
+          Referred By
+        </h3>
+        <select value={selectedId} onChange={(e) => handleAssign(e.target.value)}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">— None —</option>
+          {partners.map(p => (
+            <option key={p.id} value={p.id}>{p.full_name}{p.company ? ` (${p.company})` : ''}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Assigned Attorney Section

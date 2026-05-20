@@ -872,6 +872,34 @@ export async function assignAttorneyToClient(clientId, attorneyId) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Referral Partners
+// ---------------------------------------------------------------------------
+
+export async function getReferralPartners() {
+  return request('/referrals');
+}
+
+export async function getReferralPartner(id) {
+  return request(`/referrals/${id}`);
+}
+
+export async function createReferralPartner(data) {
+  return request('/referrals', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateReferralPartner(id, data) {
+  return request(`/referrals/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteReferralPartner(id) {
+  return request(`/referrals/${id}`, { method: 'DELETE' });
+}
+
+export async function assignReferral(data) {
+  return request('/referrals/assign', { method: 'POST', body: JSON.stringify(data) });
+}
+
 export async function registerClient(data) {
   return request('/auth/register', {
     method: 'POST',
