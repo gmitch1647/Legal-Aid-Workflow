@@ -727,8 +727,7 @@ export default function CaseDetail() {
             <User className="h-4 w-4" />
             Assign Client
           </button>
-          {staffAttorneys.length > 0 && (
-            <div className="relative">
+          <div className="relative">
               <button
                 onClick={() => setShowAssignAttorney(!showAssignAttorney)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
@@ -739,6 +738,9 @@ export default function CaseDetail() {
               {showAssignAttorney && (
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white rounded-xl border border-slate-200 shadow-lg p-3 w-64">
                   <div className="text-xs font-bold text-slate-600 mb-2">Assign Staff Attorney</div>
+                  {staffAttorneys.length === 0 && (
+                    <p className="text-xs text-slate-500 mb-2">No staff attorneys yet. Invite one from Settings → Attorney Team.</p>
+                  )}
                   <select
                     value={assignedAttorneyId}
                     onChange={async (e) => {
@@ -760,8 +762,7 @@ export default function CaseDetail() {
                   </select>
                 </div>
               )}
-            </div>
-          )}
+          </div>
           <button
             onClick={() => navigate('/attorney/draft')}
             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"
