@@ -2167,7 +2167,7 @@ function TeamTab() {
   const [attorneys, setAttorneys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ full_name: '', email: '', phone: '', address: '', firm_name: '' });
+  const [inviteForm, setInviteForm] = useState({ full_name: '', email: '', phone: '', address: '', bar_number: '', firm_name: '' });
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState(null);
 
@@ -2189,7 +2189,7 @@ function TeamTab() {
     try {
       const result = await inviteStaffAttorney(inviteForm);
       setInviteResult(result);
-      setInviteForm({ full_name: '', email: '', phone: '', address: '', firm_name: '' });
+      setInviteForm({ full_name: '', email: '', phone: '', address: '', bar_number: '', firm_name: '' });
       loadTeam();
     } catch (err) {
       setInviteResult({ error: err.message });
@@ -2234,6 +2234,11 @@ function TeamTab() {
               <label className="block text-xs font-semibold text-slate-600 mb-1">Address</label>
               <input value={inviteForm.address} onChange={e => setInviteForm(p => ({ ...p, address: e.target.value }))}
                 placeholder="123 Main St, City, State ZIP"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Bar Number <span className="text-slate-400 font-normal">(optional)</span></label>
+              <input value={inviteForm.bar_number} onChange={e => setInviteForm(p => ({ ...p, bar_number: e.target.value }))}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <div>
@@ -2292,6 +2297,7 @@ function TeamTab() {
                 <div className="text-xs text-slate-500 flex items-center gap-3">
                   <span>{a.email}</span>
                   {a.address && <span>{a.address}</span>}
+                  {a.bar_number && <span>Bar #{a.bar_number}</span>}
                   {a.firm_name && <span>{a.firm_name}</span>}
                 </div>
               </div>
