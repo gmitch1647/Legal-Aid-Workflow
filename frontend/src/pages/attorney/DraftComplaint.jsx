@@ -225,6 +225,55 @@ export default function DraftComplaint() {
         setDamages(caseData.damages_description);
       }
 
+      // Load defendants from this case and prefill
+      try {
+        const { data: caseDefendants } = await supabase
+          .from('case_defendants')
+          .select('defendant_id')
+          .eq('case_id', caseId);
+        if (caseDefendants && caseDefendants.length > 0) {
+          const defList = [];
+          for (const cd of caseDefendants) {
+            const known = knownDefendants.find(d => d.id === cd.defendant_id);
+            if (known) {
+              defList.push({
+                localId: Date.now() + Math.random(),
+                id: known.id,
+                name: known.name,
+                entity_type: known.entity_type || '',
+                principal_address: known.principal_address || '',
+                ga_registered_agent: known.ga_registered_agent || '',
+                autoFilled: true,
+              });
+            } else {
+              // Fetch from DB
+              const { data: defData } = await supabase
+                .from('defendants')
+                .select('*')
+                .eq('id', cd.defendant_id)
+                .limit(1);
+              if (defData && defData[0]) {
+                const d = defData[0];
+                defList.push({
+                  localId: Date.now() + Math.random(),
+                  id: d.id,
+                  name: d.name,
+                  entity_type: d.entity_type || '',
+                  principal_address: d.principal_address || '',
+                  ga_registered_agent: d.ga_registered_agent || '',
+                  autoFilled: true,
+                });
+              }
+            }
+          }
+          if (defList.length > 0) {
+            setDefendants(defList);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load case defendants:', err);
+      }
+
       // Load existing complaint if there is one
       const { data: complaints } = await supabase
         .from('complaints')
