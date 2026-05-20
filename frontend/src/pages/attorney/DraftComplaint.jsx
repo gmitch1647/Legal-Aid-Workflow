@@ -297,21 +297,24 @@ export default function DraftComplaint() {
 
   async function handleOpenDraft(draft) {
     setShowDraftsList(false);
-    setSessionId(draft.session_id);
     try {
       const result = await getDraftResult(draft.session_id);
-      if (result && result.complaint_text) {
-        setComplaintResult(result);
-        setOutputState('complete');
-      } else {
-        // Draft exists but has no complaint yet — might still be processing
-        setOutputState('running');
+      // Set directly into the current document type's draft state
+      setDraftsByType(prev => ({
+        ...prev,
+        [documentType]: {
+          outputState: result && result.complaint_text ? 'complete' : 'idle',
+          sessionId: draft.session_id,
+          pipelineStatus: null,
+          complaintResult: result && result.complaint_text ? result : null,
+          pipelineError: null,
+        },
+      }));
+      if (result && !result.complaint_text && result.status === 'processing') {
         startPolling(draft.session_id);
       }
     } catch (err) {
       console.error('Failed to open draft:', err);
-      setOutputState('idle');
-      setSessionId(null);
       alert('Could not open this draft: ' + (err.message || 'Unknown error'));
     }
   }
