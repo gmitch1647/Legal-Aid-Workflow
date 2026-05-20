@@ -251,12 +251,30 @@ export default function DraftComplaint() {
     }
   }
 
-  // ── Pipeline / output state ───────────────────────────────────────────
-  const [outputState, setOutputState] = useState('idle'); // idle | running | complete | error
-  const [sessionId, setSessionId] = useState(null);
-  const [pipelineStatus, setPipelineStatus] = useState(null);
-  const [complaintResult, setComplaintResult] = useState(null);
-  const [pipelineError, setPipelineError] = useState(null);
+  // ── Pipeline / output state — PER DOCUMENT TYPE ──────────────────────
+  const [draftsByType, setDraftsByType] = useState({});
+
+  // Get/set current type's draft state
+  const currentDraft = draftsByType[documentType] || { outputState: 'idle', sessionId: null, pipelineStatus: null, complaintResult: null, pipelineError: null };
+  const outputState = currentDraft.outputState;
+  const sessionId = currentDraft.sessionId;
+  const pipelineStatus = currentDraft.pipelineStatus;
+  const complaintResult = currentDraft.complaintResult;
+  const pipelineError = currentDraft.pipelineError;
+
+  function updateDraft(updates) {
+    setDraftsByType(prev => ({
+      ...prev,
+      [documentType]: { ...prev[documentType] || {}, ...updates },
+    }));
+  }
+
+  function setOutputState(v) { updateDraft({ outputState: v }); }
+  function setSessionId(v) { updateDraft({ sessionId: v }); }
+  function setPipelineStatus(v) { updateDraft({ pipelineStatus: v }); }
+  function setComplaintResult(v) { updateDraft({ complaintResult: v }); }
+  function setPipelineError(v) { updateDraft({ pipelineError: v }); }
+
   const [validationErrors, setValidationErrors] = useState({});
 
   // ── Known defendants from DB ──────────────────────────────────────────
