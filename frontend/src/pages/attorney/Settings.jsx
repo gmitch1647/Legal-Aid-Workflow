@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   User,
+  Users,
   Building2,
   Bell,
   Database,
@@ -39,6 +40,8 @@ import {
   deleteAttorneyMemory,
   getMemoryStats,
   seedViolationPatterns,
+  inviteStaffAttorney,
+  getStaffAttorneys,
   getViolationPatterns,
   getCaseLaw,
   getCaseLawEntry,
@@ -55,6 +58,7 @@ import { supabase } from '../../lib/supabase';
 
 const TABS = [
   { key: 'profile', label: 'Attorney Profile', icon: User },
+  { key: 'team', label: 'Attorney Team', icon: Users },
   { key: 'memory', label: 'AI Memory', icon: Sparkles },
   { key: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { key: 'pipeline', label: 'Pipeline Stages', icon: RefreshCw },
@@ -1910,6 +1914,154 @@ function ViolationCard({ violation: v }) {
 // AI Memory Tab
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Attorney Team Tab
+// ---------------------------------------------------------------------------
+
+function TeamTab() {
+  const [attorneys, setAttorneys] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ full_name: '', email: '', phone: '', bar_number: '', firm_name: '' });
+  const [inviting, setInviting] = useState(false);
+  const [inviteResult, setInviteResult] = useState(null);
+
+  useEffect(() => { loadTeam(); }, []);
+
+  async function loadTeam() {
+    setLoading(true);
+    try {
+      const data = await getStaffAttorneys();
+      setAttorneys(data || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }
+
+  async function handleInvite() {
+    if (!inviteForm.full_name || !inviteForm.email) return;
+    setInviting(true);
+    setInviteResult(null);
+    try {
+      const result = await inviteStaffAttorney(inviteForm);
+      setInviteResult(result);
+      setInviteForm({ full_name: '', email: '', phone: '', bar_number: '', firm_name: '' });
+      loadTeam();
+    } catch (err) {
+      setInviteResult({ error: err.message });
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-slate-900">Attorney Team</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Invite attorneys to the platform. Assign them clients so they only see their cases.
+        </p>
+      </div>
+
+      <button onClick={() => setShowInvite(!showInvite)}
+        className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+        <Plus className="w-4 h-4" /> Invite Attorney
+      </button>
+
+      {showInvite && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+          <div className="text-sm font-bold text-blue-800">Invite New Attorney</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Full Name *</label>
+              <input value={inviteForm.full_name} onChange={e => setInviteForm(p => ({ ...p, full_name: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Email *</label>
+              <input type="email" value={inviteForm.email} onChange={e => setInviteForm(p => ({ ...p, email: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Bar Number</label>
+              <input value={inviteForm.bar_number} onChange={e => setInviteForm(p => ({ ...p, bar_number: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Phone</label>
+              <input value={inviteForm.phone} onChange={e => setInviteForm(p => ({ ...p, phone: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Firm Name</label>
+              <input value={inviteForm.firm_name} onChange={e => setInviteForm(p => ({ ...p, firm_name: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleInvite} disabled={inviting || !inviteForm.full_name || !inviteForm.email}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+              {inviting ? 'Inviting...' : 'Send Invite'}
+            </button>
+            <button onClick={() => { setShowInvite(false); setInviteResult(null); }}
+              className="px-4 py-2 text-sm text-slate-600">Cancel</button>
+          </div>
+
+          {inviteResult && !inviteResult.error && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+              <div className="font-bold">Attorney invited successfully!</div>
+              <div className="mt-1">Temporary password: <code className="bg-emerald-100 px-2 py-0.5 rounded font-mono text-xs select-all">{inviteResult.temp_password}</code></div>
+              <div className="text-xs text-emerald-600 mt-1">Share this password with {inviteResult.profile?.full_name || 'the attorney'} to log in. They should change it immediately.</div>
+            </div>
+          )}
+
+          {inviteResult?.error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+              Error: {inviteResult.error}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Team list */}
+      {attorneys.length === 0 ? (
+        <div className="text-center py-10 bg-white rounded-xl border border-slate-200">
+          <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+          <p className="text-sm text-slate-500">No team members yet. Invite your first attorney above.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {attorneys.map(a => (
+            <div key={a.id} className="bg-white rounded-lg border border-slate-200 p-4 flex items-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                <span className="text-sm font-bold text-blue-700">
+                  {(a.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-semibold text-slate-900">{a.full_name}</div>
+                <div className="text-xs text-slate-500 flex items-center gap-3">
+                  <span>{a.email}</span>
+                  {a.bar_number && <span>Bar #{a.bar_number}</span>}
+                  {a.firm_name && <span>{a.firm_name}</span>}
+                </div>
+              </div>
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-medium">Active</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AI Memory Tab
+// ---------------------------------------------------------------------------
+
 function MemoryTab() {
   const [memories, setMemories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2124,6 +2276,8 @@ export default function Settings() {
     switch (activeTab) {
       case 'profile':
         return <ProfileTab />;
+      case 'team':
+        return <TeamTab />;
       case 'memory':
         return <MemoryTab />;
       case 'knowledge':
