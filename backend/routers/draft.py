@@ -657,9 +657,27 @@ async def draft_result(session_id: str, authorization: str = Header(...)):
     )
 
     if not complaint_resp.data:
+        # Check if case exists but has no document yet
+        case_resp = supabase.table("cases").select("status, case_facts").eq("id", session_id).limit(1).execute()
+        if case_resp.data:
+            case = case_resp.data[0]
+            if case.get("status") == "agents_processing":
+                return {
+                    "complaint_text": "",
+                    "version": 0,
+                    "status": "processing",
+                    "message": "Draft is still being generated. Please wait.",
+                }
+            # Return empty result so the UI can show the chat assistant
+            return {
+                "complaint_text": "",
+                "version": 0,
+                "status": case.get("status", "unknown"),
+                "message": "No document generated yet. Use the chat assistant to draft one.",
+            }
         raise HTTPException(
             status_code=404,
-            detail="No complaint has been generated yet for this draft session.",
+            detail="Draft session not found.",
         )
 
     complaint = complaint_resp.data[0]
