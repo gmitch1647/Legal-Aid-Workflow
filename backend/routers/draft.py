@@ -87,6 +87,7 @@ class DraftStartPayload(BaseModel):
     document_type: str = "complaint"  # complaint | motion | discovery | demand_letter
     client_id: Optional[str] = None  # Link draft to a client profile
     attorney_id: Optional[str] = None  # Attorney for signature block
+    assigned_staff_id: Optional[str] = None  # Staff attorney assigned to this case
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +343,17 @@ async def start_draft(
         except Exception as e:
             logger.warning(f"Client lookup failed: {e}")
 
-    # Create a case row linked to the client (or attorney as fallback).
+    # Assign staff attorney to the client if provided
+    if payload.assigned_staff_id and client_id:
+        try:
+            supabase.table("profiles").update(
+                {"assigned_attorney_id": payload.assigned_staff_id}
+            ).eq("id", client_id).execute()
+            logger.info(f"Assigned staff attorney {payload.assigned_staff_id} to client {client_id}")
+        except Exception as e:
+            logger.warning(f"Could not assign staff attorney: {e}")
+
+    # Create a case row linked to the client.
     case_facts = _format_case_facts(payload)
 
     now = datetime.now(timezone.utc).isoformat()

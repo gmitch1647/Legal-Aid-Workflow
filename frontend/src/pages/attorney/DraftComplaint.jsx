@@ -20,6 +20,7 @@ import {
   getDefendants,
   getAttorneys,
   createAttorney,
+  getStaffAttorneys,
   uploadDraftDocument,
   startDraft,
   getDraftStatus,
@@ -99,6 +100,8 @@ export default function DraftComplaint() {
   const [draftMode, setDraftMode] = useState('fast');
   const [knownAttorneys, setKnownAttorneys] = useState([]);
   const [selectedAttorneyId, setSelectedAttorneyId] = useState('');
+  const [staffAttorneys, setStaffAttorneys] = useState([]);
+  const [assignedStaffId, setAssignedStaffId] = useState('');
   const [showAddAttorney, setShowAddAttorney] = useState(false);
   const [newAttorney, setNewAttorney] = useState({ full_name: '', bar_number: '', firm_name: '', address: '', phone: '', email: '' });
   const [documentType, setDocumentType] = useState('complaint');
@@ -300,6 +303,7 @@ export default function DraftComplaint() {
     loadRecentDrafts();
     loadClients();
     loadAttorneys();
+    loadStaffAttorneys();
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
@@ -337,6 +341,13 @@ export default function DraftComplaint() {
     } catch (err) {
       console.error('Failed to add attorney:', err);
     }
+  }
+
+  async function loadStaffAttorneys() {
+    try {
+      const data = await getStaffAttorneys();
+      setStaffAttorneys(Array.isArray(data) ? data : []);
+    } catch {}
   }
 
   // ── Defendant card handlers ───────────────────────────────────────────
@@ -478,6 +489,7 @@ export default function DraftComplaint() {
       document_type: documentType,
       client_id: selectedClientId || null,
       attorney_id: selectedAttorneyId || null,
+      assigned_staff_id: assignedStaffId || null,
     };
 
     try {
@@ -778,20 +790,37 @@ export default function DraftComplaint() {
           {/* Attorney on Case */}
           <Card>
             <SectionLabel>ATTORNEY ON CASE</SectionLabel>
-            <div className="flex items-center gap-3">
-              <select value={selectedAttorneyId} onChange={(e) => setSelectedAttorneyId(e.target.value)}
-                className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">— Select Attorney —</option>
-                {knownAttorneys.map(a => (
-                  <option key={a.id} value={a.id}>
-                    {a.full_name}{a.firm_name ? ` — ${a.firm_name}` : ''}{a.is_default ? ' (Default)' : ''}
-                  </option>
-                ))}
-              </select>
-              <button onClick={() => setShowAddAttorney(!showAddAttorney)}
-                className="shrink-0 px-3 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 hover:bg-slate-50">
-                <Plus className="w-4 h-4" />
-              </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Signature Block Attorney</label>
+                <div className="flex items-center gap-2">
+                  <select value={selectedAttorneyId} onChange={(e) => setSelectedAttorneyId(e.target.value)}
+                    className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">— Select —</option>
+                    {knownAttorneys.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.full_name}{a.firm_name ? ` — ${a.firm_name}` : ''}{a.is_default ? ' (Default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button onClick={() => setShowAddAttorney(!showAddAttorney)}
+                    className="shrink-0 px-3 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 hover:bg-slate-50">
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              {staffAttorneys.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Assigned Staff Attorney</label>
+                  <select value={assignedStaffId} onChange={(e) => setAssignedStaffId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">— Not Assigned —</option>
+                    {staffAttorneys.map(a => (
+                      <option key={a.id} value={a.id}>{a.full_name}{a.bar_number ? ` (Bar #${a.bar_number})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
             {selectedAttorneyId && (() => {
               const a = knownAttorneys.find(x => x.id === selectedAttorneyId);
