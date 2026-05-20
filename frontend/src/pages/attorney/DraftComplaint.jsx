@@ -1809,19 +1809,23 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate, caseDocumen
         }
       }
 
-      // Also detect if the assistant drafted a full complaint inline (no marker prefix)
-      if (!complaintDetected && fullText.includes('IN THE UNITED STATES DISTRICT COURT') && fullText.length > 1000) {
-        const startIdx = fullText.indexOf('IN THE UNITED STATES DISTRICT COURT');
-        const complaintText = fullText.slice(startIdx).trim();
-        if (complaintText.length > 500 && onComplaintUpdate) {
-          onComplaintUpdate(complaintText);
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === 'assistant') {
-              return [...prev.slice(0, -1), { ...last, content: '✅ Complaint drafted and loaded above. You can download it from the output panel.' }];
-            }
-            return prev;
-          });
+      // Also detect if the assistant drafted a full document inline (no marker prefix)
+      if (!complaintDetected && fullText.length > 1000) {
+        const docMarkers = ['IN THE UNITED STATES DISTRICT COURT', 'Dear ', 'RE:', 'Re:', 'DEMAND LETTER', 'PRE-LITIGATION', 'NOTICE OF DISPUTE', 'CEASE AND DESIST', "PLAINTIFF'S FIRST", 'INTERROGATOR', 'REQUEST FOR', 'MOTION TO', 'MEMORANDUM'];
+        const foundMarker = docMarkers.find(m => fullText.includes(m));
+        if (foundMarker && onComplaintUpdate) {
+          const startIdx = fullText.indexOf(foundMarker);
+          const docText = fullText.slice(startIdx).trim();
+          if (docText.length > 500) {
+            onComplaintUpdate(docText);
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === 'assistant') {
+                return [...prev.slice(0, -1), { ...last, content: '✅ Document drafted and loaded above. You can download it from the output panel.' }];
+              }
+              return prev;
+            });
+          }
         }
       }
     } catch (err) {

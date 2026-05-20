@@ -1142,7 +1142,7 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
             except Exception:
                 pass
 
-            # If it's a revision or a full complaint, save new document version
+            # If it's a revision or a full document, save new version
             revision_marker = None
             complaint_text = None
 
@@ -1153,9 +1153,16 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
                 revision_marker = "REVISED COMPLAINT:"
                 complaint_text = full_response.split(revision_marker, 1)[1].strip()
             elif "IN THE UNITED STATES DISTRICT COURT" in full_response:
-                # The assistant drafted a full complaint inline — save it
                 start_idx = full_response.index("IN THE UNITED STATES DISTRICT COURT")
                 complaint_text = full_response[start_idx:].strip()
+            elif len(full_response) > 1000 and any(marker in full_response for marker in [
+                "Dear ", "RE:", "Re:", "DEMAND LETTER", "PRE-LITIGATION",
+                "NOTICE OF DISPUTE", "CEASE AND DESIST",
+                "PLAINTIFF'S FIRST", "INTERROGATOR", "REQUEST FOR",
+                "MOTION TO", "MEMORANDUM",
+            ]):
+                # Looks like a full legal document (demand letter, discovery, motion)
+                complaint_text = full_response.strip()
 
             if complaint_text and len(complaint_text) > 500:
                     try:
@@ -1165,12 +1172,13 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
                             supabase.table("complaints").update({"is_current": False}).eq("case_id", session_id).execute()
                         supabase.table("complaints").insert({
                             "case_id": session_id,
-                            "complaint_text": revised,
+                            "complaint_text": complaint_text,
                             "version": next_v,
                             "is_current": True,
                         }).execute()
+                        logger.info(f"Saved document version {next_v} for session {session_id}")
                     except Exception as e:
-                        logger.warning(f"Could not save revised complaint: {e}")
+                        logger.warning(f"Could not save document: {e}")
 
         except Exception as e:
             yield f"data: Error: {str(e)}\n\n"
