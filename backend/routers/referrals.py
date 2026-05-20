@@ -144,3 +144,95 @@ async def assign_referral(body: AssignReferralRequest, authorization: str = Head
         ).eq("id", body.case_id).execute()
 
     return {"assigned": True}
+
+
+# ---------------------------------------------------------------------------
+# POST /invite-portal — create portal login for a referral partner
+# ---------------------------------------------------------------------------
+
+class InvitePortalRequest(BaseModel):
+    partner_id: str
+    email: str
+
+
+@router.post("/invite-portal")
+async def invite_partner_portal(body: InvitePortalRequest, authorization: str = Header(default=None)):
+    """Create a login for a referral partner so they can access their portal."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    # Get partner info
+    partner_resp = supabase.table("referral_partners").select("*").eq("id", body.partner_id).limit(1).execute()
+    if not partner_resp.data:
+        raise HTTPException(status_code=404, detail="Partner not found")
+
+    partner = partner_resp.data[0]
+
+    # Create auth user
+    import secrets, string
+    temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(16))
+
+    try:
+        auth_resp = supabase.auth.admin.create_user({
+            "email": body.email,
+            "password": temp_password,
+            "email_confirm": True,
+        })
+        new_user_id = str(auth_resp.user.id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not create account: {e}")
+
+    # Create profile with affiliate role
+    try:
+        supabase.table("profiles").insert({
+            "id": new_user_id,
+            "email": body.email,
+            "full_name": partner.get("full_name", ""),
+            "phone": partner.get("phone", ""),
+            "role": "affiliate",
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profile creation failed: {e}")
+
+    # Link portal user to partner
+    supabase.table("referral_partners").update({
+        "portal_user_id": new_user_id,
+    }).eq("id", body.partner_id).execute()
+
+    return {
+        "status": "invited",
+        "email": body.email,
+        "temp_password": temp_password,
+        "message": f"Portal created for {partner.get('full_name')}. Share the password with them.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# PATCH /toggle-access — toggle drafter/disputer access for a partner
+# ---------------------------------------------------------------------------
+
+class ToggleAccessRequest(BaseModel):
+    partner_id: str
+    feature: str  # "drafter" or "disputer"
+    enabled: bool
+
+
+@router.patch("/toggle-access")
+async def toggle_partner_access(body: ToggleAccessRequest, authorization: str = Header(default=None)):
+    """Toggle drafter or disputer access for a referral partner."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    field = f"can_access_{body.feature}"
+    if field not in ("can_access_drafter", "can_access_disputer"):
+        raise HTTPException(status_code=400, detail="Feature must be 'drafter' or 'disputer'")
+
+    supabase = get_supabase()
+    resp = supabase.table("referral_partners").update({field: body.enabled}).eq("id", body.partner_id).execute()
+
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Partner not found")
+
+    return {"updated": True, "feature": body.feature, "enabled": body.enabled}

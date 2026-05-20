@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS referral_partners (
     referral_fee_type TEXT DEFAULT 'percentage',  -- percentage, flat, none
     referral_fee_amount NUMERIC DEFAULT 0,
     notes TEXT,
+    has_portal_access BOOLEAN DEFAULT true,
+    can_access_drafter BOOLEAN DEFAULT false,
+    can_access_disputer BOOLEAN DEFAULT false,
+    portal_user_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
     created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );

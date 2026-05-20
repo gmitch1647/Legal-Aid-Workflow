@@ -153,7 +153,7 @@ function ProtectedRoute({ allowedRoles, children }) {
 
   if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
     // Redirect to appropriate portal based on actual role
-    const target = (profile.role === 'attorney' || profile.role === 'staff_attorney') ? '/attorney/dashboard' : '/client/dashboard';
+    const target = ['attorney', 'staff_attorney', 'affiliate'].includes(profile.role) ? '/attorney/dashboard' : '/client/dashboard';
     return <Navigate to={target} replace />;
   }
 
@@ -169,7 +169,7 @@ function RootRedirect() {
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
 
-  if (profile?.role === 'attorney' || profile?.role === 'staff_attorney') return <Navigate to="/attorney/dashboard" replace />;
+  if (['attorney', 'staff_attorney', 'affiliate'].includes(profile?.role)) return <Navigate to="/attorney/dashboard" replace />;
   if (profile?.role === 'client') return <Navigate to="/client/dashboard" replace />;
 
   return <Navigate to="/login" replace />;
@@ -437,21 +437,28 @@ function Sidebar({ links, open, onClose }) {
 // ---------------------------------------------------------------------------
 // Attorney Layout
 // ---------------------------------------------------------------------------
-const attorneyLinks = [
-  { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit },
-  { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail },
-  { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine },
-  { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban },
-  { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare },
-  { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays },
-  { to: '/attorney/forms', label: 'Forms', icon: FileText },
-  { to: '/attorney/clients', label: 'Clients', icon: Users },
-  { to: '/attorney/settings', label: 'Settings', icon: Settings },
+const allAttorneyLinks = [
+  { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
+  { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
+  { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/forms', label: 'Forms', icon: FileText, roles: ['attorney'] },
+  { to: '/attorney/clients', label: 'Clients', icon: Users, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/settings', label: 'Settings', icon: Settings, roles: ['attorney'] },
 ];
 
 function AttorneyLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { profile } = useAuth();
+  const role = profile?.role || 'attorney';
+
+  const attorneyLinks = allAttorneyLinks.filter(link => {
+    if (!link.roles.includes(role)) return false;
+    return true;
+  });
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
@@ -511,7 +518,7 @@ export default function App() {
           <Route
             path="/attorney"
             element={
-              <ProtectedRoute allowedRoles={['attorney', 'staff_attorney']}>
+              <ProtectedRoute allowedRoles={['attorney', 'staff_attorney', 'affiliate']}>
                 <AttorneyLayout />
               </ProtectedRoute>
             }

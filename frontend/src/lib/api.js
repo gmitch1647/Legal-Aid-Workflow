@@ -900,6 +900,20 @@ export async function assignReferral(data) {
   return request('/referrals/assign', { method: 'POST', body: JSON.stringify(data) });
 }
 
+export async function inviteReferralPortal(partnerId, email) {
+  return request('/referrals/invite-portal', {
+    method: 'POST',
+    body: JSON.stringify({ partner_id: partnerId, email }),
+  });
+}
+
+export async function toggleReferralAccess(partnerId, feature, enabled) {
+  return request('/referrals/toggle-access', {
+    method: 'PATCH',
+    body: JSON.stringify({ partner_id: partnerId, feature, enabled }),
+  });
+}
+
 export async function registerClient(data) {
   return request('/auth/register', {
     method: 'POST',

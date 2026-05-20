@@ -45,6 +45,8 @@ import {
   getReferralPartners,
   createReferralPartner,
   deleteReferralPartner,
+  inviteReferralPortal,
+  toggleReferralAccess,
   getViolationPatterns,
   getCaseLaw,
   getCaseLawEntry,
@@ -2040,34 +2042,117 @@ function ReferralsTab() {
       ) : (
         <div className="space-y-2">
           {partners.map(p => (
-            <div key={p.id} className="bg-white rounded-lg border border-slate-200 p-4 flex items-center gap-4 group">
-              <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
-                <span className="text-sm font-bold text-purple-700">
-                  {(p.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-                </span>
-              </div>
-              <div className="flex-1">
-                <div className="text-sm font-semibold text-slate-900">{p.full_name}</div>
-                <div className="text-xs text-slate-500 flex items-center gap-3 flex-wrap">
-                  {p.company && <span>{p.company}</span>}
-                  {p.email && <span>{p.email}</span>}
-                  {p.phone && <span>{p.phone}</span>}
-                  {p.referral_fee_type !== 'none' && p.referral_fee_amount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">
-                      {p.referral_fee_type === 'percentage' ? `${p.referral_fee_amount}%` : `$${p.referral_fee_amount}`} fee
-                    </span>
-                  )}
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">
-                  {p.client_count || 0} clients · {p.case_count || 0} cases
-                </div>
-              </div>
-              <button onClick={() => handleDelete(p.id)}
-                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            <ReferralPartnerCard key={p.id} partner={p} onDelete={() => handleDelete(p.id)} onUpdate={loadPartners} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
+  const [expanded, setExpanded] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState(p.email || '');
+  const [inviting, setInviting] = useState(false);
+  const [inviteResult, setInviteResult] = useState(null);
+
+  async function handleInvitePortal() {
+    if (!inviteEmail) return;
+    setInviting(true);
+    try {
+      const result = await inviteReferralPortal(p.id, inviteEmail);
+      setInviteResult(result);
+      onUpdate();
+    } catch (err) {
+      setInviteResult({ error: err.message });
+    } finally { setInviting(false); }
+  }
+
+  async function handleToggle(feature) {
+    const current = feature === 'drafter' ? p.can_access_drafter : p.can_access_disputer;
+    try {
+      await toggleReferralAccess(p.id, feature, !current);
+      onUpdate();
+    } catch (err) { console.error(err); }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <div className="p-4 flex items-center gap-4 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+          <span className="text-sm font-bold text-purple-700">
+            {(p.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+          </span>
+        </div>
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-slate-900">{p.full_name}</div>
+          <div className="text-xs text-slate-500 flex items-center gap-3 flex-wrap">
+            {p.company && <span>{p.company}</span>}
+            {p.email && <span>{p.email}</span>}
+            {p.referral_fee_type !== 'none' && p.referral_fee_amount > 0 && (
+              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">
+                {p.referral_fee_type === 'percentage' ? `${p.referral_fee_amount}%` : `$${p.referral_fee_amount}`} fee
+              </span>
+            )}
+          </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            {p.client_count || 0} clients · {p.case_count || 0} cases
+            {p.portal_user_id && <span className="ml-2 text-emerald-600">· Portal Active</span>}
+          </div>
+        </div>
+        <ChevronRight className={`w-4 h-4 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
+      </div>
+
+      {expanded && (
+        <div className="border-t border-slate-200 p-4 bg-slate-50 space-y-3">
+          {/* Portal invite */}
+          {!p.portal_user_id ? (
+            <div className="space-y-2">
+              <div className="text-xs font-bold text-slate-700">Invite to Portal</div>
+              <div className="flex gap-2">
+                <input value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+                  placeholder="Email address" className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                <button onClick={handleInvitePortal} disabled={inviting || !inviteEmail}
+                  className="px-3 py-1.5 bg-purple-600 text-white rounded text-xs font-medium hover:bg-purple-700 disabled:opacity-50">
+                  {inviting ? 'Inviting...' : 'Send Invite'}
+                </button>
+              </div>
+              {inviteResult && !inviteResult.error && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800">
+                  Portal created! Password: <code className="bg-emerald-100 px-1 rounded font-mono select-all">{inviteResult.temp_password}</code>
+                </div>
+              )}
+              {inviteResult?.error && (
+                <div className="text-xs text-red-600">{inviteResult.error}</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-emerald-700 bg-emerald-50 rounded p-2 border border-emerald-200">
+              Portal access active — partner can log in and see their referred clients and cases.
+            </div>
+          )}
+
+          {/* Access toggles */}
+          <div className="space-y-2">
+            <div className="text-xs font-bold text-slate-700">Feature Access</div>
+            <label className="flex items-center justify-between bg-white rounded-lg border border-slate-200 p-2 cursor-pointer">
+              <span className="text-xs text-slate-700">Drafter Access</span>
+              <button onClick={() => handleToggle('drafter')}
+                className={`w-10 h-5 rounded-full transition ${p.can_access_drafter ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                <div className={`w-4 h-4 rounded-full bg-white shadow transition transform ${p.can_access_drafter ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </button>
+            </label>
+            <label className="flex items-center justify-between bg-white rounded-lg border border-slate-200 p-2 cursor-pointer">
+              <span className="text-xs text-slate-700">Disputer Access</span>
+              <button onClick={() => handleToggle('disputer')}
+                className={`w-10 h-5 rounded-full transition ${p.can_access_disputer ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                <div className={`w-4 h-4 rounded-full bg-white shadow transition transform ${p.can_access_disputer ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </button>
+            </label>
+          </div>
+
+          <button onClick={onDelete}
+            className="text-xs text-red-600 hover:text-red-700">Delete Partner</button>
         </div>
       )}
     </div>
