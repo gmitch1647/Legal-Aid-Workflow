@@ -42,6 +42,8 @@ import {
   sendMessage,
   downloadComplaint,
   downloadMemo,
+  getStaffAttorneys,
+  assignAttorneyToClient,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
 
@@ -324,6 +326,11 @@ export default function CaseDetail() {
   const [revisionModal, setRevisionModal] = useState(false);
   const [denyModal, setDenyModal] = useState(false);
 
+  // Attorney assignment
+  const [staffAttorneys, setStaffAttorneys] = useState([]);
+  const [showAssignAttorney, setShowAssignAttorney] = useState(false);
+  const [assignedAttorneyId, setAssignedAttorneyId] = useState('');
+
   // Complaint editing
   const [editingComplaint, setEditingComplaint] = useState(false);
 
@@ -393,6 +400,7 @@ export default function CaseDetail() {
     fetchCase();
     fetchPipeline();
     fetchDocuments();
+    getStaffAttorneys().then(data => setStaffAttorneys(data || [])).catch(() => {});
   }, [fetchCase, fetchPipeline, fetchDocuments]);
 
   // Poll pipeline when agents are processing
@@ -719,6 +727,41 @@ export default function CaseDetail() {
             <User className="h-4 w-4" />
             Assign Client
           </button>
+          {staffAttorneys.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setShowAssignAttorney(!showAssignAttorney)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+              >
+                <Shield className="h-4 w-4" />
+                Assign Attorney
+              </button>
+              {showAssignAttorney && (
+                <div className="absolute right-0 top-full mt-1 z-20 bg-white rounded-xl border border-slate-200 shadow-lg p-3 w-64">
+                  <div className="text-xs font-bold text-slate-600 mb-2">Assign Staff Attorney</div>
+                  <select
+                    value={assignedAttorneyId}
+                    onChange={async (e) => {
+                      const attId = e.target.value;
+                      setAssignedAttorneyId(attId);
+                      if (caseData?.client_id && attId) {
+                        try {
+                          await assignAttorneyToClient(caseData.client_id, attId);
+                          setShowAssignAttorney(false);
+                        } catch (err) { console.error(err); }
+                      }
+                    }}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">— Select —</option>
+                    {staffAttorneys.map(a => (
+                      <option key={a.id} value={a.id}>{a.full_name}{a.bar_number ? ` (#${a.bar_number})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={() => navigate('/attorney/draft')}
             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"
