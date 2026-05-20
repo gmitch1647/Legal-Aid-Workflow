@@ -201,6 +201,29 @@ async def invite_partner_portal(body: InvitePortalRequest, authorization: str = 
         "portal_user_id": new_user_id,
     }).eq("id", body.partner_id).execute()
 
+    # Send welcome email
+    try:
+        import os as _os
+        from utils.email_service import send_email
+        frontend_url = _os.environ.get("FRONTEND_URL", "http://localhost:5173")
+        await send_email(
+            to=body.email,
+            subject=f"You've been invited to LegalFlow",
+            body=f"""
+            <div style="font-family:sans-serif;font-size:14px;line-height:1.6;">
+                <h2>Welcome to LegalFlow</h2>
+                <p>Hi {partner.get('full_name', '')},</p>
+                <p>You've been invited to the LegalFlow platform to track your referred clients and cases.</p>
+                <p><strong>Login URL:</strong> <a href="{frontend_url}/login">{frontend_url}/login</a></p>
+                <p><strong>Email:</strong> {body.email}</p>
+                <p><strong>Temporary Password:</strong> {temp_password}</p>
+                <p>Please change your password after your first login.</p>
+            </div>
+            """,
+        )
+    except Exception as e:
+        logger.warning(f"Could not send welcome email: {e}")
+
     return {
         "status": "invited",
         "email": body.email,

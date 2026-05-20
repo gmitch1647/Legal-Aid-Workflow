@@ -32,13 +32,40 @@ SMTP_USE_TLS: bool = os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", 
 # ── Core send helper ────────────────────────────────────────────────────────
 
 async def send_email(to: str, subject: str, body: str) -> bool:
-    """Send a single HTML email.
+    """Send a single HTML email via Resend (primary) or SMTP (fallback)."""
 
-    Returns ``True`` on success, ``False`` on failure.  Errors are logged
-    but never raised so callers can treat email as best-effort.
-    """
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    email_from = os.environ.get("EMAIL_FROM", SMTP_FROM_EMAIL or "onboarding@resend.dev")
+
+    # Try Resend first
+    if resend_key:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {resend_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": f"{SMTP_FROM_NAME} <{email_from}>",
+                        "to": [to],
+                        "subject": subject,
+                        "html": body,
+                    },
+                )
+                if resp.status_code in (200, 201):
+                    logger.info("Email sent via Resend to %s: %s", to, subject)
+                    return True
+                else:
+                    logger.warning("Resend failed: %s %s", resp.status_code, resp.text[:200])
+        except Exception as e:
+            logger.warning("Resend error: %s", e)
+
+    # Fallback to SMTP
     if not SMTP_HOST:
-        logger.warning("SMTP_HOST not configured – skipping email to %s", to)
+        logger.warning("No email provider configured – skipping email to %s", to)
         return False
 
     try:

@@ -238,6 +238,13 @@ async def invite_staff_attorney(
             detail=f"Profile creation failed: {exc}",
         )
 
+    # Send welcome email
+    try:
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+        await send_welcome_email(body.email, body.full_name, f"{frontend_url}/login")
+    except Exception:
+        pass
+
     logger.info("Staff attorney invited: %s (%s)", body.full_name, body.email)
     return {
         "profile": profile.data[0] if profile.data else None,
