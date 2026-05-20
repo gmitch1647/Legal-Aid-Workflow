@@ -32,7 +32,7 @@ class StaffAttorneyRegisterRequest(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=1, max_length=200)
     phone: Optional[str] = Field(None, max_length=30)
-    bar_number: Optional[str] = None
+    address: Optional[str] = None
     firm_name: Optional[str] = None
 
 
@@ -226,7 +226,7 @@ async def invite_staff_attorney(
                 "email": body.email,
                 "full_name": body.full_name,
                 "phone": body.phone,
-                "bar_number": body.bar_number,
+                "address": body.address,
                 "firm_name": body.firm_name,
                 "role": "staff_attorney",
             }
