@@ -1094,6 +1094,11 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
     if memory_context:
         system_prompt += f"\n\n--- MEMORY ---\n{memory_context}"
 
+    # Always include attorney info if available in case_facts
+    if case_facts and "=== ATTORNEY FOR SIGNATURE BLOCK ===" in case_facts:
+        atty_block = case_facts[case_facts.index("=== ATTORNEY FOR SIGNATURE BLOCK ==="):]
+        system_prompt += f"\n\n{atty_block}\nALWAYS use this attorney's information in signature blocks and letterheads for ALL documents you draft."
+
     # Build messages
     messages = []
     for turn in (db_history or [])[-6:]:
@@ -1106,9 +1111,15 @@ Be concise but thorough. The attorney's time is valuable. You are an expert — 
     # Current user message
     user_content = ""
     if complaint_text:
-        user_content += f"CURRENT COMPLAINT (v latest):\n---\n{complaint_text}\n---\n\n"
+        user_content += f"CURRENT DOCUMENT (v latest):\n---\n{complaint_text}\n---\n\n"
     if case_facts:
-        user_content += f"CASE FACTS:\n{case_facts[:5000]}\n\n"
+        user_content += f"CASE FACTS:\n{case_facts}\n\n"
+
+    # Extract and highlight attorney info from case_facts
+    if "=== ATTORNEY FOR SIGNATURE BLOCK ===" in (case_facts or ""):
+        atty_section = case_facts[case_facts.index("=== ATTORNEY FOR SIGNATURE BLOCK ==="):]
+        user_content += f"\nIMPORTANT — {atty_section}\n\n"
+
     if attachment_text:
         user_content += f"ATTACHMENTS:\n{attachment_text}\n\n"
     user_content += f"ATTORNEY: {message}"
