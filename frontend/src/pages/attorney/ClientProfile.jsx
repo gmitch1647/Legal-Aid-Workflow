@@ -41,6 +41,7 @@ import {
   assignAttorneyToClient,
   getReferralPartners,
   assignReferral,
+  submitCase,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -120,6 +121,9 @@ export default function ClientProfile() {
 
   // Notes
   const [notes, setNotes] = useState([]);
+  const [showUploadCase, setShowUploadCase] = useState(false);
+  const [uploadingCase, setUploadingCase] = useState(false);
+  const [uploadCaseForm, setUploadCaseForm] = useState({ description: '', defendants: '' });
   const [newNote, setNewNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
 
@@ -376,13 +380,30 @@ export default function ClientProfile() {
                 <Briefcase className="h-5 w-5 text-slate-400" />
                 Cases ({clientCases.length})
               </h2>
-              <button
-                onClick={() => navigate(`/attorney/draft?client_id=${id}&plaintiff_name=${encodeURIComponent(client.full_name || '')}&plaintiff_county=${encodeURIComponent(client.county || '')}`)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
-              >
-                <Plus className="h-3.5 w-3.5" /> New Case
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowUploadCase(!showUploadCase)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
+                >
+                  <Upload className="h-3.5 w-3.5" /> Upload Existing
+                </button>
+                <button
+                  onClick={() => navigate(`/attorney/draft?client_id=${id}&plaintiff_name=${encodeURIComponent(client.full_name || '')}&plaintiff_county=${encodeURIComponent(client.county || '')}`)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
+                >
+                  <Plus className="h-3.5 w-3.5" /> New Case
+                </button>
+              </div>
             </div>
+
+            {showUploadCase && (
+              <UploadExistingCase
+                clientId={id}
+                clientName={client.full_name}
+                onComplete={() => { setShowUploadCase(false); fetchData(); }}
+                onCancel={() => setShowUploadCase(false)}
+              />
+            )}
 
             {sortedCases.length === 0 ? (
               <div className="py-8 text-center">
@@ -558,6 +579,142 @@ export default function ClientProfile() {
 // ---------------------------------------------------------------------------
 // Documents Section with Upload
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Upload Existing Case
+// ---------------------------------------------------------------------------
+
+function UploadExistingCase({ clientId, clientName, onComplete, onCancel }) {
+  const [description, setDescription] = useState('');
+  const [defendants, setDefendants] = useState('');
+  const [caseType, setCaseType] = useState('FCRA');
+  const [files, setFiles] = useState([]);
+  const [complaintFile, setComplaintFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleSubmit() {
+    if (!description && !complaintFile) {
+      setError('Add a case description or upload a complaint document.');
+      return;
+    }
+    setUploading(true);
+    setError('');
+
+    try {
+      // Create the case
+      const caseResult = await submitCase({
+        full_name: clientName,
+        defendants: defendants ? defendants.split(',').map(d => ({ name: d.trim() })) : [],
+        description: `[${caseType}] ${description}`,
+        client_id: clientId,
+      });
+
+      const caseId = caseResult?.id || caseResult?.case_id;
+
+      if (caseId) {
+        // Upload complaint document
+        if (complaintFile) {
+          await uploadDocument(caseId, complaintFile, 'complaint');
+
+          // Also try to extract text and save as complaint version
+          if (complaintFile.name.endsWith('.docx') || complaintFile.name.endsWith('.txt')) {
+            try {
+              const text = complaintFile.name.endsWith('.txt')
+                ? await complaintFile.text()
+                : null; // docx extraction handled server-side
+              if (text) {
+                const { supabase } = await import('../../lib/supabase');
+                await supabase.table('complaints').insert({
+                  case_id: caseId,
+                  complaint_text: text,
+                  version: 1,
+                  is_current: true,
+                }).execute();
+              }
+            } catch {}
+          }
+        }
+
+        // Upload supporting documents
+        for (const file of files) {
+          try {
+            await uploadDocument(caseId, file, 'other');
+          } catch {}
+        }
+      }
+
+      onComplete();
+    } catch (err) {
+      setError(err.message || 'Failed to create case');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-blue-800">Upload Existing Case</h3>
+        <button onClick={onCancel} className="text-blue-400 hover:text-blue-600"><X className="w-4 h-4" /></button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Case Type</label>
+          <select value={caseType} onChange={e => setCaseType(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+            <option value="FCRA">FCRA</option>
+            <option value="FDCPA">FDCPA</option>
+            <option value="TCPA">TCPA</option>
+            <option value="FCRA + FDCPA">FCRA + FDCPA</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Defendants (comma-separated)</label>
+          <input value={defendants} onChange={e => setDefendants(e.target.value)}
+            placeholder="e.g. Equifax, Experian"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Case Description</label>
+        <textarea value={description} onChange={e => setDescription(e.target.value)}
+          placeholder="Brief description of the case..."
+          rows={2} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm resize-y" />
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Complaint Document (.docx, .pdf, .txt)</label>
+        <input type="file" accept=".pdf,.docx,.txt"
+          onChange={e => setComplaintFile(e.target.files[0])}
+          className="w-full text-sm text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:text-sm file:font-medium file:bg-white file:text-slate-700" />
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Supporting Documents (optional)</label>
+        <input type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+          onChange={e => setFiles(Array.from(e.target.files || []))}
+          className="w-full text-sm text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:text-sm file:font-medium file:bg-white file:text-slate-700" />
+        {files.length > 0 && (
+          <div className="text-[10px] text-slate-500 mt-1">{files.length} file{files.length !== 1 ? 's' : ''} selected</div>
+        )}
+      </div>
+
+      {error && <div className="text-xs text-red-600">{error}</div>}
+
+      <div className="flex gap-2">
+        <button onClick={handleSubmit} disabled={uploading}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+          {uploading ? 'Creating Case...' : 'Create Case & Upload'}
+        </button>
+        <button onClick={onCancel} className="px-4 py-2 text-sm text-slate-600">Cancel</button>
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Referral Partner Section
