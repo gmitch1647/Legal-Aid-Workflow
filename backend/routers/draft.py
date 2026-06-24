@@ -1389,9 +1389,10 @@ async def analyze_credit_report_pdf_endpoint(
         import re
         lines = text.split('\n')
 
-        # Detect format: TransUnion (web) vs Equifax (standard PDF)
-        is_transunion_web = 'Chat Now' in text or 'transunion.com/dss' in text
-        is_equifax = 'equifax.com' in text.lower() or 'Confirmation #' in text
+        # Detect format: TransUnion (web) vs Equifax (standard PDF) vs other
+        is_transunion_web = 'Chat Now' in text or 'transunion.com/dss' in text or 'TransUnion' in text[:500]
+        is_equifax = 'equifax.com' in text.lower() or 'Confirmation #' in text or 'Equifax' in text[:500]
+        is_experian = 'experian' in text.lower()[:500]
 
         if is_transunion_web:
             # TransUnion web-captured format: CREDITOR NAME ACCOUNTNUMBER****
@@ -1442,8 +1443,13 @@ async def analyze_credit_report_pdf_endpoint(
                 pr_end = min(pr_start + 2000, text.index('Accounts', pr_start) if 'Accounts' in text[pr_start:pr_start + 3000] else pr_start + 2000)
                 pr = text[pr_start:pr_end]
 
-            text = f"CREDIT REPORT (TransUnion) - {len(accounts)} accounts found\n\nPUBLIC RECORDS:\n{pr}\n\n" + '\n\n'.join(accounts)
-            logger.info(f"[PDF] TransUnion smart extraction: {len(accounts)} accounts, {len(text)} chars")
+            if accounts:
+                text = f"CREDIT REPORT (TransUnion) - {len(accounts)} accounts found\n\nPUBLIC RECORDS:\n{pr}\n\n" + '\n\n'.join(accounts)
+                logger.info(f"[PDF] TransUnion smart extraction: {len(accounts)} accounts, {len(text)} chars")
+            else:
+                # Smart extraction found nothing — fall back to cleaned raw text
+                logger.warning("[PDF] TransUnion smart extraction found 0 accounts, falling back to raw text")
+                text = re.sub(r'\n{3,}', '\n\n', text)
 
         elif is_equifax:
             # Equifax format: clean structured PDF, just strip noise
@@ -1458,6 +1464,8 @@ async def analyze_credit_report_pdf_endpoint(
             # Generic large report: just strip common noise
             text = re.sub(r'\n{3,}', '\n\n', text)
             logger.info(f"[PDF] Generic cleanup: {len(text)} chars")
+
+    logger.info(f"[PDF] Final text length: {len(text)} chars, sending to Claude for analysis")
 
     try:
         from agents.credit_analyzer import analyze_credit_report
