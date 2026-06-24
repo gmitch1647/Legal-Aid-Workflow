@@ -171,13 +171,18 @@ Experian format:
 
 CRITICAL INSTRUCTIONS:
 - Extract EVERY account with ANY negative mark. Do not skip ANY.
+- ONLY extract accounts that ACTUALLY EXIST in the text. Do NOT invent, fabricate, or hallucinate accounts.
+- If you cannot clearly read a creditor name or account number from the text, do NOT include it.
+- Every account you return MUST have a creditor name that appears verbatim in the report text.
+- Do NOT guess at account details. If a field is unreadable, use an empty string.
+- If the text is garbled or unreadable, return fewer accounts rather than fabricated ones.
+- ACCURACY over QUANTITY — it is better to return 5 real accounts than 15 with 10 made up.
 - Include: collections, charge-offs, late payments (even one 30-day late), public records, inquiries, bankruptcies, repossessions, judgments, tax liens, and ANY account that is NOT in perfect standing.
 - If an account has even ONE late payment in its history, include it.
 - If an account is closed with a balance, include it.
 - If an account has been transferred to collections, include BOTH the original and the collection.
 - Look at the ENTIRE report — negative accounts may appear in different sections.
 - Do NOT stop after finding the first few accounts — read through ALL pages.
-- If the text is garbled or formatting is messy, do your best to extract accounts — imperfect data is better than missing accounts.
 - Apply Metro 2 knowledge to identify violations that a consumer would not normally catch.
 - Count your accounts at the end and verify you haven't missed any.\
 """
