@@ -113,6 +113,50 @@ async def _get_attorney_profile(authorization: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/test-email")
+async def test_email_config(authorization: str = Header(...)):
+    """Diagnostic: test email config and send a test email to the caller."""
+    profile = await _get_attorney_profile(authorization)
+
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    email_from = os.environ.get("EMAIL_FROM", "")
+    smtp_host = os.environ.get("SMTP_HOST", "")
+
+    result = {
+        "resend_configured": bool(resend_key),
+        "resend_key_prefix": resend_key[:8] + "..." if resend_key else None,
+        "email_from": email_from or "(not set)",
+        "smtp_configured": bool(smtp_host),
+    }
+
+    if resend_key:
+        try:
+            import httpx
+            from_header = f"Legal Aid Workflow <{email_from}>" if email_from else "Legal Aid Workflow <onboarding@resend.dev>"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {resend_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": from_header,
+                        "to": [profile["email"]],
+                        "subject": "LegalFlow Email Test",
+                        "html": "<h2>Email is working!</h2><p>Your Resend integration is configured correctly.</p>",
+                    },
+                )
+                result["resend_status"] = resp.status_code
+                result["resend_response"] = resp.text[:500]
+                result["from_used"] = from_header
+                result["to_used"] = profile["email"]
+        except Exception as e:
+            result["resend_error"] = str(e)
+
+    return result
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_client(
     body: ClientRegisterRequest,
