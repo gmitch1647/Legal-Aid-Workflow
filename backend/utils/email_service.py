@@ -31,8 +31,17 @@ SMTP_USE_TLS: bool = os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", 
 
 # ── Core send helper ────────────────────────────────────────────────────────
 
+_last_email_error: str | None = None
+
+
+def get_last_email_error() -> str | None:
+    return _last_email_error
+
+
 async def send_email(to: str, subject: str, body: str) -> bool:
     """Send a single HTML email via Resend (primary) or SMTP (fallback)."""
+    global _last_email_error
+    _last_email_error = None
 
     resend_key = os.environ.get("RESEND_API_KEY", "")
     email_from = os.environ.get("EMAIL_FROM", SMTP_FROM_EMAIL or "onboarding@resend.dev")
@@ -41,6 +50,8 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     if resend_key:
         try:
             import httpx
+            from_header = f"{SMTP_FROM_NAME} <{email_from}>"
+            logger.info("Sending via Resend: from=%s to=%s subject=%s", from_header, to, subject)
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
                     "https://api.resend.com/emails",
@@ -49,7 +60,7 @@ async def send_email(to: str, subject: str, body: str) -> bool:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "from": f"{SMTP_FROM_NAME} <{email_from}>",
+                        "from": from_header,
                         "to": [to],
                         "subject": subject,
                         "html": body,
@@ -59,12 +70,19 @@ async def send_email(to: str, subject: str, body: str) -> bool:
                     logger.info("Email sent via Resend to %s: %s", to, subject)
                     return True
                 else:
-                    logger.warning("Resend failed: %s %s", resp.status_code, resp.text[:200])
+                    _last_email_error = f"Resend HTTP {resp.status_code}: {resp.text[:300]}"
+                    logger.warning("Resend failed: %s", _last_email_error)
         except Exception as e:
+            _last_email_error = f"Resend exception: {e}"
             logger.warning("Resend error: %s", e)
+    else:
+        _last_email_error = "RESEND_API_KEY not set"
+        logger.warning("RESEND_API_KEY not configured")
 
     # Fallback to SMTP
     if not SMTP_HOST:
+        if not _last_email_error:
+            _last_email_error = "No email provider configured"
         logger.warning("No email provider configured – skipping email to %s", to)
         return False
 

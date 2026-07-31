@@ -262,11 +262,15 @@ async def invite_staff_attorney(
     except Exception as e:
         logger.error(f"Failed to send invite email to {body.email}: {e}")
 
-    logger.info("Staff attorney invited: %s (%s), email_sent=%s", body.full_name, body.email, email_sent)
+    from utils.email_service import get_last_email_error
+    email_error = None if email_sent else get_last_email_error()
+
+    logger.info("Staff attorney invited: %s (%s), email_sent=%s, error=%s", body.full_name, body.email, email_sent, email_error)
     return {
         "profile": profile.data[0] if profile.data else None,
         "temp_password": temp_password,
         "email_sent": email_sent,
+        "email_error": email_error,
         "message": f"Staff attorney {body.full_name} created.{' Welcome email sent.' if email_sent else ' Email failed — share the password manually.'}",
     }
 
@@ -341,11 +345,15 @@ async def resend_staff_invite(attorney_id: str, authorization: str = Header(...)
     except Exception as e:
         logger.error(f"Failed to resend invite email to {atty['email']}: {e}")
 
+    from utils.email_service import get_last_email_error
+    email_error = None if email_sent else get_last_email_error()
+
     return {
         "status": "sent" if email_sent else "password_reset_only",
         "temp_password": temp_password,
         "email": atty["email"],
         "email_sent": email_sent,
+        "email_error": email_error,
     }
 
 
