@@ -865,6 +865,17 @@ export async function getStaffAttorneys() {
   return request('/auth/staff-attorneys');
 }
 
+export async function updateStaffAttorney(id, data) {
+  return request(`/auth/staff-attorneys/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteStaffAttorney(id) {
+  return request(`/auth/staff-attorneys/${id}`, { method: 'DELETE' });
+}
+
 export async function assignAttorneyToClient(clientId, attorneyId) {
   return request('/auth/assign-attorney', {
     method: 'POST',

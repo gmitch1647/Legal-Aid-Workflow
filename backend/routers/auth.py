@@ -270,6 +270,59 @@ async def list_staff_attorneys(authorization: str = Header(...)):
 
 
 # ---------------------------------------------------------------------------
+# PATCH /staff-attorneys/{id} — update a staff attorney
+# ---------------------------------------------------------------------------
+
+@router.patch("/staff-attorneys/{attorney_id}")
+async def update_staff_attorney(
+    attorney_id: str,
+    body: dict,
+    authorization: str = Header(...),
+):
+    await _get_attorney_profile(authorization)
+    supabase = get_supabase()
+
+    allowed = {k: v for k, v in body.items() if k in ('full_name', 'email', 'phone', 'address', 'bar_number', 'firm_name')}
+    if not allowed:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    resp = supabase.table("profiles").update(allowed).eq("id", attorney_id).eq("role", "staff_attorney").execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Attorney not found")
+    return resp.data[0]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /staff-attorneys/{id} — remove a staff attorney
+# ---------------------------------------------------------------------------
+
+@router.delete("/staff-attorneys/{attorney_id}")
+async def delete_staff_attorney(
+    attorney_id: str,
+    authorization: str = Header(...),
+):
+    await _get_attorney_profile(authorization)
+    supabase = get_supabase()
+
+    # Unassign from any clients
+    try:
+        supabase.table("profiles").update({"assigned_attorney_id": None}).eq("assigned_attorney_id", attorney_id).execute()
+    except Exception:
+        pass
+
+    # Delete profile
+    supabase.table("profiles").delete().eq("id", attorney_id).eq("role", "staff_attorney").execute()
+
+    # Delete auth user
+    try:
+        supabase.auth.admin.delete_user(attorney_id)
+    except Exception:
+        pass
+
+    return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
 # POST /assign-attorney — assign a staff attorney to a client
 # ---------------------------------------------------------------------------
 

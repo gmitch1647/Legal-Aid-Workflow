@@ -42,6 +42,8 @@ import {
   seedViolationPatterns,
   inviteStaffAttorney,
   getStaffAttorneys,
+  updateStaffAttorney,
+  deleteStaffAttorney,
   getReferralPartners,
   createReferralPartner,
   deleteReferralPartner,
@@ -2292,24 +2294,130 @@ function TeamTab() {
       ) : (
         <div className="space-y-2">
           {attorneys.map(a => (
-            <div key={a.id} className="bg-white rounded-lg border border-slate-200 p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                <span className="text-sm font-bold text-blue-700">
-                  {(a.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-                </span>
-              </div>
-              <div className="flex-1">
-                <div className="text-sm font-semibold text-slate-900">{a.full_name}</div>
-                <div className="text-xs text-slate-500 flex items-center gap-3">
-                  <span>{a.email}</span>
-                  {a.address && <span>{a.address}</span>}
-                  {a.bar_number && <span>Bar #{a.bar_number}</span>}
-                  {a.firm_name && <span>{a.firm_name}</span>}
+            <StaffAttorneyCard key={a.id} attorney={a} onUpdate={loadTeam} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StaffAttorneyCard({ attorney: a, onUpdate }) {
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({
+    full_name: a.full_name || '',
+    email: a.email || '',
+    phone: a.phone || '',
+    address: a.address || '',
+    bar_number: a.bar_number || '',
+    firm_name: a.firm_name || '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateStaffAttorney(a.id, form);
+      setEditing(false);
+      onUpdate();
+    } catch (err) { console.error(err); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete() {
+    if (!confirm(`Delete ${a.full_name}? This will remove their portal access and unassign them from all clients.`)) return;
+    try {
+      await deleteStaffAttorney(a.id);
+      onUpdate();
+    } catch (err) { console.error(err); }
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <div className="p-4 flex items-center gap-4 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+          <span className="text-sm font-bold text-blue-700">
+            {(a.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+          </span>
+        </div>
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-slate-900">{a.full_name}</div>
+          <div className="text-xs text-slate-500 flex items-center gap-3">
+            <span>{a.email}</span>
+            {a.phone && <span>{a.phone}</span>}
+            {a.firm_name && <span>{a.firm_name}</span>}
+          </div>
+        </div>
+        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-medium">Active</span>
+        <ChevronRight className={`w-4 h-4 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
+      </div>
+
+      {expanded && (
+        <div className="border-t border-slate-200 p-4 bg-slate-50 space-y-3">
+          {editing ? (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Full Name</label>
+                  <input value={form.full_name} onChange={e => setForm(p => ({ ...p, full_name: e.target.value }))}
+                    className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Email</label>
+                  <input value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
+                    className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Phone</label>
+                  <input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
+                    className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Address</label>
+                  <input value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))}
+                    className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Bar Number</label>
+                  <input value={form.bar_number} onChange={e => setForm(p => ({ ...p, bar_number: e.target.value }))}
+                    className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Firm Name</label>
+                  <input value={form.firm_name} onChange={e => setForm(p => ({ ...p, firm_name: e.target.value }))}
+                    className="w-full rounded border border-slate-300 px-2 py-1.5 text-xs" />
                 </div>
               </div>
-              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-medium">Active</span>
-            </div>
-          ))}
+              <div className="flex gap-2">
+                <button onClick={handleSave} disabled={saving}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+                <button onClick={() => setEditing(false)} className="px-3 py-1.5 text-xs text-slate-600">Cancel</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div><span className="text-slate-500">Phone:</span> <span className="text-slate-800">{a.phone || '—'}</span></div>
+                <div><span className="text-slate-500">Address:</span> <span className="text-slate-800">{a.address || '—'}</span></div>
+                <div><span className="text-slate-500">Bar #:</span> <span className="text-slate-800">{a.bar_number || '—'}</span></div>
+                <div><span className="text-slate-500">Firm:</span> <span className="text-slate-800">{a.firm_name || '—'}</span></div>
+                <div><span className="text-slate-500">Joined:</span> <span className="text-slate-800">{a.created_at ? new Date(a.created_at).toLocaleDateString() : '—'}</span></div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => setEditing(true)}
+                  className="px-3 py-1.5 border border-slate-200 rounded text-xs text-slate-700 hover:bg-slate-100">
+                  <Edit3 className="w-3 h-3 inline mr-1" /> Edit
+                </button>
+                <button onClick={handleDelete}
+                  className="px-3 py-1.5 text-xs text-red-600 hover:text-red-700">
+                  <Trash2 className="w-3 h-3 inline mr-1" /> Delete
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
