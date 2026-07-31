@@ -14,7 +14,7 @@ import {
   Trash2,
   GripVertical,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase, getStaffAttorneys } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,8 @@ export default function CasePipeline() {
   const [sendEmail, setSendEmail] = useState(false);
   const [sendSms, setSendSms] = useState(false);
   const [notifyAttorney, setNotifyAttorney] = useState(false);
+  const [notifyAttorneyId, setNotifyAttorneyId] = useState('assigned');
+  const [staffAttorneyList, setStaffAttorneyList] = useState([]);
   const [notifyMessage, setNotifyMessage] = useState('');
 
   async function handleDeleteCase(caseId, caseName) {
@@ -114,13 +116,15 @@ export default function CasePipeline() {
       setError(null);
 
       // Load pipelines, stages, and cases in parallel
-      const [pipelinesData, stagesData, casesData] = await Promise.all([
+      const [pipelinesData, stagesData, casesData, staffData] = await Promise.all([
         getPipelines().catch(() => []),
         getPipelineStages(activePipeline).catch(() => null),
         getCases(),
+        getStaffAttorneys().catch(() => []),
       ]);
 
       setPipelines(pipelinesData || []);
+      setStaffAttorneyList(staffData || []);
 
       // Use dynamic stages if available, otherwise fallback
       if (stagesData && stagesData.length > 0) {
@@ -290,34 +294,48 @@ export default function CasePipeline() {
       }
     }
 
-    // Notify assigned attorney
-    if (notifyAttorney && clientId) {
+    // Notify attorney
+    if (notifyAttorney) {
       try {
         const { supabase } = await import('../../lib/supabase');
-        // Get the assigned attorney for this client
-        const { data: clientProfile } = await supabase
-          .from('profiles')
-          .select('assigned_attorney_id')
-          .eq('id', clientId)
-          .single();
+        let attorneyEmail = '';
+        let attorneyName = '';
 
-        if (clientProfile?.assigned_attorney_id) {
-          const { data: attorneyProfile } = await supabase
+        if (notifyAttorneyId === 'assigned' && clientId) {
+          // Get the assigned attorney
+          const { data: clientProfile } = await supabase
             .from('profiles')
-            .select('email, full_name')
-            .eq('id', clientProfile.assigned_attorney_id)
+            .select('assigned_attorney_id')
+            .eq('id', clientId)
             .single();
 
-          if (attorneyProfile?.email) {
-            const { sendClientEmail } = await import('../../lib/api');
-            const stageName = notifyModal.stage?.name || newStatus;
-            await sendClientEmail({
-              client_id: clientId,
-              to_email: attorneyProfile.email,
-              subject: `Case Update: ${clientName} moved to ${stageName}`,
-              body: `Attorney ${attorneyProfile.full_name},\n\nCase for ${clientName} has been moved to stage: ${stageName}.\n\nPlease review the case in LegalFlow.`,
-            });
+          if (clientProfile?.assigned_attorney_id) {
+            const { data: atty } = await supabase
+              .from('profiles')
+              .select('email, full_name')
+              .eq('id', clientProfile.assigned_attorney_id)
+              .single();
+            attorneyEmail = atty?.email || '';
+            attorneyName = atty?.full_name || '';
           }
+        } else {
+          // Specific attorney selected from dropdown
+          const selected = staffAttorneyList.find(a => a.id === notifyAttorneyId);
+          if (selected) {
+            attorneyEmail = selected.email || '';
+            attorneyName = selected.full_name || '';
+          }
+        }
+
+        if (attorneyEmail) {
+          const { sendClientEmail } = await import('../../lib/api');
+          const stageName = notifyModal.stage?.name || newStatus;
+          await sendClientEmail({
+            client_id: clientId || '',
+            to_email: attorneyEmail,
+            subject: `Case Update: ${clientName} moved to ${stageName}`,
+            body: `Attorney ${attorneyName},\n\nCase for ${clientName} has been moved to stage: ${stageName}.\n\nPlease review the case in LegalFlow.`,
+          });
         }
       } catch (err) {
         console.error('Attorney notification failed:', err);
@@ -328,6 +346,7 @@ export default function CasePipeline() {
     setSendEmail(false);
     setSendSms(false);
     setNotifyAttorney(false);
+    setNotifyAttorneyId('assigned');
     setNotifyMessage('');
   }
 
@@ -338,6 +357,7 @@ export default function CasePipeline() {
     setSendEmail(false);
     setSendSms(false);
     setNotifyAttorney(false);
+    setNotifyAttorneyId('assigned');
     setNotifyMessage('');
   }
 
@@ -771,9 +791,21 @@ export default function CasePipeline() {
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                   <input type="checkbox" checked={notifyAttorney} onChange={(e) => setNotifyAttorney(e.target.checked)} />
-                  Notify Assigned Attorney
+                  Notify Attorney
                 </label>
               </div>
+              {notifyAttorney && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Select Attorney to Notify</label>
+                  <select value={notifyAttorneyId} onChange={(e) => setNotifyAttorneyId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="assigned">Assigned Attorney (auto)</option>
+                    {staffAttorneyList.map(a => (
+                      <option key={a.id} value={a.id}>{a.full_name}{a.email ? ` (${a.email})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {(sendEmail || sendSms) && (
                 <textarea
                   value={notifyMessage}
