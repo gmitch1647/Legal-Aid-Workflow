@@ -240,18 +240,34 @@ async def invite_staff_attorney(
             detail=f"Profile creation failed: {exc}",
         )
 
-    # Send welcome email
+    # Send welcome email with credentials
+    email_sent = False
     try:
         frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
-        await send_welcome_email(body.email, body.full_name, f"{frontend_url}/login")
-    except Exception:
-        pass
+        from utils.email_service import send_email
+        email_sent = await send_email(
+            to=body.email,
+            subject="You've been invited to LegalFlow",
+            body=f"""
+            <div style="font-family:sans-serif;font-size:14px;line-height:1.6;">
+                <h2>Welcome to LegalFlow, {body.full_name}!</h2>
+                <p>You've been invited to join the LegalFlow platform as a staff attorney.</p>
+                <p><strong>Login URL:</strong> <a href="{frontend_url}/login">{frontend_url}/login</a></p>
+                <p><strong>Email:</strong> {body.email}</p>
+                <p><strong>Temporary Password:</strong> {temp_password}</p>
+                <p>Please change your password after your first login.</p>
+            </div>
+            """,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send invite email to {body.email}: {e}")
 
-    logger.info("Staff attorney invited: %s (%s)", body.full_name, body.email)
+    logger.info("Staff attorney invited: %s (%s), email_sent=%s", body.full_name, body.email, email_sent)
     return {
         "profile": profile.data[0] if profile.data else None,
         "temp_password": temp_password,
-        "message": f"Staff attorney {body.full_name} created. Share the temporary password with them to log in.",
+        "email_sent": email_sent,
+        "message": f"Staff attorney {body.full_name} created.{' Welcome email sent.' if email_sent else ' Email failed — share the password manually.'}",
     }
 
 
@@ -303,17 +319,33 @@ async def resend_staff_invite(attorney_id: str, authorization: str = Header(...)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not reset password: {e}")
 
-    # Send email
+    # Send email with new credentials
+    email_sent = False
     try:
         frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
-        await send_welcome_email(atty["email"], atty["full_name"], f"{frontend_url}/login")
-    except Exception:
-        pass
+        from utils.email_service import send_email
+        email_sent = await send_email(
+            to=atty["email"],
+            subject="Your LegalFlow Invite (Resent)",
+            body=f"""
+            <div style="font-family:sans-serif;font-size:14px;line-height:1.6;">
+                <h2>Welcome to LegalFlow, {atty["full_name"]}!</h2>
+                <p>Your login credentials have been reset. Use the details below to sign in:</p>
+                <p><strong>Login URL:</strong> <a href="{frontend_url}/login">{frontend_url}/login</a></p>
+                <p><strong>Email:</strong> {atty["email"]}</p>
+                <p><strong>Temporary Password:</strong> {temp_password}</p>
+                <p>Please change your password after your first login.</p>
+            </div>
+            """,
+        )
+    except Exception as e:
+        logger.error(f"Failed to resend invite email to {atty['email']}: {e}")
 
     return {
-        "status": "sent",
+        "status": "sent" if email_sent else "password_reset_only",
         "temp_password": temp_password,
         "email": atty["email"],
+        "email_sent": email_sent,
     }
 
 

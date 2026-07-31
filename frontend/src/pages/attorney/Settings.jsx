@@ -2271,10 +2271,10 @@ function TeamTab() {
           </div>
 
           {inviteResult && !inviteResult.error && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
-              <div className="font-bold">Attorney invited successfully!</div>
-              <div className="mt-1">Temporary password: <code className="bg-emerald-100 px-2 py-0.5 rounded font-mono text-xs select-all">{inviteResult.temp_password}</code></div>
-              <div className="text-xs text-emerald-600 mt-1">Share this password with {inviteResult.profile?.full_name || 'the attorney'} to log in. They should change it immediately.</div>
+            <div className={`rounded-lg p-3 text-sm ${inviteResult.email_sent ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-amber-50 border border-amber-200 text-amber-800'}`}>
+              <div className="font-bold">{inviteResult.email_sent ? 'Attorney invited — email sent!' : 'Attorney created — email failed, share password manually:'}</div>
+              <div className="mt-1">Temporary password: <code className={`px-2 py-0.5 rounded font-mono text-xs select-all ${inviteResult.email_sent ? 'bg-emerald-100' : 'bg-amber-100'}`}>{inviteResult.temp_password}</code></div>
+              <div className="text-xs mt-1">{inviteResult.message}</div>
             </div>
           )}
 
@@ -2439,8 +2439,9 @@ function StaffAttorneyCard({ attorney: a, onUpdate }) {
                 </button>
               </div>
               {resendResult && !resendResult.error && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800 mt-2">
-                  Invite sent! New password: <code className="bg-emerald-100 px-1 rounded font-mono select-all">{resendResult.temp_password}</code>
+                <div className={`rounded p-2 text-xs mt-2 ${resendResult.email_sent ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-amber-50 border border-amber-200 text-amber-800'}`}>
+                  {resendResult.email_sent ? 'Invite email sent!' : 'Password reset but email failed to send — share manually:'}
+                  {' '}New password: <code className={`px-1 rounded font-mono select-all ${resendResult.email_sent ? 'bg-emerald-100' : 'bg-amber-100'}`}>{resendResult.temp_password}</code>
                 </div>
               )}
               {resendResult?.error && (
