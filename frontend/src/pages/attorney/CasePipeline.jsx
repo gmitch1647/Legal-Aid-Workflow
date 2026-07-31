@@ -72,6 +72,7 @@ export default function CasePipeline() {
   const [notifyModal, setNotifyModal] = useState(null); // { caseId, caseName, oldStatus, newStatus, stage }
   const [sendEmail, setSendEmail] = useState(false);
   const [sendSms, setSendSms] = useState(false);
+  const [notifyAttorney, setNotifyAttorney] = useState(false);
   const [notifyMessage, setNotifyMessage] = useState('');
 
   async function handleDeleteCase(caseId, caseName) {
@@ -135,6 +136,7 @@ export default function CasePipeline() {
             pipeline_id: s.pipeline_id,
             notify_email: s.notify_email || false,
             notify_sms: s.notify_sms || false,
+            notify_attorney: s.notify_attorney || false,
             notify_on_enter: s.notify_on_enter || false,
             notification_template: s.notification_template || '',
           }))
@@ -290,9 +292,44 @@ export default function CasePipeline() {
       }
     }
 
+    // Notify assigned attorney
+    if (notifyAttorney && clientId) {
+      try {
+        const { supabase } = await import('../../lib/supabase');
+        // Get the assigned attorney for this client
+        const { data: clientProfile } = await supabase
+          .from('profiles')
+          .select('assigned_attorney_id')
+          .eq('id', clientId)
+          .single();
+
+        if (clientProfile?.assigned_attorney_id) {
+          const { data: attorneyProfile } = await supabase
+            .from('profiles')
+            .select('email, full_name')
+            .eq('id', clientProfile.assigned_attorney_id)
+            .single();
+
+          if (attorneyProfile?.email) {
+            const { sendClientEmail } = await import('../../lib/api');
+            const stageName = notifyModal.stage?.name || newStatus;
+            await sendClientEmail({
+              client_id: clientId,
+              to_email: attorneyProfile.email,
+              subject: `Case Update: ${clientName} moved to ${stageName}`,
+              body: `Attorney ${attorneyProfile.full_name},\n\nCase for ${clientName} has been moved to stage: ${stageName}.\n\nPlease review the case in LegalFlow.`,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Attorney notification failed:', err);
+      }
+    }
+
     setNotifyModal(null);
     setSendEmail(false);
     setSendSms(false);
+    setNotifyAttorney(false);
     setNotifyMessage('');
   }
 
@@ -302,6 +339,7 @@ export default function CasePipeline() {
     setNotifyModal(null);
     setSendEmail(false);
     setSendSms(false);
+    setNotifyAttorney(false);
     setNotifyMessage('');
   }
 
@@ -317,11 +355,12 @@ export default function CasePipeline() {
 
       // Check if destination stage has notifications enabled
       const destStage = columns.find(c => c.key === newStatus);
-      if (destStage && (destStage.notify_email || destStage.notify_sms)) {
+      if (destStage && (destStage.notify_email || destStage.notify_sms || destStage.notify_attorney)) {
         const caseData = cases.find(c => c.id === caseId);
         const caseName = caseData?.plaintiff_name || caseData?.client_name || 'Case';
         setSendEmail(destStage.notify_email || false);
         setSendSms(destStage.notify_sms || false);
+        setNotifyAttorney(destStage.notify_attorney || false);
         setNotifyMessage(destStage.notification_template || '');
         setNotifyModal({ caseId, caseName, oldStatus, newStatus, stage: destStage });
         return;
@@ -731,6 +770,10 @@ export default function CasePipeline() {
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                   <input type="checkbox" checked={sendSms} onChange={(e) => setSendSms(e.target.checked)} />
                   Send SMS
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input type="checkbox" checked={notifyAttorney} onChange={(e) => setNotifyAttorney(e.target.checked)} />
+                  Notify Assigned Attorney
                 </label>
               </div>
               {(sendEmail || sendSms) && (

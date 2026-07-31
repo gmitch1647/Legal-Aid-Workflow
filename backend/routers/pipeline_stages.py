@@ -44,7 +44,12 @@ class StageCreate(BaseModel):
     color: str = "slate"
     description: Optional[str] = None
     position: Optional[int] = None
-    pipeline_id: Optional[str] = None  # NULL = shared across all pipelines
+    pipeline_id: Optional[str] = None
+    notify_on_enter: bool = False
+    notify_email: bool = False
+    notify_sms: bool = False
+    notify_attorney: bool = False
+    notification_template: Optional[str] = ""
 
 
 class StageUpdate(BaseModel):
@@ -54,6 +59,11 @@ class StageUpdate(BaseModel):
     description: Optional[str] = None
     position: Optional[int] = None
     pipeline_id: Optional[str] = None
+    notify_on_enter: Optional[bool] = None
+    notify_email: Optional[bool] = None
+    notify_sms: Optional[bool] = None
+    notify_attorney: Optional[bool] = None
+    notification_template: Optional[str] = None
 
 
 class StageReorder(BaseModel):

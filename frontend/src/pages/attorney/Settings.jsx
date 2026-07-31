@@ -900,6 +900,7 @@ function PipelineStagesTab() {
   const [editColor, setEditColor] = useState('');
   const [editNotifyEmail, setEditNotifyEmail] = useState(false);
   const [editNotifySms, setEditNotifySms] = useState(false);
+  const [editNotifyAttorney, setEditNotifyAttorney] = useState(false);
   const [editNotifyTemplate, setEditNotifyTemplate] = useState('');
 
   const loadStages = useCallback(async () => {
@@ -948,9 +949,10 @@ function PipelineStagesTab() {
       await updatePipelineStage(id, {
         name: editName,
         color: editColor,
-        notify_on_enter: editNotifyEmail || editNotifySms,
+        notify_on_enter: editNotifyEmail || editNotifySms || editNotifyAttorney,
         notify_email: editNotifyEmail,
         notify_sms: editNotifySms,
+        notify_attorney: editNotifyAttorney,
         notification_template: editNotifyTemplate,
       });
       setEditingId(null);
@@ -1078,6 +1080,10 @@ function PipelineStagesTab() {
                       <input type="checkbox" checked={editNotifySms} onChange={(e) => setEditNotifySms(e.target.checked)} />
                       SMS
                     </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input type="checkbox" checked={editNotifyAttorney} onChange={(e) => setEditNotifyAttorney(e.target.checked)} />
+                      Attorney
+                    </label>
                   </div>
                   {(editNotifyEmail || editNotifySms) && (
                     <textarea
@@ -1094,9 +1100,9 @@ function PipelineStagesTab() {
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
                   {stage.name}
-                  {(stage.notify_email || stage.notify_sms) && (
+                  {(stage.notify_email || stage.notify_sms || stage.notify_attorney) && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold uppercase">
-                      {[stage.notify_email && 'email', stage.notify_sms && 'sms'].filter(Boolean).join(' + ')}
+                      {[stage.notify_email && 'email', stage.notify_sms && 'sms', stage.notify_attorney && 'attorney'].filter(Boolean).join(' + ')}
                     </span>
                   )}
                 </div>
