@@ -44,6 +44,7 @@ import {
   getStaffAttorneys,
   updateStaffAttorney,
   deleteStaffAttorney,
+  resendStaffInvite,
   getReferralPartners,
   createReferralPartner,
   deleteReferralPartner,
@@ -2314,6 +2315,19 @@ function StaffAttorneyCard({ attorney: a, onUpdate }) {
     firm_name: a.firm_name || '',
   });
   const [saving, setSaving] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendResult, setResendResult] = useState(null);
+
+  async function handleResendInvite() {
+    setResending(true);
+    setResendResult(null);
+    try {
+      const result = await resendStaffInvite(a.id);
+      setResendResult(result);
+    } catch (err) {
+      setResendResult({ error: err.message });
+    } finally { setResending(false); }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -2349,7 +2363,11 @@ function StaffAttorneyCard({ attorney: a, onUpdate }) {
             {a.firm_name && <span>{a.firm_name}</span>}
           </div>
         </div>
-        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-medium">Active</span>
+        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
+          a.last_sign_in_at ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+        }`}>
+          {a.last_sign_in_at ? 'Active' : 'Pending'}
+        </span>
         <ChevronRight className={`w-4 h-4 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
       </div>
 
@@ -2406,16 +2424,28 @@ function StaffAttorneyCard({ attorney: a, onUpdate }) {
                 <div><span className="text-slate-500">Firm:</span> <span className="text-slate-800">{a.firm_name || '—'}</span></div>
                 <div><span className="text-slate-500">Joined:</span> <span className="text-slate-800">{a.created_at ? new Date(a.created_at).toLocaleDateString() : '—'}</span></div>
               </div>
-              <div className="flex gap-2 pt-1">
+              <div className="flex gap-2 pt-1 flex-wrap">
                 <button onClick={() => setEditing(true)}
                   className="px-3 py-1.5 border border-slate-200 rounded text-xs text-slate-700 hover:bg-slate-100">
                   <Edit3 className="w-3 h-3 inline mr-1" /> Edit
+                </button>
+                <button onClick={handleResendInvite} disabled={resending}
+                  className="px-3 py-1.5 border border-blue-200 rounded text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                  {resending ? 'Sending...' : 'Resend Invite'}
                 </button>
                 <button onClick={handleDelete}
                   className="px-3 py-1.5 text-xs text-red-600 hover:text-red-700">
                   <Trash2 className="w-3 h-3 inline mr-1" /> Delete
                 </button>
               </div>
+              {resendResult && !resendResult.error && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800 mt-2">
+                  Invite sent! New password: <code className="bg-emerald-100 px-1 rounded font-mono select-all">{resendResult.temp_password}</code>
+                </div>
+              )}
+              {resendResult?.error && (
+                <div className="text-xs text-red-600 mt-2">{resendResult.error}</div>
+              )}
             </>
           )}
         </div>

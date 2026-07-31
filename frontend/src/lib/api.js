@@ -876,6 +876,10 @@ export async function deleteStaffAttorney(id) {
   return request(`/auth/staff-attorneys/${id}`, { method: 'DELETE' });
 }
 
+export async function resendStaffInvite(id) {
+  return request(`/auth/staff-attorneys/${id}/resend-invite`, { method: 'POST' });
+}
+
 export async function assignAttorneyToClient(clientId, attorneyId) {
   return request('/auth/assign-attorney', {
     method: 'POST',

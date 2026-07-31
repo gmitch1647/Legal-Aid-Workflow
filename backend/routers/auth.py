@@ -265,8 +265,54 @@ async def list_staff_attorneys(authorization: str = Header(...)):
     await _get_attorney_profile(authorization)
 
     supabase = get_supabase()
-    resp = supabase.table("profiles").select("id, full_name, email, phone, bar_number, firm_name, created_at").eq("role", "staff_attorney").order("full_name").execute()
-    return resp.data or []
+    resp = supabase.table("profiles").select("id, full_name, email, phone, address, bar_number, firm_name, created_at").eq("role", "staff_attorney").order("full_name").execute()
+
+    # Get last sign-in for each attorney from auth
+    attorneys = resp.data or []
+    for atty in attorneys:
+        try:
+            user = supabase.auth.admin.get_user_by_id(atty["id"])
+            atty["last_sign_in_at"] = user.user.last_sign_in_at if user.user else None
+        except Exception:
+            atty["last_sign_in_at"] = None
+
+    return attorneys
+
+
+# ---------------------------------------------------------------------------
+# POST /staff-attorneys/{id}/resend-invite — resend welcome email
+# ---------------------------------------------------------------------------
+
+@router.post("/staff-attorneys/{attorney_id}/resend-invite")
+async def resend_staff_invite(attorney_id: str, authorization: str = Header(...)):
+    await _get_attorney_profile(authorization)
+    supabase = get_supabase()
+
+    profile_resp = supabase.table("profiles").select("email, full_name").eq("id", attorney_id).limit(1).execute()
+    if not profile_resp.data:
+        raise HTTPException(status_code=404, detail="Attorney not found")
+
+    atty = profile_resp.data[0]
+    temp_password = _generate_temp_password()
+
+    # Reset their password
+    try:
+        supabase.auth.admin.update_user_by_id(attorney_id, {"password": temp_password})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not reset password: {e}")
+
+    # Send email
+    try:
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+        await send_welcome_email(atty["email"], atty["full_name"], f"{frontend_url}/login")
+    except Exception:
+        pass
+
+    return {
+        "status": "sent",
+        "temp_password": temp_password,
+        "email": atty["email"],
+    }
 
 
 # ---------------------------------------------------------------------------
