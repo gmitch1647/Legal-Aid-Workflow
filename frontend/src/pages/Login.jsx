@@ -62,7 +62,7 @@ export default function Login() {
       console.log('[Login] Profile after bootstrap:', profile);
       const role = profile?.role;
 
-      if (role === 'attorney') {
+      if (['attorney', 'staff_attorney', 'affiliate'].includes(role)) {
         navigate('/attorney/dashboard', { replace: true });
       } else if (role === 'client') {
         navigate('/client/dashboard', { replace: true });
