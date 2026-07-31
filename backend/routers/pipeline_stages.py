@@ -293,14 +293,14 @@ async def delete_stage(
     stage = supabase.table("pipeline_stages").select("*").eq("id", stage_id).limit(1).execute()
     if not stage.data:
         raise HTTPException(status_code=404, detail="Stage not found.")
-    if stage.data[0].get("is_system"):
-        raise HTTPException(status_code=400, detail="Cannot delete system stages.")
 
-    cases_in_stage = (
-        supabase.table("cases").select("id").eq("status", stage.data[0]["slug"]).limit(1).execute()
-    )
-    if cases_in_stage.data:
-        raise HTTPException(status_code=400, detail="Cannot delete — cases exist in this stage.")
+    # Move any cases in this stage to a default status before deleting
+    slug = stage.data[0].get("slug", "")
+    if slug:
+        try:
+            supabase.table("cases").update({"status": "submitted"}).eq("status", slug).execute()
+        except Exception:
+            pass
 
     supabase.table("pipeline_stages").delete().eq("id", stage_id).execute()
     return {"deleted": True}
