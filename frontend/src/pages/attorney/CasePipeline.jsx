@@ -23,8 +23,6 @@ import CaseCard from '../../components/CaseCard';
 
 const DEFAULT_COLUMNS = [
   { key: 'submitted', label: 'Submitted', color: 'blue' },
-  { key: 'approved_for_processing', label: 'Approved for Processing', color: 'indigo' },
-  { key: 'agents_processing', label: 'Agents Processing', color: 'cyan' },
   { key: 'draft_ready', label: 'Draft Ready', color: 'amber' },
   { key: 'attorney_review', label: 'Attorney Review', color: 'purple' },
   { key: 'approved', label: 'Approved', color: 'green' },
@@ -635,7 +633,7 @@ export default function CasePipeline() {
                     <span className="flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-white px-2 text-xs font-bold text-slate-600 shadow-sm">
                       {columnCases.length}
                     </span>
-                    {!col.is_system && col.id && (
+                    {col.id && (
                       <button
                         onClick={() => handleDeleteStage(col.id, col.label)}
                         className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition"
