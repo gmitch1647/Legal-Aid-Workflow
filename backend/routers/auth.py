@@ -288,9 +288,11 @@ async def resend_staff_invite(attorney_id: str, authorization: str = Header(...)
     await _get_attorney_profile(authorization)
     supabase = get_supabase()
 
-    profile_resp = supabase.table("profiles").select("email, full_name").eq("id", attorney_id).limit(1).execute()
+    profile_resp = supabase.table("profiles").select("email, full_name, role").eq("id", attorney_id).limit(1).execute()
     if not profile_resp.data:
-        raise HTTPException(status_code=404, detail="Attorney not found")
+        # Try by email in case ID doesn't match
+        logger.warning(f"Resend invite: profile not found by ID {attorney_id}")
+        raise HTTPException(status_code=404, detail=f"Attorney not found with ID: {attorney_id}")
 
     atty = profile_resp.data[0]
     temp_password = _generate_temp_password()
