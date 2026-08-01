@@ -956,6 +956,65 @@ export async function toggleReferralAccess(partnerId, feature, enabled) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Commissions
+// ---------------------------------------------------------------------------
+
+export async function getCommissions(partnerId = null, status = null) {
+  const params = new URLSearchParams();
+  if (partnerId) params.append('partner_id', partnerId);
+  if (status) params.append('status', status);
+  const qs = params.toString();
+  return request(`/commissions${qs ? `?${qs}` : ''}`);
+}
+
+export async function getCommissionSummary() {
+  return request('/commissions/summary');
+}
+
+export async function createCommission(data) {
+  return request('/commissions', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateCommission(id, data) {
+  return request(`/commissions/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function approveCommission(id) {
+  return request(`/commissions/${id}/approve`, { method: 'POST' });
+}
+
+export async function markCommissionPaid(id) {
+  return request(`/commissions/${id}/mark-paid`, { method: 'POST' });
+}
+
+export async function deleteCommission(id) {
+  return request(`/commissions/${id}`, { method: 'DELETE' });
+}
+
+export async function getQuickBooksStatus() {
+  return request('/commissions/quickbooks/status');
+}
+
+export async function getQuickBooksAuthUrl() {
+  return request('/commissions/quickbooks/auth-url');
+}
+
+export async function connectQuickBooks(code, realmId) {
+  return request('/commissions/quickbooks/callback', {
+    method: 'POST',
+    body: JSON.stringify({ code, realm_id: realmId }),
+  });
+}
+
+export async function disconnectQuickBooks() {
+  return request('/commissions/quickbooks/disconnect', { method: 'POST' });
+}
+
+export async function syncCommissionToQuickBooks(id) {
+  return request(`/commissions/${id}/sync-to-quickbooks`, { method: 'POST' });
+}
+
 export async function registerClient(data) {
   return request('/auth/register', {
     method: 'POST',

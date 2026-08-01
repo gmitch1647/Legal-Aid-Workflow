@@ -19,6 +19,7 @@ import {
   Mail,
   PenLine,
   FileKey,
+  DollarSign,
 } from 'lucide-react';
 import {
   supabase,
@@ -48,6 +49,7 @@ const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
 const AgentChat = React.lazy(() => import('./pages/attorney/AgentChat'));
 const DraftComplaint = React.lazy(() => import('./pages/attorney/DraftComplaint'));
 const CalendarPage = React.lazy(() => import('./pages/attorney/Calendar'));
+const CommissionsPage = React.lazy(() => import('./pages/attorney/Commissions'));
 const FormsPage = React.lazy(() => import('./pages/attorney/Forms'));
 const DisputeLetters = React.lazy(() => import('./pages/attorney/DisputeLetters'));
 const ESignatures = React.lazy(() => import('./pages/attorney/ESignatures'));
@@ -450,6 +452,7 @@ const allAttorneyLinks = [
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/commissions', label: 'Commissions', icon: DollarSign, roles: ['attorney'] },
   { to: '/attorney/forms', label: 'Forms', icon: FileText, roles: ['attorney'] },
   { to: '/attorney/clients', label: 'Clients', icon: Users, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/settings', label: 'Settings', icon: Settings, roles: ['attorney'] },
@@ -540,6 +543,7 @@ export default function App() {
             <Route path="cases/:id" element={<CaseDetail />} />
             <Route path="agents" element={<AgentChat />} />
             <Route path="calendar" element={<CalendarPage />} />
+            <Route path="commissions" element={<CommissionsPage />} />
             <Route path="forms" element={<FormsPage />} />
             <Route path="clients" element={<ClientList />} />
             <Route path="clients/:id" element={<ClientProfile />} />
