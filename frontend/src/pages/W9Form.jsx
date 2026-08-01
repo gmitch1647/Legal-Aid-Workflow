@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Type,
 } from 'lucide-react';
-import { getPublicW9, publicW9TemplateUrl, submitPublicW9 } from '../lib/api';
+import { getPublicW9, publicW9CompletedCopyUrl, publicW9TemplateUrl, submitPublicW9 } from '../lib/api';
 
 const entityTypes = [
   { value: 'individual', label: 'Individual / sole proprietor' },
@@ -180,7 +180,9 @@ export default function W9Form() {
           <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-emerald-100 flex items-center justify-center"><CheckCircle2 className="w-8 h-8 text-emerald-600" /></div>
           <h1 className="text-2xl font-bold text-slate-900">Form W-9 Submitted</h1>
           <p className="mt-3 text-slate-600">Your signed Form W-9 has been securely submitted to LegalFlow. Your taxpayer identification number is not displayed in this confirmation.</p>
-          <p className="mt-5 text-xs text-slate-400">You may close this window.</p>
+          <p className="mt-3 text-sm text-slate-600">A secure completed-copy link has been sent to the email address used for this request.</p>
+          <a href={publicW9CompletedCopyUrl(token)} className="mt-5 inline-flex items-center justify-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800"><FileText className="h-4 w-4" />Download completed copy</a>
+          <p className="mt-5 text-xs text-slate-400">Keep the completed copy private because it contains sensitive taxpayer information.</p>
         </section>
       </main>
     );

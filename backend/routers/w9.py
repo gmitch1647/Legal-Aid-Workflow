@@ -10,6 +10,7 @@ only by authenticated LegalFlow attorneys.
 import base64
 import io
 import logging
+from html import escape
 import os
 import re
 import secrets
@@ -70,6 +71,41 @@ TAX_CLASSIFICATIONS = {
 }
 LLC_CLASSIFICATIONS = {"C", "S", "P"}
 
+# Coordinates are measured from the bundled IRS Form W-9 (Rev. March 2024)
+# vector template. Each tuple is (x0, y0, x1, y1) in PDF points.
+W9_FIELD_RECTS = {
+    "legal_name": (82, 114, 445, 130),
+    "business_name": (82, 141.5, 445, 154),
+    "llc_tax_classification": (418, 190, 446, 202),
+    "address": (82, 285.5, 382, 298),
+    "city_state_zip": (82, 309.5, 382, 322),
+    "signature": (118, 578, 374, 598),
+    "date": (414, 578, 572, 598),
+}
+W9_CHECKBOX_RECTS = {
+    "individual": (73, 180.25, 81, 188.25),
+    "c_corporation": (180, 180.25, 188, 188.25),
+    "s_corporation": (252, 180.25, 260, 188.25),
+    "partnership": (324, 180.25, 332, 188.25),
+    "trust_estate": (388.8, 180.25, 396.8, 188.25),
+    "llc": (73, 193.5, 81, 201.5),
+    "other": (73, 230, 81, 238),
+}
+W9_TIN_BOX_RECTS = {
+    "ssn": [
+        (417.6, 372, 432, 396), (432, 372, 446.4, 396), (446.4, 372, 460.8, 396),
+        (475.2, 372, 489.6, 396), (489.6, 372, 504, 396),
+        (518.4, 372, 532.8, 396), (532.8, 372, 547.2, 396), (547.2, 372, 561.6, 396),
+        (561.6, 372, 576, 396),
+    ],
+    "ein": [
+        (417.6, 420, 432, 444), (432, 420, 446.4, 444),
+        (460.8, 420, 475.2, 444), (475.2, 420, 489.6, 444), (489.6, 420, 504, 444),
+        (504, 420, 518.4, 444), (518.4, 420, 532.8, 444), (532.8, 420, 547.2, 444),
+        (547.2, 420, 561.6, 444),
+    ],
+}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -96,6 +132,38 @@ def _token() -> str:
 
 def _safe_filename(value: str) -> str:
     return Path(value or "form-w9.pdf").name.replace("\x00", "") or "form-w9.pdf"
+
+
+def _public_w9_url(token: str) -> str:
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return f"{frontend_url}/w9/{token}"
+
+
+async def _send_w9_completed_copy_email(request_row: dict, token: str) -> bool:
+    """Email a signer a secure copy link after the W-9 is stored successfully.
+
+    The completed PDF is deliberately not attached because it contains a TIN.
+    The high-entropy signing token gates the copy page and PDF download instead.
+    """
+    from utils.email_service import send_email
+
+    signer_name = escape(str(request_row.get("signer_name") or "there"))
+    title = escape(str(request_row.get("title") or "Form W-9"))
+    copy_page_url = _public_w9_url(token)
+    return await send_email(
+        to=str(request_row["signer_email"]),
+        subject=f"Completed Copy: {request_row.get('title') or 'Form W-9'}",
+        body=f"""
+        <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;">
+          <h2 style="color:#059669;">Your Form W-9 Is Complete</h2>
+          <p>Hello {signer_name},</p>
+          <p>Your signed <strong>{title}</strong> has been securely submitted to LegalFlow.</p>
+          <p>For your privacy, the completed form is not attached to this email. Use the secure link below to view and download your completed copy.</p>
+          <p><a href="{copy_page_url}" style="background:#2563eb;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:600;display:inline-block;">View My Completed W-9</a></p>
+          <p style="font-size:12px;color:#64748b;">Do not forward this email or link. The completed form contains sensitive taxpayer information.</p>
+        </div>
+        """,
+    )
 
 
 def _cipher() -> Fernet:
@@ -355,22 +423,71 @@ def _fit_signature_image(signature_bytes: bytes, target_rect):
         return signature_bytes, field_rect
 
 
-def _draw_check(page, x: float, y: float) -> None:
-    """Draw an X in a standard W-9 classification checkbox."""
-    page.draw_line((x, y), (x + 7, y + 7), color=(0, 0, 0), width=0.9)
-    page.draw_line((x + 7, y), (x, y + 7), color=(0, 0, 0), width=0.9)
+def _write_text_in_rect(
+    page,
+    value: str,
+    rect,
+    *,
+    fontname: str = "tiro",
+    max_fontsize: float = 9,
+    min_fontsize: float = 6.5,
+    align: str = "left",
+) -> None:
+    """Fit a value inside an official form field without crossing its borders."""
+    import fitz
+
+    field = fitz.Rect(rect)
+    text = " ".join(str(value or "").split())
+    if not text:
+        return
+
+    available_width = max(1, field.width - 2)
+    font_size = max_fontsize
+    text_width = fitz.get_text_length(text, fontname=fontname, fontsize=font_size)
+    while font_size > min_fontsize and text_width > available_width:
+        font_size = max(min_fontsize, font_size - 0.25)
+        text_width = fitz.get_text_length(text, fontname=fontname, fontsize=font_size)
+
+    if text_width > available_width:
+        suffix = "..."
+        while text and fitz.get_text_length(text + suffix, fontname=fontname, fontsize=font_size) > available_width:
+            text = text[:-1].rstrip()
+        text = (text + suffix) if text else suffix
+        text_width = fitz.get_text_length(text, fontname=fontname, fontsize=font_size)
+
+    if align == "center":
+        x = field.x0 + (field.width - text_width) / 2
+    elif align == "right":
+        x = field.x1 - text_width - 1
+    else:
+        x = field.x0 + 1
+    # PyMuPDF text uses a baseline; the adjustment centers the visible glyphs.
+    baseline = field.y0 + (field.height + font_size * 0.72) / 2
+    page.insert_text((x, baseline), text, fontname=fontname, fontsize=font_size, color=(0, 0, 0))
+
+
+def _draw_check(page, rect) -> None:
+    """Draw a centered X wholly inside a standard W-9 classification checkbox."""
+    import fitz
+
+    box = fitz.Rect(rect)
+    inset = min(1.45, box.width / 5, box.height / 5)
+    page.draw_line((box.x0 + inset, box.y0 + inset), (box.x1 - inset, box.y1 - inset), color=(0, 0, 0), width=0.75)
+    page.draw_line((box.x1 - inset, box.y0 + inset), (box.x0 + inset, box.y1 - inset), color=(0, 0, 0), width=0.75)
 
 
 def _insert_tin_digits(page, tin: str, tin_type: str) -> None:
-    """Write each TIN digit into the official form's individual boxes."""
-    if tin_type == "ssn":
-        positions = [426, 437, 448, 464, 475, 493, 504, 515, 526]
-        baseline = 395
-    else:
-        positions = [447, 458, 475, 486, 497, 508, 519, 530, 541]
-        baseline = 429
-    for digit, x in zip(tin, positions):
-        page.insert_text((x, baseline), digit, fontname="cour", fontsize=9, color=(0, 0, 0))
+    """Center each TIN digit in its corresponding printed cell."""
+    for digit, rect in zip(tin, W9_TIN_BOX_RECTS[tin_type]):
+        _write_text_in_rect(
+            page,
+            digit,
+            rect,
+            fontname="cour",
+            max_fontsize=10,
+            min_fontsize=10,
+            align="center",
+        )
 
 
 def _render_official_w9(data: "W9Submission", signature_bytes: bytes) -> bytes:
@@ -381,44 +498,52 @@ def _render_official_w9(data: "W9Submission", signature_bytes: bytes) -> bytes:
         raise RuntimeError("The official Form W-9 template is not installed.")
 
     doc = fitz.open(W9_TEMPLATE_PATH)
-    page = doc[0]
-    font = "tiro"  # Times-Roman, visually aligned with the standard PDF's serif text.
+    try:
+        page = doc[0]
+        font = "tiro"  # Times-Roman, visually aligned with the standard PDF's serif text.
 
-    # Lines 1 and 2.
-    page.insert_text((82, 121), data.legal_name, fontname=font, fontsize=9, color=(0, 0, 0))
-    if data.business_name:
-        page.insert_text((82, 145), data.business_name, fontname=font, fontsize=9, color=(0, 0, 0))
+        _write_text_in_rect(page, data.legal_name, W9_FIELD_RECTS["legal_name"], fontname=font)
+        if data.business_name:
+            _write_text_in_rect(page, data.business_name, W9_FIELD_RECTS["business_name"], fontname=font)
 
-    checkbox_positions = {
-        "individual": (78, 181),
-        "c_corporation": (185, 181),
-        "s_corporation": (257, 181),
-        "partnership": (329, 181),
-        "trust_estate": (394, 181),
-        "llc": (78, 195),
-        "other": (78, 232),
-    }
-    _draw_check(page, *checkbox_positions[data.tax_classification])
-    if data.tax_classification == "llc":
-        page.insert_text((246, 202), data.llc_tax_classification or "", fontname="helv", fontsize=9, color=(0, 0, 0))
+        _draw_check(page, W9_CHECKBOX_RECTS[data.tax_classification])
+        if data.tax_classification == "llc":
+            _write_text_in_rect(
+                page,
+                data.llc_tax_classification or "",
+                W9_FIELD_RECTS["llc_tax_classification"],
+                fontname="helv",
+                max_fontsize=8,
+                min_fontsize=7,
+                align="center",
+            )
 
-    page.insert_text((82, 289), data.address_line1, fontname=font, fontsize=9, color=(0, 0, 0))
-    if data.address_line2:
-        page.insert_text((82, 301), data.address_line2, fontname=font, fontsize=8, color=(0, 0, 0))
-    city_state_zip = ", ".join(part for part in [data.city, data.state] if part)
-    city_state_zip = f"{city_state_zip} {data.zip_code}".strip()
-    page.insert_text((82, 313), city_state_zip, fontname=font, fontsize=9, color=(0, 0, 0))
+        # The official form has one address line, so a unit/suite is combined
+        # with the street address rather than overlapping the city/state line.
+        mailing_address = ", ".join(part for part in [data.address_line1, data.address_line2] if part)
+        _write_text_in_rect(page, mailing_address, W9_FIELD_RECTS["address"], fontname=font)
+        city_state_zip = ", ".join(part for part in [data.city, data.state] if part)
+        city_state_zip = f"{city_state_zip} {data.zip_code}".strip()
+        _write_text_in_rect(page, city_state_zip, W9_FIELD_RECTS["city_state_zip"], fontname=font)
 
-    _insert_tin_digits(page, data.tin_digits, data.tin_type)
+        _insert_tin_digits(page, data.tin_digits, data.tin_type)
 
-    signature_image, signature_rect = _fit_signature_image(
-        signature_bytes,
-        fitz.Rect(150, 570, 360, 603),
-    )
-    page.insert_image(signature_rect, stream=signature_image, keep_proportion=True, overlay=True)
-    page.insert_text((418, 603), _now().strftime("%m/%d/%Y"), fontname=font, fontsize=9, color=(0, 0, 0))
+        signature_field = fitz.Rect(W9_FIELD_RECTS["signature"])
+        signature_image, signature_rect = _fit_signature_image(signature_bytes, signature_field)
+        page.insert_image(signature_rect, stream=signature_image, keep_proportion=True, overlay=True)
+        _write_text_in_rect(
+            page,
+            _now().strftime("%m/%d/%Y"),
+            W9_FIELD_RECTS["date"],
+            fontname=font,
+            max_fontsize=9,
+            min_fontsize=8,
+            align="center",
+        )
 
-    return doc.tobytes(garbage=4, deflate=True)
+        return doc.tobytes(garbage=4, deflate=True)
+    finally:
+        doc.close()
 
 
 def _link_w9_to_case(supabase, request_row: dict, storage_path: str, content: bytes) -> None:
@@ -765,6 +890,41 @@ async def download_public_w9_template(token: str):
     )
 
 
+@router.get("/{token}/completed-copy")
+async def download_public_completed_w9_copy(token: str):
+    """Download a signer copy only after the associated public W-9 is complete."""
+    supabase = get_supabase()
+    request_row = _validate_token_session(supabase, token, allow_completed=True)
+    if request_row.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="Your completed Form W-9 is not available yet.")
+
+    result = (
+        supabase.table("w9_submissions")
+        .select("completed_pdf_path")
+        .eq("request_id", request_row["id"])
+        .limit(1)
+        .execute()
+    )
+    if not result.data or not result.data[0].get("completed_pdf_path"):
+        raise HTTPException(status_code=404, detail="Your completed Form W-9 could not be found.")
+
+    try:
+        pdf = supabase.storage.from_(W9_STORAGE_BUCKET).download(result.data[0]["completed_pdf_path"])
+    except Exception as exc:
+        logger.exception("Could not retrieve signer W-9 completed copy")
+        raise HTTPException(status_code=500, detail="Your completed Form W-9 could not be retrieved.") from exc
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="completed_form_w9.pdf"',
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.post("/{token}/complete")
 async def complete_w9_request(token: str, payload: W9PublicSubmission, request: Request):
     """Render a signed W-9 using locked data when the attorney prefilled it."""
@@ -841,6 +1001,13 @@ async def complete_w9_request(token: str, payload: W9PublicSubmission, request: 
         raise HTTPException(status_code=500, detail="Could not save the W-9 submission.") from exc
 
     _link_w9_to_case(supabase, request_row, storage_path, completed_pdf)
+
+    try:
+        signer_copy_sent = await _send_w9_completed_copy_email(request_row, token)
+        if not signer_copy_sent:
+            logger.warning("Completed W-9 signer copy email was not sent for request %s", request_row.get("id"))
+    except Exception:
+        logger.exception("W-9 was completed but the signer copy email could not be sent")
 
     try:
         from utils.email_service import send_email

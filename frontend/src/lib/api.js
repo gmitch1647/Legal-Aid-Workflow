@@ -1117,3 +1117,7 @@ export async function submitPublicW9(token, data) {
 export function publicW9TemplateUrl(token) {
   return `${BASE_URL}/w9/${token}/template`;
 }
+
+export function publicW9CompletedCopyUrl(token) {
+  return `${BASE_URL}/w9/${token}/completed-copy`;
+}

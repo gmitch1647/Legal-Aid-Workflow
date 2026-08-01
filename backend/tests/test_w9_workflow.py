@@ -1,8 +1,9 @@
 import io
+import asyncio
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import fitz
 from cryptography.fernet import Fernet
@@ -114,7 +115,7 @@ class W9WorkflowTests(unittest.TestCase):
         text = "\n".join(page.get_text() for page in document)
         # Each official W-9 TIN cell is a separate text insertion, so validate
         # the bounded box region rather than expecting one contiguous text token.
-        tin_box_text = first_page.get_text("text", clip=fitz.Rect(420, 380, 550, 408))
+        tin_box_text = first_page.get_text("text", clip=fitz.Rect(417, 371, 577, 397))
         document.close()
 
         self.assertTrue(pdf.startswith(b"%PDF"))
@@ -122,6 +123,116 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertIn("123 Main Street", text)
         self.assertEqual(tin_box_text.count("0"), 9)
         self.assertNotIn("203.0.113.10", text)
+
+    def test_official_pdf_places_values_inside_calibrated_fields(self):
+        submission = self._submission(
+            legal_name="Aligned Taxpayer",
+            business_name="Aligned Business",
+            address_line1="742 Alignment Street",
+            address_line2="Suite 402",
+            city="Austin",
+            state="TX",
+            zip_code="78701",
+        )
+        pdf = w9._render_official_w9(submission, self._signature_png())
+        document = fitz.open(stream=pdf, filetype="pdf")
+        first_page = document[0]
+        words = first_page.get_text("words")
+
+        def word_rect(word, field):
+            field_rect = fitz.Rect(field)
+            match = next(
+                item for item in words
+                if item[4] == word and field_rect.contains(fitz.Rect(item[:4]))
+            )
+            return fitz.Rect(match[:4])
+
+        self.assertTrue(fitz.Rect(w9.W9_FIELD_RECTS["legal_name"]).contains(word_rect("Aligned", w9.W9_FIELD_RECTS["legal_name"])))
+        self.assertTrue(fitz.Rect(w9.W9_FIELD_RECTS["business_name"]).contains(word_rect("Business", w9.W9_FIELD_RECTS["business_name"])))
+        self.assertTrue(fitz.Rect(w9.W9_FIELD_RECTS["address"]).contains(word_rect("742", w9.W9_FIELD_RECTS["address"])))
+        self.assertTrue(fitz.Rect(w9.W9_FIELD_RECTS["city_state_zip"]).contains(word_rect("Austin,", w9.W9_FIELD_RECTS["city_state_zip"])))
+
+        digit_words = first_page.get_text("words", clip=fitz.Rect(417, 371, 577, 397))
+        zero_rects = [fitz.Rect(item[:4]) for item in digit_words if item[4] == "0"]
+        self.assertEqual(len(zero_rects), 9)
+        for digit_rect, cell in zip(zero_rects, w9.W9_TIN_BOX_RECTS["ssn"]):
+            self.assertTrue(fitz.Rect(cell).contains(digit_rect))
+
+        image_rects = []
+        for image in first_page.get_images(full=True):
+            image_rects.extend(first_page.get_image_rects(image[0]))
+        self.assertTrue(any(fitz.Rect(w9.W9_FIELD_RECTS["signature"]).contains(rect) for rect in image_rects))
+        document.close()
+
+    def test_completed_copy_email_uses_secure_link_without_tin(self):
+        request_row = {
+            "id": "request-1",
+            "signer_name": "Signer Test",
+            "signer_email": "signer@example.com",
+            "title": "Form W-9",
+        }
+        with patch.dict(os.environ, {"FRONTEND_URL": "https://app.example.test"}):
+            with patch("utils.email_service.send_email", new=AsyncMock(return_value=True)) as send_email:
+                sent = asyncio.run(w9._send_w9_completed_copy_email(request_row, "secure-token"))
+
+        self.assertTrue(sent)
+        kwargs = send_email.await_args.kwargs
+        self.assertEqual(kwargs["to"], "signer@example.com")
+        self.assertIn("https://app.example.test/w9/secure-token", kwargs["body"])
+        self.assertNotIn("123456789", kwargs["body"])
+        self.assertNotIn("attachment", kwargs["body"].lower())
+
+    def test_completed_copy_download_is_token_gated_and_private(self):
+        class CopyQuery:
+            def select(self, _fields):
+                return self
+
+            def eq(self, _field, _value):
+                return self
+
+            def limit(self, _count):
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=[{"completed_pdf_path": "w9/request-1/completed_form_w9.pdf"}])
+
+        class CopyStorage:
+            def __init__(self):
+                self.bucket = None
+                self.path = None
+
+            def from_(self, bucket):
+                self.bucket = bucket
+                return self
+
+            def download(self, path):
+                self.path = path
+                return b"%PDF-test-copy"
+
+        class CopySupabase:
+            def __init__(self):
+                self.query = CopyQuery()
+                self.storage = CopyStorage()
+
+            def table(self, table_name):
+                self.table_name = table_name
+                return self.query
+
+        supabase = CopySupabase()
+        with patch.object(w9, "get_supabase", return_value=supabase):
+            with patch.object(w9, "_validate_token_session", return_value={"id": "request-1", "status": "complete"}):
+                response = asyncio.run(w9.download_public_completed_w9_copy("secure-token"))
+
+            self.assertEqual(response.body, b"%PDF-test-copy")
+            self.assertEqual(response.headers["content-disposition"], 'attachment; filename="completed_form_w9.pdf"')
+            self.assertEqual(response.headers["cache-control"], "private, no-store, max-age=0")
+            self.assertEqual(supabase.table_name, "w9_submissions")
+            self.assertEqual(supabase.storage.bucket, w9.W9_STORAGE_BUCKET)
+
+            with patch.object(w9, "_validate_token_session", return_value={"id": "request-1", "status": "awaiting_submission"}):
+                with self.assertRaises(w9.HTTPException) as raised:
+                    asyncio.run(w9.download_public_completed_w9_copy("secure-token"))
+            self.assertEqual(raised.exception.status_code, 409)
 
     def test_case_file_scanner_accepts_only_labeled_taxpayer_ids(self):
         detected_ssn = w9._detect_tin_from_text("Legal Name: Taylor Taxpayer\nSSN: 123-45-6789")
