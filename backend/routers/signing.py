@@ -560,8 +560,9 @@ async def complete_signing(token: str, request: Request):
         logger.error("Failed to upload signed PDF: %s", e)
         raise HTTPException(status_code=500, detail="Could not store signed document.")
 
-    # Record audit trail
-    client_ip = request.client.host if request.client else "unknown"
+    # Record audit trail in LegalFlow only. The signer IP is intentionally not
+    # supplied to the PDF-rendering routine and will never be printed on it.
+    client_ip, ip_source = _audit_client_ip(request)
     now = datetime.now(timezone.utc).isoformat()
 
     audit = {
@@ -569,6 +570,7 @@ async def complete_signing(token: str, request: Request):
         "signer_email": session["signer_email"],
         "typed_name": typed_name,
         "ip_address": client_ip,
+        "ip_source": ip_source,
         "user_agent": request.headers.get("user-agent", ""),
         "signed_at": now,
         "signature_placement": signature_placement,
@@ -659,6 +661,129 @@ async def download_signed_pdf(token: str, authorization: str = Header(default=No
 # Helper — embed signature image into PDF using PyMuPDF (fitz)
 # ---------------------------------------------------------------------------
 
+def _audit_client_ip(request: Request) -> tuple[str, str]:
+    """Capture the originating client IP for LegalFlow's audit record only.
+
+    Railway and similar reverse proxies pass the visitor address through
+    `X-Forwarded-For`; direct local runs safely fall back to FastAPI's client
+    host. This helper is deliberately not used by PDF rendering code.
+    """
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",", 1)[0].strip()
+        if client_ip:
+            return client_ip, "x-forwarded-for"
+
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip, "x-real-ip"
+
+    if request.client and request.client.host:
+        return request.client.host, "request.client"
+    return "unknown", "unavailable"
+
+
+def _standard_pdf_font(source_font: str) -> str:
+    """Map a source PDF font to a built-in PyMuPDF font with matching styling."""
+    normalized = (source_font or "").lower().replace(" ", "")
+    if any(name in normalized for name in ("times", "roman", "serif", "liberation")):
+        return "tiro"  # Times-Roman: visual match for Times New Roman-style documents.
+    if any(name in normalized for name in ("courier", "mono")):
+        return "cour"
+    return "helv"
+
+
+def _nearby_text_style(page, anchor_rect) -> dict:
+    """Infer date text styling from the nearest source-document text span."""
+    import fitz  # PyMuPDF
+
+    default = {"source_font": "Times-Roman", "insert_font": "tiro", "font_size": 10.0}
+    nearest = None
+    nearest_distance = None
+    try:
+        text = page.get_text("dict")
+        for block in text.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if not span.get("text", "").strip():
+                        continue
+                    span_rect = fitz.Rect(span["bbox"])
+                    dx = max(anchor_rect.x0 - span_rect.x1, span_rect.x0 - anchor_rect.x1, 0)
+                    dy = max(anchor_rect.y0 - span_rect.y1, span_rect.y0 - anchor_rect.y1, 0)
+                    distance = dx * dx + dy * dy
+                    if nearest_distance is None or distance < nearest_distance:
+                        nearest = span
+                        nearest_distance = distance
+    except Exception as exc:
+        logger.warning("Could not infer PDF text style: %s", exc)
+
+    if not nearest:
+        return default
+
+    source_font = str(nearest.get("font") or default["source_font"])
+    source_size = float(nearest.get("size") or default["font_size"])
+    return {
+        "source_font": source_font,
+        "insert_font": _standard_pdf_font(source_font),
+        # Preserve the nearby document size while retaining a readable minimum
+        # and preventing unusually large heading text from overflowing fields.
+        "font_size": round(max(8.0, min(source_size, 12.0)), 2),
+    }
+
+
+def _fit_signature_image(sig_image_bytes: bytes, target_rect):
+    """Trim transparent/white canvas margins and fit the visible signature safely."""
+    import fitz  # PyMuPDF
+    from PIL import Image
+
+    field_rect = fitz.Rect(target_rect)
+    try:
+        image = Image.open(io.BytesIO(sig_image_bytes)).convert("RGBA")
+        pixels = list(image.getdata())
+        ink_mask = Image.new("L", image.size, 0)
+        ink_mask.putdata([
+            255 if alpha > 16 and (red < 245 or green < 245 or blue < 245) else 0
+            for red, green, blue, alpha in pixels
+        ])
+        ink_bounds = ink_mask.getbbox()
+        if ink_bounds:
+            # Add a small canvas margin so ascenders and descenders cannot be
+            # cut off when a signer draws close to the canvas edge.
+            left, top, right, bottom = ink_bounds
+            padding = max(3, round(min(image.size) * 0.04))
+            crop_box = (
+                max(0, left - padding),
+                max(0, top - padding),
+                min(image.width, right + padding),
+                min(image.height, bottom + padding),
+            )
+            image = image.crop(crop_box)
+
+        width, height = image.size
+        if width <= 0 or height <= 0:
+            raise ValueError("Signature image has no drawable area")
+
+        horizontal_padding = min(6.0, field_rect.width * 0.08)
+        vertical_padding = min(3.0, field_rect.height * 0.08)
+        available_width = max(20.0, field_rect.width - (horizontal_padding * 2))
+        available_height = max(12.0, field_rect.height - (vertical_padding * 2))
+        scale = min(available_width / width, available_height / height)
+        render_width = width * scale
+        render_height = height * scale
+        rendered_rect = fitz.Rect(
+            field_rect.x0 + (field_rect.width - render_width) / 2,
+            field_rect.y0 + (field_rect.height - render_height) / 2,
+            field_rect.x0 + (field_rect.width + render_width) / 2,
+            field_rect.y0 + (field_rect.height + render_height) / 2,
+        )
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue(), rendered_rect
+    except Exception as exc:
+        logger.warning("Could not trim and fit signature image: %s", exc)
+        return sig_image_bytes, field_rect
+
+
 def _execution_block_placement(doc) -> Optional[dict]:
     """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
 
@@ -708,14 +833,13 @@ def _execution_block_placement(doc) -> Optional[dict]:
         if field_right - field_left < 80:
             continue
 
-        # The signature artwork sits just above the existing `By:` line, while
-        # the written date fills the existing `Date:` line instead of adding a
-        # new date label elsewhere on the page.
+        # Reserve the full vertical space between the party heading and date
+        # field so descenders in a handwritten signature cannot be clipped.
         signature_rect = fitz.Rect(
             field_left,
-            max(by_rect.y0 - 24, 36),
+            max(by_rect.y0 - 30, 36),
             field_right,
-            max(by_rect.y1 - 2, by_rect.y0 + 14),
+            max(date_rect.y0 - 6, by_rect.y1 + 18),
         )
         return {
             "strategy": "detected_execution_block",
@@ -725,6 +849,10 @@ def _execution_block_placement(doc) -> Optional[dict]:
                 round(signature_rect.x1, 2), round(signature_rect.y1, 2),
             ],
             "date_origin": [round(date_x, 2), round(date_rect.y1 - 2, 2)],
+            "date_label_rect": [
+                round(date_rect.x0, 2), round(date_rect.y0, 2),
+                round(date_rect.x1, 2), round(date_rect.y1, 2),
+            ],
         }
     return None
 
@@ -769,16 +897,24 @@ def _embed_signature(
     page = doc[placement["page"]]
     sig_rect = fitz.Rect(placement["signature_rect"])
     date_x, date_y = placement["date_origin"]
+    date_label_rect = fitz.Rect(placement.get("date_label_rect", [date_x, date_y - 10, date_x + 1, date_y]))
+    date_style = _nearby_text_style(page, date_label_rect)
+    fitted_signature_bytes, rendered_sig_rect = _fit_signature_image(sig_image_bytes, sig_rect)
+    placement["rendered_signature_rect"] = [
+        round(rendered_sig_rect.x0, 2), round(rendered_sig_rect.y0, 2),
+        round(rendered_sig_rect.x1, 2), round(rendered_sig_rect.y1, 2),
+    ]
+    placement["date_style"] = date_style
 
     try:
-        page.insert_image(sig_rect, stream=sig_image_bytes)
+        page.insert_image(rendered_sig_rect, stream=fitted_signature_bytes)
     except Exception as exc:
         logger.warning("Could not embed signature image: %s", exc)
         page.insert_text(
             fitz.Point(sig_rect.x0, sig_rect.y1 - 2),
             display_name,
-            fontsize=9,
-            fontname="helv",
+            fontsize=date_style["font_size"],
+            fontname=date_style["insert_font"],
             color=(0, 0, 0),
         )
 
@@ -786,8 +922,8 @@ def _embed_signature(
         page.insert_text(
             fitz.Point(date_x, date_y),
             date_str,
-            fontsize=10,
-            fontname="helv",
+            fontsize=date_style["font_size"],
+            fontname=date_style["insert_font"],
             color=(0, 0, 0),
         )
     else:

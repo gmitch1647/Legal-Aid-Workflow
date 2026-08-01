@@ -90,7 +90,12 @@ class InAppEsignRouteTests(unittest.TestCase):
             "original_path": "signing/session-123/original_agreement.pdf",
             "signed_path": "signing/session-123/signed_agreement.pdf",
             "signed_at": "2026-08-01T18:16:44+00:00",
-            "audit_trail": {},
+            "audit_trail": {
+                "ip_address": "198.51.100.18",
+                "ip_source": "x-forwarded-for",
+                "signed_at": "2026-08-01T18:16:44+00:00",
+                "signature_placement": {"strategy": "detected_execution_block"},
+            },
             "case_id": "case-123",
             "client_id": "client-123",
             "sent_by": "attorney-1",
@@ -108,6 +113,8 @@ class InAppEsignRouteTests(unittest.TestCase):
         self.assertEqual(detail["source_file_name"], "agreement.pdf")
         self.assertEqual(detail["signatures"][0]["status"], "signed")
         self.assertEqual(detail["created_at"], self.session["created_at"])
+        self.assertEqual(detail["signing_audit"]["ip_address"], "198.51.100.18")
+        self.assertEqual(detail["signing_audit"]["ip_source"], "x-forwarded-for")
 
     def test_shared_detail_route_uses_in_app_session_before_provider_lookup(self):
         supabase = _FakeSupabase(self.session)

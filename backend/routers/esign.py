@@ -108,6 +108,9 @@ def _in_app_request_detail(session: dict) -> dict:
         "signed_at": session.get("signed_at"),
         "has_signed_document": bool(session.get("signed_path")),
         "has_source_attachment": bool(session.get("original_path")),
+        # This route is attorney-authenticated. Keep the IP/audit data inside
+        # LegalFlow's authorized dashboard rather than embedding it in the PDF.
+        "signing_audit": session.get("audit_trail") if is_complete else None,
         "source_file_name": Path(session.get("original_path", "document")).name
             .removeprefix("source_")
             .removeprefix("original_"),

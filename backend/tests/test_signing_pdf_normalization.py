@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import fitz
+from starlette.requests import Request
 from docx import Document
 from PIL import Image
 
@@ -221,6 +222,52 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertTrue(signed_pdf.startswith(b"%PDF"))
         self.assertEqual(placement["strategy"], "detected_execution_block")
         self.assertEqual(placement["page"], 0)
+        self.assertIn("rendered_signature_rect", placement)
+        self.assertIn("date_style", placement)
+
+    def test_signature_image_is_trimmed_and_fitted_inside_execution_field(self):
+        image = Image.new("RGBA", (300, 100), "white")
+        # Simulate a signer drawing close to the canvas edges, including a
+        # descender at the lower edge that must remain visible.
+        for x in range(4, 296):
+            image.putpixel((x, 10 + (x % 70)), (0, 0, 0, 255))
+        payload = io.BytesIO()
+        image.save(payload, format="PNG")
+        field = fitz.Rect(110, 590, 265, 640)
+
+        fitted_png, fitted_rect = signing._fit_signature_image(payload.getvalue(), field)
+
+        self.assertTrue(fitted_png.startswith(b"\x89PNG"))
+        self.assertGreaterEqual(fitted_rect.x0, field.x0)
+        self.assertGreaterEqual(fitted_rect.y0, field.y0)
+        self.assertLessEqual(fitted_rect.x1, field.x1)
+        self.assertLessEqual(fitted_rect.y1, field.y1)
+        self.assertGreater(fitted_rect.height, 20)
+
+    def test_date_style_tracks_nearby_times_style(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((100, 655), "Date:", fontsize=11, fontname="tiro")
+        style = signing._nearby_text_style(page, fitz.Rect(100, 643, 130, 658))
+        document.close()
+
+        self.assertEqual(style["insert_font"], "tiro")
+        self.assertEqual(style["font_size"], 11.0)
+
+    def test_audit_ip_prefers_forwarded_client_address(self):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/signing/token/complete",
+            "headers": [(b"x-forwarded-for", b"198.51.100.18, 10.0.0.3")],
+            "client": ("10.0.0.3", 443),
+            "scheme": "https",
+            "server": ("legalflow.example", 443),
+        }
+        client_ip, source = signing._audit_client_ip(Request(scope))
+
+        self.assertEqual(client_ip, "198.51.100.18")
+        self.assertEqual(source, "x-forwarded-for")
 
     def test_embedding_falls_back_when_no_execution_fields_are_present(self):
         document = fitz.open()

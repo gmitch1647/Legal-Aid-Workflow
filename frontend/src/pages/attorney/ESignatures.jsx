@@ -680,6 +680,20 @@ function DetailModal({ requestId, data, onClose, onCancel, onDownloadOriginal, o
                 </div>
               </div>
 
+              {data?.provider === 'legalflow' && data?.signing_audit && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="text-xs text-slate-500 uppercase font-semibold mb-2">Signing Audit</div>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                    <dt className="text-slate-500">Signer IP</dt>
+                    <dd className="font-mono text-slate-700 break-all">{data.signing_audit.ip_address || 'Not captured'}</dd>
+                    <dt className="text-slate-500">Signed at</dt>
+                    <dd className="text-slate-700">{data.signing_audit.signed_at ? new Date(data.signing_audit.signed_at).toLocaleString() : 'Not recorded'}</dd>
+                    <dt className="text-slate-500">Placement</dt>
+                    <dd className="text-slate-700">{data.signing_audit.signature_placement?.strategy === 'detected_execution_block' ? 'Detected execution block' : 'Signing fallback'}</dd>
+                  </dl>
+                </div>
+              )}
+
               {data.created_at && (
                 <div className="text-xs text-slate-400">
                   Sent: {new Date(typeof data.created_at === 'number' ? data.created_at * 1000 : data.created_at).toLocaleString()}
