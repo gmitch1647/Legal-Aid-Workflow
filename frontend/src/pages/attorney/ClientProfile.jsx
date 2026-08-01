@@ -24,11 +24,13 @@ import {
   X,
   Send,
   MessageSquare,
+  Trash2,
 } from 'lucide-react';
 import {
   getCases,
   getDocuments,
   uploadDocument,
+  deleteDocument,
   getCommsConfig,
   getCommsHistory,
   sendClientEmail,
@@ -528,6 +530,15 @@ export default function ClientProfile() {
             documents={documents}
             clientCases={clientCases}
             onUploadComplete={refreshDocuments}
+            onDelete={async (doc) => {
+              if (!confirm(`Delete "${doc.file_name || 'this document'}"?`)) return;
+              try {
+                await deleteDocument(doc.case_id, doc.id);
+                refreshDocuments();
+              } catch (err) {
+                alert('Delete failed: ' + err.message);
+              }
+            }}
           />
 
           {/* Attorney Notes */}
@@ -1030,7 +1041,7 @@ function CreditReportSection({ clientId, client }) {
 // Documents Section
 // ---------------------------------------------------------------------------
 
-function DocumentsSection({ documents, clientCases, onUploadComplete }) {
+function DocumentsSection({ documents, clientCases, onUploadComplete, onDelete }) {
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [selectedCaseId, setSelectedCaseId] = useState('');
@@ -1138,24 +1149,32 @@ function DocumentsSection({ documents, clientCases, onUploadComplete }) {
       <div className="mt-4 space-y-2">
         {documents.length > 0 ? (
           documents.map((doc) => (
-            <a
-              key={doc.id}
-              href={doc.url || doc.file_url || '#'}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50"
-            >
-              <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-slate-700">
-                  {doc.file_name || doc.name || doc.filename || 'Document'}
-                </p>
-                <p className="text-xs text-slate-400">
-                  {doc.case_name || 'Case'} · {(doc.document_category || doc.category || doc.type || 'File').replace('_', ' ')}
-                </p>
-              </div>
-              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-            </a>
+            <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50">
+              <a
+                href={doc.url || doc.file_url || '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 flex-1 min-w-0"
+              >
+                <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-700">
+                    {doc.file_name || doc.name || doc.filename || 'Document'}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {doc.case_name || 'Case'} · {(doc.document_category || doc.category || doc.type || 'File').replace('_', ' ')}
+                  </p>
+                </div>
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+              </a>
+              <button
+                onClick={() => onDelete && onDelete(doc)}
+                className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0"
+                title="Delete document"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))
         ) : (
           <p className="py-4 text-center text-sm text-slate-400">No documents uploaded.</p>

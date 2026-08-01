@@ -175,3 +175,38 @@ async def list_documents(case_id: str, authorization: str = Header(...)):
     )
 
     return resp.data or []
+
+
+# ---------------------------------------------------------------------------
+# DELETE /cases/{case_id}/documents/{doc_id} -- delete a document
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/cases/{case_id}/documents/{doc_id}")
+async def delete_document(case_id: str, doc_id: str, authorization: str = Header(...)):
+    """Delete a document from a case (storage + metadata)."""
+    profile = await _get_current_user(authorization)
+
+    if profile["role"] not in ("attorney", "staff_attorney"):
+        raise HTTPException(status_code=403, detail="Only attorneys can delete documents.")
+
+    supabase = get_supabase()
+
+    doc_resp = supabase.table("case_documents").select("*").eq("id", doc_id).eq("case_id", case_id).limit(1).execute()
+    if not doc_resp.data:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    doc = doc_resp.data[0]
+
+    # Delete from storage
+    storage_path = doc.get("storage_path")
+    if storage_path:
+        try:
+            supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+        except Exception as e:
+            logger.warning("Could not delete file from storage: %s", e)
+
+    # Delete metadata row
+    supabase.table("case_documents").delete().eq("id", doc_id).execute()
+
+    return {"deleted": True}

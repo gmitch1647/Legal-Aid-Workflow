@@ -238,6 +238,10 @@ export async function getDocuments(caseId) {
   return request(`/cases/${caseId}/documents`);
 }
 
+export async function deleteDocument(caseId, docId) {
+  return request(`/cases/${caseId}/documents/${docId}`, { method: 'DELETE' });
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
