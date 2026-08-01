@@ -7,7 +7,7 @@ Flow:
    - Creates a signing_sessions row with a unique token
    - Emails the client a signing link
 2. Client opens /sign/{token} (public page) → GET /signing/{token}
-   - Returns session metadata + a signed URL to view the PDF
+   - Returns session metadata; the PDF is served through GET /signing/{token}/pdf
 3. Client draws signature and submits → POST /signing/{token}/complete
    - Receives the signature image (base64 PNG)
    - Embeds the signature + date into the PDF server-side
@@ -371,23 +371,6 @@ async def get_signing_session(token: str):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="This document has already been signed.")
 
-    # Legacy DOCX sessions are converted before a recipient receives a preview URL.
-    try:
-        pdf_path = _ensure_session_pdf(supabase, session)
-    except RuntimeError as exc:
-        logger.exception("Could not prepare signing session %s", session["id"])
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    # Generate a temporary signed URL for the canonical PDF.
-    try:
-        url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
-            pdf_path, 3600
-        )
-        pdf_url = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
-    except Exception as e:
-        logger.error("Failed to create signed URL: %s", e)
-        pdf_url = ""
-
     return {
         "session_id": session["id"],
         "title": session["title"],
@@ -397,8 +380,43 @@ async def get_signing_session(token: str):
         "attorney_name": session.get("attorney_name", ""),
         "message": session.get("message", ""),
         "status": session["status"],
-        "pdf_url": pdf_url,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /{token}/pdf — public endpoint, serves the PDF directly (no CORS issues)
+# ---------------------------------------------------------------------------
+
+@router.get("/{token}/pdf")
+async def get_signing_pdf(token: str):
+    supabase = get_supabase()
+
+    resp = supabase.table("signing_sessions").select("id, original_path, status").eq("token", token).limit(1).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    session = resp.data[0]
+    if session["status"] in ("signed", "complete"):
+        raise HTTPException(status_code=400, detail="Already signed.")
+
+    try:
+        pdf_path = _ensure_session_pdf(supabase, session)
+        pdf_bytes = supabase.storage.from_(STORAGE_BUCKET).download(pdf_path)
+        if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+            raise RuntimeError("The stored signing document is not a valid PDF.")
+    except RuntimeError as exc:
+        logger.error("Could not prepare PDF for signing: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as e:
+        logger.error("Failed to download PDF for signing: %s", e)
+        raise HTTPException(status_code=500, detail="Could not load document.") from e
+
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 # ---------------------------------------------------------------------------
