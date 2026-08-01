@@ -82,8 +82,9 @@ async def create_signing_session(
     storage_path = f"signing/{session_id}/original_{filename}"
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
-            storage_path, content,
-            {"content-type": file.content_type or "application/pdf"},
+            path=storage_path,
+            file=content,
+            file_options={"content-type": file.content_type or "application/pdf"},
         )
     except Exception as e:
         logger.error("Failed to upload signing document: %s", e)
@@ -260,8 +261,9 @@ async def complete_signing(token: str, request: Request):
     signed_path = session["original_path"].replace("original_", "signed_")
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
-            signed_path, signed_pdf,
-            {"content-type": "application/pdf"},
+            path=signed_path,
+            file=signed_pdf,
+            file_options={"content-type": "application/pdf"},
         )
     except Exception as e:
         logger.error("Failed to upload signed PDF: %s", e)
