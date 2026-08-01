@@ -317,13 +317,13 @@ export default function W9Requests() {
             {!detectedTinActive && (
               <div className="md:col-span-2 rounded-xl border border-slate-200 p-4">
                 <p className="text-sm font-semibold text-slate-800">Prefill taxpayer ID <span className="font-normal text-slate-400">(optional; otherwise signer enters it)</span></p>
-                <p className="mt-1 text-xs text-slate-500">This field is private, encrypted before storage, and never sent in the request email. Do not add it unless you already have it through an authorized source.</p>
+                <p className="mt-1 text-xs text-slate-500">This field is visible only while you enter it in your private attorney workspace, encrypted before storage, and never sent in the request email. Do not add it unless you already have it through an authorized source.</p>
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-3">
                   <select value={form.prefilled_tin_type} onChange={(event) => updateForm('prefilled_tin_type', event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2.5">
                     <option value="ssn">Social Security Number</option>
                     <option value="ein">Employer Identification Number</option>
                   </select>
-                  <input type="password" inputMode="numeric" autoComplete="off" value={formatTin(form.prefilled_tin, form.prefilled_tin_type)} onChange={(event) => updateForm('prefilled_tin', event.target.value.replace(/\D/g, '').slice(0, 9))} placeholder={form.prefilled_tin_type === 'ssn' ? '000-00-0000' : '00-0000000'} className="rounded-lg border border-slate-300 px-3 py-2.5" />
+                  <input type="text" inputMode="numeric" autoComplete="off" aria-label="Taxpayer ID" value={formatTin(form.prefilled_tin, form.prefilled_tin_type)} onChange={(event) => updateForm('prefilled_tin', event.target.value.replace(/\D/g, '').slice(0, 9))} placeholder={form.prefilled_tin_type === 'ssn' ? '000-00-0000' : '00-0000000'} className="rounded-lg border border-slate-300 px-3 py-2.5" />
                 </div>
               </div>
             )}
