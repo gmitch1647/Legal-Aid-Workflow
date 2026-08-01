@@ -189,7 +189,7 @@ async def send_signature_request(
                     "name": payload.signer_name,
                 }
             ],
-            "test_mode": 0,
+            "test_mode": 1,
         }
 
         # Add custom fields to pre-fill the template
@@ -296,7 +296,7 @@ async def send_document_for_signature(
         "message": message,
         "signers[0][email_address]": signer_email,
         "signers[0][name]": signer_name,
-        "test_mode": "0",
+        "test_mode": "1",
         "form_fields_per_document": json.dumps([[
             {
                 "api_id": "sig_1",
