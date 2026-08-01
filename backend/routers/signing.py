@@ -109,53 +109,74 @@ def _convert_docx_to_pdf(docx_bytes: bytes) -> bytes:
         return pdf_bytes
 
 
-def _normalize_upload_to_pdf(
+def _validate_source_attachment(
     file_bytes: bytes,
     filename: str,
     content_type: Optional[str],
-) -> tuple[bytes, str]:
-    """Return a PDF payload and a canonical PDF filename for a signing session."""
+) -> tuple[str, str]:
+    """Validate the uploaded source without changing its bytes or file format."""
     safe_filename = _safe_filename(filename)
     suffix = Path(safe_filename).suffix.lower()
 
     if suffix == ".docx" or content_type == DOCX_MIME_TYPE:
-        pdf_bytes = _convert_docx_to_pdf(file_bytes)
-    elif file_bytes.startswith(b"%PDF"):
-        pdf_bytes = file_bytes
-    else:
-        raise ValueError("Only valid PDF and DOCX files can be sent for signature.")
+        if not file_bytes.startswith(b"PK"):
+            raise ValueError("The DOCX upload is not a valid Office document.")
+        return safe_filename, DOCX_MIME_TYPE
+    if file_bytes.startswith(b"%PDF"):
+        return safe_filename, "application/pdf"
+    raise ValueError("Only valid PDF and DOCX files can be sent for signature.")
 
-    stem = Path(safe_filename).stem or "document"
-    return pdf_bytes, f"{stem}.pdf"
+
+def _source_stem(storage_path: str) -> str:
+    """Return the human-facing base filename without workflow prefixes."""
+    stem = Path(storage_path).stem
+    return stem.removeprefix("source_").removeprefix("original_").removeprefix("signing_") or "document"
+
+
+def _signing_pdf_path(source_path: str) -> str:
+    """Return the separate PDF derivative path used by the signing canvas."""
+    source = Path(source_path)
+    if source.suffix.lower() == ".pdf":
+        return source_path
+    return str(source.with_name(f"signing_{_source_stem(source_path)}.pdf"))
+
+
+def _signed_pdf_path(pdf_path: str) -> str:
+    """Return the output path for a signed PDF without mutating the source file."""
+    pdf = Path(pdf_path)
+    return str(pdf.with_name(f"signed_{_source_stem(pdf_path)}.pdf"))
 
 
 def _ensure_session_pdf(supabase, session: dict) -> str:
-    """Return a PDF storage path, upgrading legacy DOCX sessions when needed."""
-    original_path = session["original_path"]
-    if original_path.lower().endswith(".pdf"):
-        return original_path
-    if not original_path.lower().endswith(".docx"):
-        raise RuntimeError("The stored signing document is neither a PDF nor a DOCX file.")
+    """Return a preview PDF while keeping the original session attachment unchanged."""
+    source_path = session["original_path"]
+    pdf_path = _signing_pdf_path(source_path)
+    if pdf_path == source_path:
+        return source_path
 
     try:
-        docx_bytes = supabase.storage.from_(STORAGE_BUCKET).download(original_path)
+        # Reuse an existing derivative where possible, without replacing its source.
+        try:
+            existing_pdf = supabase.storage.from_(STORAGE_BUCKET).download(pdf_path)
+            if existing_pdf and existing_pdf.startswith(b"%PDF"):
+                return pdf_path
+        except Exception:
+            pass
+
+        docx_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
         if not docx_bytes:
             raise RuntimeError("The stored DOCX could not be downloaded.")
         pdf_bytes = _convert_docx_to_pdf(docx_bytes)
-        pdf_path = str(Path(original_path).with_suffix(".pdf"))
         supabase.storage.from_(STORAGE_BUCKET).upload(
             path=pdf_path,
             file=pdf_bytes,
             file_options={"content-type": "application/pdf", "upsert": "true"},
         )
-        supabase.table("signing_sessions").update(
-            {
-                "original_path": pdf_path,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        ).eq("id", session["id"]).execute()
-        session["original_path"] = pdf_path
-        logger.info("Converted legacy signing session %s to PDF", session["id"])
+        logger.info(
+            "Created separate signing PDF derivative for session %s without modifying %s",
+            session["id"],
+            source_path,
+        )
         return pdf_path
     except RuntimeError:
         raise
@@ -288,28 +309,26 @@ async def create_signing_session(
 
     source_filename = _safe_filename(file.filename or "document.pdf")
     try:
-        pdf_content, pdf_filename = _normalize_upload_to_pdf(
+        source_filename, source_content_type = _validate_source_attachment(
             uploaded_content,
             source_filename,
             file.content_type,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        logger.exception("Could not convert signing document %s", source_filename)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     supabase = get_supabase()
     session_id = str(uuid.uuid4())
     token = _generate_token()
 
-    # Store a canonical PDF so the public signer can always preview it.
-    storage_path = f"signing/{session_id}/original_{pdf_filename}"
+    # Preserve the attorney's original source attachment byte-for-byte.
+    # DOCX files receive a separate PDF derivative only when the signer opens it.
+    storage_path = f"signing/{session_id}/source_{source_filename}"
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
             path=storage_path,
-            file=pdf_content,
-            file_options={"content-type": "application/pdf"},
+            file=uploaded_content,
+            file_options={"content-type": source_content_type},
         )
     except Exception as e:
         logger.error("Failed to upload signing document: %s", e)
@@ -523,8 +542,8 @@ async def complete_signing(token: str, request: Request):
         logger.error("Failed to embed signature: %s", e)
         raise HTTPException(status_code=500, detail=f"Signature embedding failed: {e}")
 
-    # Store the signed PDF
-    signed_path = session["original_path"].replace("original_", "signed_")
+    # Store the signed PDF separately from both the immutable source and preview PDF.
+    signed_path = _signed_pdf_path(pdf_path)
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
             path=signed_path,

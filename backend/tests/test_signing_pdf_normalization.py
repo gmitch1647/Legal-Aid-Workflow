@@ -1,9 +1,11 @@
-"""Regression tests for the custom signer’s PDF normalization path."""
+"""Regression tests for immutable source attachments and signing-PDF derivatives."""
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from docx import Document
 
@@ -11,16 +13,23 @@ from routers import signing
 
 
 class _FakeSigningBucket:
-    def __init__(self):
+    def __init__(self, downloads=None):
         self.downloaded_paths = []
+        self.downloads = downloads or {}
         self.uploads = []
+        self.removed_paths = []
 
     def download(self, path):
         self.downloaded_paths.append(path)
-        return b"legacy-docx-content"
+        if path in self.downloads:
+            return self.downloads[path]
+        raise RuntimeError("Object not found")
 
     def upload(self, **kwargs):
         self.uploads.append(kwargs)
+
+    def remove(self, paths):
+        self.removed_paths.extend(paths)
 
 
 class _FakeSigningStorage:
@@ -34,10 +43,15 @@ class _FakeSigningStorage:
 class _FakeSigningQuery:
     def __init__(self):
         self.update_payload = None
+        self.insert_payloads = []
         self.eq_args = None
 
     def update(self, payload):
         self.update_payload = payload
+        return self
+
+    def insert(self, payload):
+        self.insert_payloads.append(payload)
         return self
 
     def eq(self, column, value):
@@ -45,65 +59,119 @@ class _FakeSigningQuery:
         return self
 
     def execute(self):
-        return None
+        return SimpleNamespace(data=[])
 
 
 class _FakeSigningSupabase:
-    def __init__(self):
-        self.bucket = _FakeSigningBucket()
+    def __init__(self, downloads=None):
+        self.bucket = _FakeSigningBucket(downloads)
         self.storage = _FakeSigningStorage(self.bucket)
-        self.query = _FakeSigningQuery()
+        self.queries = {
+            "signing_sessions": _FakeSigningQuery(),
+            "signature_requests": _FakeSigningQuery(),
+        }
 
     def table(self, table_name):
-        if table_name != "signing_sessions":
-            raise AssertionError(f"Unexpected table: {table_name}")
-        return self.query
+        return self.queries[table_name]
+
+
+class _FakeUpload:
+    def __init__(self, file_bytes, filename, content_type):
+        self._file_bytes = file_bytes
+        self.filename = filename
+        self.content_type = content_type
+
+    async def read(self):
+        return self._file_bytes
+
+
+async def _attorney_user(_authorization):
+    return {"id": "attorney-1", "full_name": "Attorney Example", "role": "attorney"}
 
 
 class SigningPdfNormalizationTests(unittest.TestCase):
-    def test_pdf_upload_is_preserved_and_canonicalized(self):
+    def test_pdf_source_is_preserved_without_conversion(self):
         pdf_bytes = b"%PDF-1.7\nminimal-pdf-content"
 
-        normalized_bytes, filename = signing._normalize_upload_to_pdf(
+        file_name, content_type = signing._validate_source_attachment(
             pdf_bytes,
             "Settlement Agreement.pdf",
             "application/pdf",
         )
 
-        self.assertEqual(normalized_bytes, pdf_bytes)
-        self.assertEqual(filename, "Settlement Agreement.pdf")
+        self.assertEqual(file_name, "Settlement Agreement.pdf")
+        self.assertEqual(content_type, "application/pdf")
 
-    def test_docx_upload_is_converted_before_creating_session(self):
-        converted_pdf = b"%PDF-1.7\nconverted-content"
+    def test_docx_source_is_validated_without_conversion(self):
+        docx_bytes = b"PK\x03\x04original-docx-content"
 
-        with patch.object(signing, "_convert_docx_to_pdf", return_value=converted_pdf) as converter:
-            normalized_bytes, filename = signing._normalize_upload_to_pdf(
-                b"docx-content",
+        with patch.object(signing, "_convert_docx_to_pdf") as converter:
+            file_name, content_type = signing._validate_source_attachment(
+                docx_bytes,
                 "Settlement Agreement.docx",
                 signing.DOCX_MIME_TYPE,
             )
 
-        converter.assert_called_once_with(b"docx-content")
-        self.assertEqual(normalized_bytes, converted_pdf)
-        self.assertEqual(filename, "Settlement Agreement.pdf")
+        converter.assert_not_called()
+        self.assertEqual(file_name, "Settlement Agreement.docx")
+        self.assertEqual(content_type, signing.DOCX_MIME_TYPE)
 
-    def test_legacy_docx_session_is_upgraded_to_pdf_before_preview(self):
+    def test_docx_source_is_uploaded_byte_for_byte_when_session_is_created(self):
+        source_bytes = b"PK\x03\x04original-docx-content"
         supabase = _FakeSigningSupabase()
-        session = {
-            "id": "session-123",
-            "original_path": "signing/session-123/original_agreement.docx",
-        }
+        upload = _FakeUpload(source_bytes, "Settlement Agreement.docx", signing.DOCX_MIME_TYPE)
+
+        with patch.object(signing, "get_supabase", return_value=supabase), patch.object(
+            signing, "_get_current_user", _attorney_user
+        ), patch.object(signing, "_generate_token", return_value="token-123"), patch.object(
+            signing.uuid, "uuid4", return_value="session-123"
+        ), patch.object(signing, "_convert_docx_to_pdf") as converter, patch(
+            "utils.email_service.send_email", new=AsyncMock()
+        ):
+            asyncio.run(
+                signing.create_signing_session(
+                    file=upload,
+                    signer_name="Client Example",
+                    signer_email="client@example.test",
+                    title="Settlement Agreement",
+                    authorization="Bearer token",
+                )
+            )
+
+        converter.assert_not_called()
+        stored = supabase.bucket.uploads[0]
+        self.assertEqual(stored["file"], source_bytes)
+        self.assertEqual(stored["path"], "signing/session-123/source_Settlement Agreement.docx")
+        self.assertEqual(stored["file_options"]["content-type"], signing.DOCX_MIME_TYPE)
+        session_record = supabase.queries["signing_sessions"].insert_payloads[0]
+        self.assertEqual(session_record["original_path"], stored["path"])
+
+    def test_docx_session_generates_separate_pdf_without_mutating_source_path(self):
+        source_path = "signing/session-123/source_agreement.docx"
+        derivative_path = "signing/session-123/signing_agreement.pdf"
+        source_bytes = b"PK\x03\x04original-docx-content"
+        supabase = _FakeSigningSupabase({source_path: source_bytes})
+        session = {"id": "session-123", "original_path": source_path}
         converted_pdf = b"%PDF-1.7\nlegacy-converted"
 
         with patch.object(signing, "_convert_docx_to_pdf", return_value=converted_pdf):
             pdf_path = signing._ensure_session_pdf(supabase, session)
 
-        self.assertEqual(pdf_path, "signing/session-123/original_agreement.pdf")
-        self.assertEqual(session["original_path"], pdf_path)
-        self.assertEqual(supabase.bucket.downloaded_paths, ["signing/session-123/original_agreement.docx"])
-        self.assertEqual(supabase.bucket.uploads[0]["path"], pdf_path)
+        self.assertEqual(pdf_path, derivative_path)
+        self.assertEqual(session["original_path"], source_path)
+        self.assertEqual(supabase.bucket.uploads[0]["path"], derivative_path)
         self.assertEqual(supabase.bucket.uploads[0]["file"], converted_pdf)
-        self.assertEqual(supabase.query.eq_args, ("id", "session-123"))
+        self.assertIsNone(supabase.queries["signing_sessions"].update_payload)
+
+    def test_derivative_and_signed_paths_never_replace_source(self):
+        source_path = "signing/session-123/source_agreement.docx"
+        preview_path = signing._signing_pdf_path(source_path)
+        signed_path = signing._signed_pdf_path(preview_path)
+
+        self.assertEqual(preview_path, "signing/session-123/signing_agreement.pdf")
+        self.assertEqual(signed_path, "signing/session-123/signed_agreement.pdf")
+        self.assertNotEqual(source_path, preview_path)
+        self.assertNotEqual(source_path, signed_path)
 
     def test_real_docx_is_converted_to_valid_pdf(self):
         document = Document()
@@ -119,7 +187,7 @@ class SigningPdfNormalizationTests(unittest.TestCase):
 
     def test_non_pdf_non_docx_upload_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Only valid PDF and DOCX"):
-            signing._normalize_upload_to_pdf(
+            signing._validate_source_attachment(
                 b"plain text",
                 "notes.txt",
                 "text/plain",

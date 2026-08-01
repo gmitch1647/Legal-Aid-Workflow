@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
@@ -106,6 +107,10 @@ def _in_app_request_detail(session: dict) -> dict:
         "created_at": session.get("created_at"),
         "signed_at": session.get("signed_at"),
         "has_signed_document": bool(session.get("signed_path")),
+        "has_source_attachment": bool(session.get("original_path")),
+        "source_file_name": Path(session.get("original_path", "document")).name
+            .removeprefix("source_")
+            .removeprefix("original_"),
     }
 
 
@@ -640,6 +645,55 @@ async def cancel_signature_request(
         pass
 
     return {"status": "cancelled"}
+
+
+# ---------------------------------------------------------------------------
+# GET /requests/{id}/source — download immutable original attachment
+# ---------------------------------------------------------------------------
+
+@router.get("/requests/{request_id}/source")
+async def download_original_attachment(
+    request_id: str,
+    authorization: str = Header(default=None),
+):
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+    in_app_session = _get_in_app_session(supabase, request_id)
+    if not in_app_session:
+        raise HTTPException(
+            status_code=404,
+            detail="Original attachment is available only for LegalFlow signing sessions.",
+        )
+
+    source_path = in_app_session.get("original_path")
+    if not source_path:
+        raise HTTPException(status_code=404, detail="Original attachment is not available.")
+
+    try:
+        source_bytes = supabase.storage.from_("documents").download(source_path)
+    except Exception as exc:
+        logger.exception("Could not download original signing attachment %s", request_id)
+        raise HTTPException(status_code=500, detail="Could not download original attachment.") from exc
+
+    if not source_bytes:
+        raise HTTPException(status_code=404, detail="Original attachment is empty or unavailable.")
+
+    file_name = Path(source_path).name.removeprefix("source_").removeprefix("original_")
+    safe_file_name = file_name.replace('"', "")
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if Path(file_name).suffix.lower() == ".docx"
+        else "application/pdf"
+        if Path(file_name).suffix.lower() == ".pdf"
+        else "application/octet-stream"
+    )
+    return Response(
+        content=source_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_file_name}"'},
+    )
 
 
 # ---------------------------------------------------------------------------

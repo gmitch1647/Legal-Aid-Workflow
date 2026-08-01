@@ -1007,6 +1007,15 @@ export async function cancelSignatureRequest(id) {
   return request(`/esign/requests/${id}/cancel`, { method: 'POST' });
 }
 
+export async function downloadOriginalAttachment(id) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/esign/requests/${id}/source`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error('Original attachment download failed');
+  return response.blob();
+}
+
 export async function downloadSignedDocument(id) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/esign/requests/${id}/download`, {

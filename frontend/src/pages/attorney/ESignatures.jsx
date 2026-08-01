@@ -8,7 +8,7 @@ import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
   sendDocumentForSignature, createSigningSession, testSigningStorage,
   getSignatureRequests, getSignatureRequest, remindSigner,
-  cancelSignatureRequest, downloadSignedDocument,
+  cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -82,17 +82,30 @@ export default function ESignatures() {
     }
   }
 
+  function saveDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleDownloadOriginal(id, fileName) {
+    try {
+      const blob = await downloadOriginalAttachment(id);
+      saveDownload(blob, fileName || `original-${id.slice(0, 8)}`);
+    } catch (err) {
+      alert('Original attachment download failed: ' + err.message);
+    }
+  }
+
   async function handleDownload(id) {
     try {
       const blob = await downloadSignedDocument(id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `signed-${id.slice(0, 8)}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      saveDownload(blob, `signed-${id.slice(0, 8)}.pdf`);
     } catch (err) {
       alert('Download failed: ' + err.message);
     }
@@ -275,6 +288,7 @@ export default function ESignatures() {
               loadData();
             } catch (err) { alert('Cancel failed: ' + err.message); }
           }}
+          onDownloadOriginal={() => handleDownloadOriginal(showDetailModal, detailData?.source_file_name)}
           onDownload={() => handleDownload(showDetailModal)}
         />
       )}
@@ -606,7 +620,7 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
 // Detail Modal
 // ---------------------------------------------------------------------------
 
-function DetailModal({ requestId, data, onClose, onCancel, onDownload }) {
+function DetailModal({ requestId, data, onClose, onCancel, onDownloadOriginal, onDownload }) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl max-w-md w-full">
@@ -685,10 +699,16 @@ function DetailModal({ requestId, data, onClose, onCancel, onDownload }) {
             )}
           </div>
           <div className="flex gap-2">
+            {data?.has_source_attachment && (
+              <button onClick={onDownloadOriginal}
+                className="px-4 py-2 border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 flex items-center gap-1.5">
+                <FileText className="w-4 h-4" /> Original
+              </button>
+            )}
             {data?.is_complete && (
               <button onClick={onDownload}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1.5">
-                <Download className="w-4 h-4" /> Download PDF
+                <Download className="w-4 h-4" /> Signed PDF
               </button>
             )}
             <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Close</button>

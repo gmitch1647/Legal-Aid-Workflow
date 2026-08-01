@@ -38,13 +38,14 @@ class _FakeQuery:
 
 
 class _FakeBucket:
-    def __init__(self, payload):
+    def __init__(self, payload, payloads=None):
         self.payload = payload
+        self.payloads = payloads or {}
         self.downloaded_path = None
 
     def download(self, path):
         self.downloaded_path = path
-        return self.payload
+        return self.payloads.get(path, self.payload)
 
 
 class _FakeStorage:
@@ -58,10 +59,11 @@ class _FakeStorage:
 
 
 class _FakeSupabase:
-    def __init__(self, session, signed_pdf=b"%PDF-1.7\ncompleted"):
+    def __init__(self, session, signed_pdf=b"%PDF-1.7\ncompleted", source_bytes=None):
         self.session_query = _FakeQuery([session])
         self.case_documents_query = _FakeQuery([])
-        self.storage = _FakeStorage(_FakeBucket(signed_pdf))
+        payloads = {session["original_path"]: source_bytes} if source_bytes is not None else {}
+        self.storage = _FakeStorage(_FakeBucket(signed_pdf, payloads))
 
     def table(self, table_name):
         if table_name == "signing_sessions":
@@ -102,6 +104,8 @@ class InAppEsignRouteTests(unittest.TestCase):
         self.assertEqual(detail["provider"], "legalflow")
         self.assertTrue(detail["is_complete"])
         self.assertTrue(detail["has_signed_document"])
+        self.assertTrue(detail["has_source_attachment"])
+        self.assertEqual(detail["source_file_name"], "agreement.pdf")
         self.assertEqual(detail["signatures"][0]["status"], "signed")
         self.assertEqual(detail["created_at"], self.session["created_at"])
 
@@ -125,6 +129,19 @@ class InAppEsignRouteTests(unittest.TestCase):
         self.assertEqual(response.media_type, "application/pdf")
         self.assertTrue(response.body.startswith(b"%PDF"))
         self.assertEqual(supabase.storage.bucket.downloaded_path, self.session["signed_path"])
+
+    def test_source_download_returns_unmodified_docx_attachment(self):
+        source_session = {**self.session, "original_path": "signing/session-123/source_agreement.docx"}
+        original_docx = b"PK\x03\x04same-original-docx-bytes"
+        supabase = _FakeSupabase(source_session, source_bytes=original_docx)
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", _attorney_user
+        ):
+            response = asyncio.run(esign.download_original_attachment("session-123", "Bearer token"))
+
+        self.assertEqual(response.media_type, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.assertEqual(response.body, original_docx)
+        self.assertEqual(supabase.storage.bucket.downloaded_path, source_session["original_path"])
 
     def test_signed_pdf_is_added_to_linked_case_document_list(self):
         supabase = _FakeSupabase(self.session)
