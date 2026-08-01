@@ -163,6 +163,53 @@ def _ensure_session_pdf(supabase, session: dict) -> str:
         raise RuntimeError(f"Could not prepare the document for signing: {exc}") from exc
 
 
+def _link_signed_pdf_to_case(
+    supabase,
+    session: dict,
+    signed_path: str,
+    signed_pdf: bytes,
+) -> None:
+    """Record a completed in-app signature in the linked case's document list.
+
+    Storage has already succeeded when this helper is called. Metadata failures are
+    logged, rather than invalidating the completed signature, so the attorney can
+    still retrieve the signed PDF from the e-sign dashboard.
+    """
+    case_id = session.get("case_id")
+    if not case_id:
+        return
+
+    try:
+        existing = (
+            supabase.table("case_documents")
+            .select("id")
+            .eq("case_id", case_id)
+            .eq("storage_path", signed_path)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return
+
+        original_name = Path(session.get("original_path", "document.pdf")).stem
+        file_name = f"signed_{original_name.removeprefix('original_')}.pdf"
+        supabase.table("case_documents").insert({
+            "case_id": case_id,
+            "file_name": file_name,
+            "file_type": "pdf",
+            "file_size": len(signed_pdf),
+            "storage_path": signed_path,
+            "document_category": "other",
+            "uploaded_by": session.get("sent_by"),
+        }).execute()
+    except Exception:
+        logger.exception(
+            "Signed PDF %s was stored but could not be added to case %s documents",
+            signed_path,
+            case_id,
+        )
+
+
 # ---------------------------------------------------------------------------
 # POST /create — attorney uploads a document and creates a signing session
 # ---------------------------------------------------------------------------
@@ -508,6 +555,8 @@ async def complete_signing(token: str, request: Request):
         "audit_trail": audit,
         "updated_at": now,
     }).eq("token", token).execute()
+
+    _link_signed_pdf_to_case(supabase, session, signed_path, signed_pdf)
 
     # Update the unified signature_requests table too
     try:

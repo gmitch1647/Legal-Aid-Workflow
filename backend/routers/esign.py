@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from utils.supabase_client import get_supabase
@@ -47,7 +48,7 @@ async def _get_current_user(authorization: str) -> dict:
 
 
 def _require_attorney(profile: dict):
-    if profile.get("role") != "attorney":
+    if profile.get("role") not in ("attorney", "staff_attorney"):
         raise HTTPException(status_code=403, detail="Attorney access required")
 
 
@@ -56,6 +57,77 @@ def _api_headers():
         "Authorization": f"Basic {_get_api_key()}",
         "Content-Type": "application/json",
     }
+
+
+IN_APP_SESSION_FIELDS = (
+    "id, token, title, document_type, signer_name, signer_email, status, "
+    "original_path, signed_path, signed_at, audit_trail, case_id, client_id, "
+    "sent_by, created_at, updated_at"
+)
+
+
+def _get_in_app_session(supabase, request_id: str) -> Optional[dict]:
+    """Return the LegalFlow-managed signing session for a shared request ID."""
+    response = (
+        supabase.table("signing_sessions")
+        .select(IN_APP_SESSION_FIELDS)
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def _in_app_request_detail(session: dict) -> dict:
+    """Normalize a LegalFlow signing session to the shared e-sign detail shape."""
+    session_status = session.get("status", "awaiting_signature")
+    is_complete = session_status in ("signed", "complete")
+    return {
+        "id": session["id"],
+        "provider": "legalflow",
+        "title": session.get("title", "Document for Signature"),
+        "is_complete": is_complete,
+        "has_error": False,
+        "signing_url": (
+            f"{os.environ.get('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/sign/{session['token']}"
+            if not is_complete and session_status != "cancelled"
+            else None
+        ),
+        "details_url": None,
+        "signatures": [
+            {
+                "signer_name": session.get("signer_name", ""),
+                "signer_email": session.get("signer_email", ""),
+                "status": "signed" if is_complete else session_status,
+                "signed_at": session.get("signed_at"),
+                "last_viewed_at": None,
+            }
+        ],
+        "created_at": session.get("created_at"),
+        "signed_at": session.get("signed_at"),
+        "has_signed_document": bool(session.get("signed_path")),
+    }
+
+
+async def _send_in_app_reminder(session: dict) -> None:
+    """Email a fresh LegalFlow signing link for an active in-app session."""
+    from utils.email_service import send_email
+
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    signing_url = f"{frontend_url}/sign/{session['token']}"
+    await send_email(
+        to=session["signer_email"],
+        subject=f"Reminder: Signature Required — {session.get('title', 'Document')}",
+        body=f"""
+        <div style="font-family:sans-serif;font-size:14px;line-height:1.6;max-width:500px;">
+            <h2 style="color:#1e40af;">Signature Reminder</h2>
+            <p>Hello {session.get('signer_name', '')},</p>
+            <p>Please review and sign <strong>{session.get('title', 'your document')}</strong>.</p>
+            <p><a href="{signing_url}" style="background:#2563eb;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">Review &amp; Sign Document</a></p>
+            <p style="color:#64748b;font-size:12px;">Or copy this link: {signing_url}</p>
+        </div>
+        """,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +500,11 @@ async def get_signature_request(
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
+    supabase = get_supabase()
+    in_app_session = _get_in_app_session(supabase, request_id)
+    if in_app_session:
+        return _in_app_request_detail(in_app_session)
+
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")
 
@@ -476,11 +553,22 @@ async def remind_signer(
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
+    supabase = get_supabase()
+    in_app_session = _get_in_app_session(supabase, request_id)
+    if in_app_session:
+        if in_app_session.get("status") not in ("awaiting_signature", "viewed"):
+            raise HTTPException(status_code=400, detail="Only pending in-app requests can be reminded.")
+        try:
+            await _send_in_app_reminder(in_app_session)
+        except Exception as exc:
+            logger.exception("Could not send in-app signing reminder for %s", request_id)
+            raise HTTPException(status_code=500, detail="Could not send signing reminder.") from exc
+        return {"status": "reminder_sent", "email": in_app_session["signer_email"]}
+
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")
 
     # Get the signer email from our DB
-    supabase = get_supabase()
     db_resp = supabase.table("signature_requests").select("signer_email").eq("id", request_id).execute()
     if not db_resp.data:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -512,6 +600,25 @@ async def cancel_signature_request(
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
+    supabase = get_supabase()
+    in_app_session = _get_in_app_session(supabase, request_id)
+    if in_app_session:
+        if in_app_session.get("status") in ("signed", "complete"):
+            raise HTTPException(status_code=400, detail="A completed in-app request cannot be cancelled.")
+        now = datetime.now(timezone.utc).isoformat()
+        supabase.table("signing_sessions").update({
+            "status": "cancelled",
+            "updated_at": now,
+        }).eq("id", request_id).execute()
+        try:
+            supabase.table("signature_requests").update({
+                "status": "cancelled",
+                "updated_at": now,
+            }).eq("id", request_id).execute()
+        except Exception:
+            logger.warning("Could not mirror cancellation for in-app signing session %s", request_id)
+        return {"status": "cancelled"}
+
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")
 
@@ -524,7 +631,6 @@ async def cancel_signature_request(
         if resp.status_code not in (200, 204):
             raise HTTPException(status_code=resp.status_code, detail="Failed to cancel request")
 
-    supabase = get_supabase()
     try:
         supabase.table("signature_requests").update({
             "status": "cancelled",
@@ -547,6 +653,25 @@ async def download_signed_document(
 ):
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
+
+    supabase = get_supabase()
+    in_app_session = _get_in_app_session(supabase, request_id)
+    if in_app_session:
+        signed_path = in_app_session.get("signed_path")
+        if not signed_path:
+            raise HTTPException(status_code=400, detail="Document has not been signed yet.")
+        try:
+            pdf_bytes = supabase.storage.from_("documents").download(signed_path)
+        except Exception as exc:
+            logger.exception("Could not download in-app signed document %s", request_id)
+            raise HTTPException(status_code=500, detail="Could not download signed document.") from exc
+        if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+            raise HTTPException(status_code=500, detail="Stored signed document is not a valid PDF.")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=signed-{request_id[:8]}.pdf"},
+        )
 
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")

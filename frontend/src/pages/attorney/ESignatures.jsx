@@ -147,7 +147,7 @@ export default function ESignatures() {
       {!configured && (
         <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           <AlertCircle className="w-4 h-4 inline mr-2" />
-          <strong>Dropbox Sign not configured.</strong> Add your <code className="bg-amber-100 px-1 rounded">DROPBOX_SIGN_API_KEY</code> environment variable in Railway to enable e-signatures.
+          <strong>Dropbox Sign templates are not configured.</strong> LegalFlow’s built-in upload signer is still available; add <code className="bg-amber-100 px-1 rounded">DROPBOX_SIGN_API_KEY</code> only if you want to use external Dropbox Sign templates.
         </div>
       )}
 
@@ -668,7 +668,7 @@ function DetailModal({ requestId, data, onClose, onCancel, onDownload }) {
 
               {data.created_at && (
                 <div className="text-xs text-slate-400">
-                  Sent: {new Date(data.created_at * 1000).toLocaleString()}
+                  Sent: {new Date(typeof data.created_at === 'number' ? data.created_at * 1000 : data.created_at).toLocaleString()}
                 </div>
               )}
             </div>
