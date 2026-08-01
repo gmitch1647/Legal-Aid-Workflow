@@ -1037,6 +1037,10 @@ export async function createW9Request(data) {
   });
 }
 
+export async function inspectW9Prefill(caseId) {
+  return request(`/w9/attorney/prefill?case_id=${encodeURIComponent(caseId)}`);
+}
+
 export async function listW9Requests() {
   return request('/w9/attorney/requests');
 }

@@ -11,6 +11,7 @@ import base64
 import io
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,30 @@ W9_FORM_REVISION = "March 2024"
 DEFAULT_EXPIRY_DAYS = 14
 MAX_EXPIRY_DAYS = 30
 MAX_SIGNATURE_BYTES = 750_000
+MAX_PREFILL_DOCUMENTS = 20
+MAX_PREFILL_DOCUMENT_CHARS = 100_000
+PREFILL_TEXT_FILE_TYPES = {
+    "pdf",
+    "application/pdf",
+    "docx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "txt",
+    "text",
+    "text/plain",
+    "csv",
+    "text/csv",
+}
+
+# A TIN is accepted from a case file only when it appears next to an explicit
+# taxpayer-ID label. Bare nine-digit strings (case numbers, accounts, etc.) are
+# deliberately ignored. This scanner is deterministic and never sends case-file
+# content to an external model.
+TAXPAYER_ID_PATTERN = re.compile(
+    r"(?im)\b(?P<label>social\s+security(?:\s+number)?|ssn|employer\s+identification(?:\s+number)?|ein|taxpayer\s+identification(?:\s+number)?|tin)\b\s*(?:no\.?|number|#)?\s*[:#-]?\s*(?P<tin>\d{3}[- ]?\d{2}[- ]?\d{4}|\d{2}[- ]?\d{7}|\d{9})\b"
+)
+TAXPAYER_NAME_PATTERN = re.compile(
+    r"(?im)^\s*(?:taxpayer\s+)?(?:full\s+|legal\s+)?name\s*[:\-]\s*(?P<name>[^\n]{2,160})$"
+)
 
 TAX_CLASSIFICATIONS = {
     "individual",
@@ -102,6 +127,123 @@ def _encrypt_tin(tin: str) -> str:
 def _mask_tin(tin: str, tin_type: str) -> str:
     suffix = tin[-4:]
     return f"***-**-{suffix}" if tin_type == "ssn" else f"**-***{suffix}"
+
+
+def _normalize_tin(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    digits = "".join(character for character in value if character.isdigit())
+    if len(digits) != 9:
+        raise ValueError("Enter a valid 9-digit Social Security Number or Employer Identification Number.")
+    return digits
+
+
+def _detect_tin_from_text(text: str) -> Optional[dict]:
+    """Find one labeled SSN/EIN without retaining unrelated file content."""
+    for match in TAXPAYER_ID_PATTERN.finditer(text[:MAX_PREFILL_DOCUMENT_CHARS]):
+        label = match.group("label").lower()
+        raw_tin = match.group("tin")
+        digits = _normalize_tin(raw_tin)
+        if not digits:
+            continue
+        if "social" in label or label == "ssn":
+            tin_type = "ssn"
+        elif "employer" in label or label == "ein":
+            tin_type = "ein"
+        elif re.fullmatch(r"\d{3}[- ]\d{2}[- ]\d{4}", raw_tin):
+            tin_type = "ssn"
+        elif re.fullmatch(r"\d{2}[- ]\d{7}", raw_tin):
+            tin_type = "ein"
+        else:
+            # A generic TIN label plus unformatted digits is too ambiguous to
+            # safely guess whether it is an SSN or an EIN.
+            continue
+        return {"tin": digits, "tin_type": tin_type}
+    return None
+
+
+def _detect_legal_name_from_text(text: str) -> Optional[str]:
+    """Return a conservatively labeled taxpayer name, if present."""
+    for match in TAXPAYER_NAME_PATTERN.finditer(text[:MAX_PREFILL_DOCUMENT_CHARS]):
+        candidate = " ".join(match.group("name").strip().split())
+        if 2 <= len(candidate) <= 160 and not any(marker in candidate.lower() for marker in ("http://", "https://", "@")):
+            return candidate
+    return None
+
+
+def _case_file_prefill(supabase, case_id: Optional[str], client_id: Optional[str]) -> dict:
+    """Collect minimal, non-logged prefill candidates from safe text files.
+
+    Image documents are skipped deliberately: the existing image reader can use
+    third-party vision extraction, while W-9 prefill must not transmit taxpayer
+    identifiers outside LegalFlow merely to discover a candidate.
+    """
+    result = {"legal_name": None, "tin": None, "tin_type": None, "sources": {}}
+    if client_id:
+        profile_result = (
+            supabase.table("profiles")
+            .select("full_name,email")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+        )
+        if profile_result.data:
+            profile = profile_result.data[0]
+            legal_name = (profile.get("full_name") or "").strip()
+            if legal_name:
+                result["legal_name"] = legal_name
+                result["sources"]["legal_name"] = {"kind": "client_profile"}
+            result["signer_name"] = legal_name
+            result["signer_email"] = (profile.get("email") or "").strip()
+
+    if not case_id:
+        return result
+
+    documents = (
+        supabase.table("case_documents")
+        .select("file_name,file_type,storage_path")
+        .eq("case_id", case_id)
+        .order("created_at", desc=True)
+        .limit(MAX_PREFILL_DOCUMENTS)
+        .execute()
+    )
+    if not documents.data:
+        return result
+
+    from utils.document_reader import read_document
+
+    for document in documents.data:
+        file_type = (document.get("file_type") or "").lower().strip()
+        if file_type not in PREFILL_TEXT_FILE_TYPES:
+            continue
+        try:
+            text = read_document(document["storage_path"], file_type)
+        except Exception:
+            logger.warning("Unable to inspect a case file for W-9 prefill")
+            continue
+        if not text:
+            continue
+        file_name = _safe_filename(document.get("file_name") or "case file")
+        if not result["legal_name"]:
+            detected_name = _detect_legal_name_from_text(text)
+            if detected_name:
+                result["legal_name"] = detected_name
+                result["sources"]["legal_name"] = {"kind": "case_file", "file_name": file_name}
+        if not result["tin"]:
+            detected_tin = _detect_tin_from_text(text)
+            if detected_tin:
+                result.update(detected_tin)
+                result["sources"]["tin"] = {"kind": "case_file", "file_name": file_name}
+        if result["legal_name"] and result["tin"]:
+            break
+    return result
+
+
+def _get_w9_case(supabase, case_id: str) -> dict:
+    result = supabase.table("cases").select("id,client_id").eq("id", case_id).limit(1).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Related case not found.")
+    return result.data[0]
 
 
 def _audit_client_ip(request: Request) -> tuple[str, str]:
@@ -313,12 +455,48 @@ class W9CreateRequest(BaseModel):
     signer_email: EmailStr
     case_id: Optional[str] = None
     client_id: Optional[str] = None
+    prefilled_legal_name: Optional[str] = Field(default=None, max_length=160)
+    prefilled_tin: Optional[str] = Field(default=None, max_length=32)
+    prefilled_tin_type: Optional[Literal["ssn", "ein"]] = None
+    use_detected_legal_name: bool = False
+    use_detected_tin: bool = False
     title: str = Field(default="Form W-9 — Taxpayer Information and Certification", min_length=1, max_length=200)
     message: str = Field(
         default="Please complete and sign the requested Form W-9. Your taxpayer identification number is encrypted and retained only in LegalFlow's private records.",
         max_length=2000,
     )
     expires_in_days: int = Field(default=DEFAULT_EXPIRY_DAYS, ge=1, le=MAX_EXPIRY_DAYS)
+
+
+class W9PublicSubmission(BaseModel):
+    """Fields supplied by the token holder; name and TIN may be server-locked."""
+
+    legal_name: Optional[str] = Field(default=None, max_length=160)
+    business_name: Optional[str] = Field(default=None, max_length=160)
+    tax_classification: Literal[
+        "individual", "c_corporation", "s_corporation", "partnership", "trust_estate", "llc", "other"
+    ]
+    llc_tax_classification: Optional[Literal["C", "S", "P"]] = None
+    address_line1: str = Field(min_length=1, max_length=160)
+    address_line2: Optional[str] = Field(default=None, max_length=160)
+    city: str = Field(min_length=1, max_length=80)
+    state: str = Field(min_length=2, max_length=32)
+    zip_code: str = Field(min_length=3, max_length=16)
+    tin_type: Optional[Literal["ssn", "ein"]] = None
+    tin: Optional[str] = Field(default=None, max_length=32)
+    typed_name: str = Field(min_length=1, max_length=160)
+    signature: str = Field(min_length=32)
+    certification_accepted: bool
+
+    @field_validator("tin")
+    @classmethod
+    def normalize_optional_tin(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_tin(value)
+
+    @field_validator("business_name", "address_line2")
+    @classmethod
+    def empty_optional_text_is_none(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() if value and value.strip() else None
 
 
 class W9Submission(BaseModel):
@@ -365,6 +543,70 @@ class W9Submission(BaseModel):
         return self.tin
 
 
+def _resolve_w9_submission(request_row: dict, payload: W9PublicSubmission, cipher: Fernet) -> W9Submission:
+    """Merge public fields with server-locked name/TIN before PDF generation."""
+    legal_name = (request_row.get("prefilled_legal_name") or payload.legal_name or "").strip()
+    if not legal_name:
+        raise HTTPException(status_code=422, detail="Enter the name shown on the taxpayer's income tax return.")
+
+    if request_row.get("prefilled_tin_ciphertext"):
+        try:
+            tin = cipher.decrypt(request_row["prefilled_tin_ciphertext"].encode("utf-8")).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError) as exc:
+            logger.error("Stored W-9 prefill could not be decrypted for request %s", request_row.get("id"))
+            raise HTTPException(status_code=500, detail="The securely stored taxpayer ID could not be used.") from exc
+        tin_type = request_row.get("prefilled_tin_type")
+    else:
+        tin = payload.tin
+        tin_type = payload.tin_type
+
+    if not tin or not tin_type:
+        raise HTTPException(status_code=422, detail="Enter a 9-digit Social Security Number or Employer Identification Number.")
+
+    try:
+        return W9Submission(
+            legal_name=legal_name,
+            business_name=payload.business_name,
+            tax_classification=payload.tax_classification,
+            llc_tax_classification=payload.llc_tax_classification,
+            address_line1=payload.address_line1,
+            address_line2=payload.address_line2,
+            city=payload.city,
+            state=payload.state,
+            zip_code=payload.zip_code,
+            tin_type=tin_type,
+            tin=tin,
+            typed_name=payload.typed_name,
+            signature=payload.signature,
+            certification_accepted=payload.certification_accepted,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/attorney/prefill")
+async def inspect_w9_prefill(
+    case_id: str,
+    authorization: str = Header(default=None),
+):
+    """Return only masked, attorney-safe prefill candidates for a related case."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+    case = _get_w9_case(supabase, case_id)
+    prefill = _case_file_prefill(supabase, case_id, case.get("client_id"))
+    tin = prefill.pop("tin", None)
+    return {
+        "legal_name": prefill.get("legal_name"),
+        "tin_available": bool(tin),
+        "tin_type": prefill.get("tin_type") if tin else None,
+        "tin_last4": tin[-4:] if tin else None,
+        "sources": prefill.get("sources") or {},
+        "signer_name": prefill.get("signer_name") or "",
+        "signer_email": prefill.get("signer_email") or "",
+    }
+
+
 @router.post("/create")
 async def create_w9_request(
     payload: W9CreateRequest,
@@ -373,9 +615,51 @@ async def create_w9_request(
     """Create an attorney-authorized W-9 signing request and send a tokenized link."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
-    _cipher()  # Fail before an email is sent if sensitive storage is not configured.
+    cipher = _cipher()  # Fail before an email is sent if sensitive storage is not configured.
 
     supabase = get_supabase()
+    case_id = payload.case_id
+    client_id = payload.client_id
+    if case_id:
+        related_case = _get_w9_case(supabase, case_id)
+        client_id = related_case.get("client_id")
+
+    detected = _case_file_prefill(supabase, case_id, client_id)
+    manual_name = (payload.prefilled_legal_name or "").strip() or None
+    manual_tin = _normalize_tin(payload.prefilled_tin)
+    if manual_tin and not payload.prefilled_tin_type:
+        raise HTTPException(status_code=422, detail="Choose whether the attorney-entered taxpayer ID is an SSN or EIN.")
+    if payload.prefilled_tin_type and not manual_tin:
+        raise HTTPException(status_code=422, detail="Enter the taxpayer ID before choosing its type.")
+    if manual_tin and payload.use_detected_tin:
+        raise HTTPException(status_code=422, detail="Choose either the detected taxpayer ID or a manual taxpayer ID, not both.")
+
+    prefilled_legal_name = manual_name or (detected.get("legal_name") if payload.use_detected_legal_name else None)
+    if manual_tin:
+        prefilled_tin = manual_tin
+        prefilled_tin_type = payload.prefilled_tin_type
+        tin_source = {"kind": "manual_attorney_entry"}
+    elif payload.use_detected_tin:
+        prefilled_tin = detected.get("tin")
+        prefilled_tin_type = detected.get("tin_type")
+        tin_source = (detected.get("sources") or {}).get("tin")
+        if not prefilled_tin or not prefilled_tin_type:
+            raise HTTPException(status_code=422, detail="No labeled taxpayer ID was found in the selected case files. Enter it manually or leave it for the signer.")
+    else:
+        prefilled_tin = None
+        prefilled_tin_type = None
+        tin_source = None
+
+    prefill_sources = {}
+    if prefilled_legal_name:
+        prefill_sources["legal_name"] = (
+            {"kind": "manual_attorney_entry"}
+            if manual_name
+            else (detected.get("sources") or {}).get("legal_name", {"kind": "case_file"})
+        )
+    if tin_source:
+        prefill_sources["tin"] = tin_source
+
     request_id = str(uuid.uuid4())
     token = _token()
     now = _now()
@@ -386,11 +670,16 @@ async def create_w9_request(
         "title": payload.title,
         "signer_name": payload.signer_name,
         "signer_email": str(payload.signer_email),
-        "case_id": payload.case_id,
-        "client_id": payload.client_id,
+        "case_id": case_id,
+        "client_id": client_id,
         "sent_by": profile["id"],
         "attorney_name": profile.get("full_name", ""),
         "message": payload.message,
+        "prefilled_legal_name": prefilled_legal_name,
+        "prefilled_tin_ciphertext": cipher.encrypt(prefilled_tin.encode("utf-8")).decode("utf-8") if prefilled_tin else None,
+        "prefilled_tin_type": prefilled_tin_type,
+        "prefilled_tin_last4": prefilled_tin[-4:] if prefilled_tin else None,
+        "prefill_sources": prefill_sources,
         "status": "awaiting_submission",
         "expires_at": expires_at.isoformat(),
         "created_at": now.isoformat(),
@@ -444,6 +733,13 @@ async def get_public_w9_request(token: str):
         "status": record["status"],
         "expires_at": record.get("expires_at"),
         "form_revision": W9_FORM_REVISION,
+        "prefill": {
+            "legal_name": record.get("prefilled_legal_name") or None,
+            "legal_name_locked": bool(record.get("prefilled_legal_name")),
+            "tin_locked": bool(record.get("prefilled_tin_ciphertext")),
+            "tin_type": record.get("prefilled_tin_type") if record.get("prefilled_tin_ciphertext") else None,
+            "tin_last4": record.get("prefilled_tin_last4") if record.get("prefilled_tin_ciphertext") else None,
+        },
         "official_form_url": "https://www.irs.gov/pub/irs-pdf/fw9.pdf",
     }
 
@@ -462,17 +758,18 @@ async def download_public_w9_template(token: str):
 
 
 @router.post("/{token}/complete")
-async def complete_w9_request(token: str, payload: W9Submission, request: Request):
-    """Encrypt the TIN, render the signed official W-9, and close the one-time request."""
+async def complete_w9_request(token: str, payload: W9PublicSubmission, request: Request):
+    """Render a signed W-9 using locked data when the attorney prefilled it."""
     supabase = get_supabase()
     request_row = _validate_token_session(supabase, token)
     cipher = _cipher()
-    signature_bytes = _decode_signature(payload.signature)
+    submission = _resolve_w9_submission(request_row, payload, cipher)
+    signature_bytes = _decode_signature(submission.signature)
 
     # Generate the document before writing sensitive database values. No TIN is
     # logged, returned, or kept in server-side request state after this handler.
     try:
-        completed_pdf = _render_official_w9(payload, signature_bytes)
+        completed_pdf = _render_official_w9(submission, signature_bytes)
     except Exception as exc:
         logger.exception("Could not render the completed official W-9")
         raise HTTPException(status_code=500, detail="Could not generate the completed Form W-9.") from exc
@@ -481,7 +778,7 @@ async def complete_w9_request(token: str, payload: W9Submission, request: Reques
     storage_path = f"w9/{request_row['id']}/completed_form_w9.pdf"
     now = _iso_now()
     ip_address, ip_source = _audit_client_ip(request)
-    encrypted_tin = cipher.encrypt(payload.tin_digits.encode("utf-8")).decode("utf-8")
+    encrypted_tin = cipher.encrypt(submission.tin_digits.encode("utf-8")).decode("utf-8")
     audit = {
         "submitted_at": now,
         "signer_ip": ip_address,
@@ -505,18 +802,18 @@ async def complete_w9_request(token: str, payload: W9Submission, request: Reques
         supabase.table("w9_submissions").insert({
             "id": submission_id,
             "request_id": request_row["id"],
-            "legal_name": payload.legal_name,
-            "business_name": payload.business_name,
-            "tax_classification": payload.tax_classification,
-            "llc_tax_classification": payload.llc_tax_classification,
-            "address_line1": payload.address_line1,
-            "address_line2": payload.address_line2,
-            "city": payload.city,
-            "state": payload.state,
-            "zip_code": payload.zip_code,
-            "tin_type": payload.tin_type,
+            "legal_name": submission.legal_name,
+            "business_name": submission.business_name,
+            "tax_classification": submission.tax_classification,
+            "llc_tax_classification": submission.llc_tax_classification,
+            "address_line1": submission.address_line1,
+            "address_line2": submission.address_line2,
+            "city": submission.city,
+            "state": submission.state,
+            "zip_code": submission.zip_code,
+            "tin_type": submission.tin_type,
             "tin_ciphertext": encrypted_tin,
-            "tin_last4": payload.tin_digits[-4:],
+            "tin_last4": submission.tin_digits[-4:],
             "completed_pdf_path": storage_path,
             "audit_trail": audit,
             "submitted_at": now,
@@ -551,11 +848,11 @@ async def complete_w9_request(token: str, payload: W9Submission, request: Reques
             frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
             await send_email(
                 to=attorney.data[0]["email"],
-                subject=f"Completed W-9: {payload.legal_name}",
+                subject=f"Completed W-9: {submission.legal_name}",
                 body=f"""
                 <div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;\">
                   <h2 style=\"color:#059669;\">Form W-9 Completed</h2>
-                  <p>{payload.legal_name} completed the requested Form W-9.</p>
+                  <p>{submission.legal_name} completed the requested Form W-9.</p>
                   <p>The completed document is available only in LegalFlow's protected W-9 records.</p>
                   <p><a href=\"{frontend_url}/attorney/w9\">View W-9 Records</a></p>
                 </div>
@@ -597,6 +894,7 @@ async def get_w9_request_detail(request_id: str, authorization: str = Header(def
     )
     row["submission"] = submission_result.data[0] if submission_result.data else None
     row.pop("token", None)
+    row.pop("prefilled_tin_ciphertext", None)
     return row
 
 

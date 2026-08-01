@@ -24,5 +24,9 @@ The official form says to give Form W-9 to the requester, not the IRS. LegalFlow
 - Restrict each W-9 request and submission to the attorney who created it; enforce that boundary in both Supabase row-level security and the service-role backend, which bypasses row-level security by design.
 - Retain signer IP, user agent, timestamp, and token use in an audit record only; do not print them on the W-9 PDF.
 - Use a one-time, expiring signing token for W-9 collection.
+- When an attorney chooses a related case, inspect only supported text-based documents and accept a taxpayer ID only when it appears beside an explicit SSN, EIN, or TIN label. Bare nine-digit strings are never treated as taxpayer IDs.
+- Do not use image/vision extraction or an external model to discover W-9 prefill candidates, because that would transmit sensitive taxpayer information outside LegalFlow.
+- Return only a detected name, ID type, masked four-digit suffix, and non-sensitive source description to the attorney UI. The full detected taxpayer ID remains server-side until it is encrypted into the request record.
+- Resolve locked prefill values entirely on the server when the signer submits the form. The public page receives neither a raw nor encrypted taxpayer ID and cannot override attorney-selected fields.
 
 Last reviewed: 2026-08-01

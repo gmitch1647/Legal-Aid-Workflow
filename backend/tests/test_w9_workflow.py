@@ -123,6 +123,68 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertEqual(tin_box_text.count("0"), 9)
         self.assertNotIn("203.0.113.10", text)
 
+    def test_case_file_scanner_accepts_only_labeled_taxpayer_ids(self):
+        detected_ssn = w9._detect_tin_from_text("Legal Name: Taylor Taxpayer\nSSN: 123-45-6789")
+        detected_ein = w9._detect_tin_from_text("Employer Identification Number: 12-3456789")
+
+        self.assertEqual(detected_ssn, {"tin": "123456789", "tin_type": "ssn"})
+        self.assertEqual(detected_ein, {"tin": "123456789", "tin_type": "ein"})
+        self.assertIsNone(w9._detect_tin_from_text("Account number: 123456789"))
+        self.assertEqual(w9._detect_legal_name_from_text("Legal Name: Taylor Taxpayer"), "Taylor Taxpayer")
+
+    def test_server_locked_prefill_overrides_public_name_and_tin(self):
+        key = Fernet.generate_key().decode("utf-8")
+        public_payload = w9.W9PublicSubmission(
+            legal_name="Attempted Replacement",
+            business_name="",
+            tax_classification="individual",
+            address_line1="123 Main Street",
+            address_line2="",
+            city="Austin",
+            state="TX",
+            zip_code="78701",
+            tin_type="ein",
+            tin="12-3456789",
+            typed_name="Taylor Taxpayer",
+            signature="data:image/png;base64,aGVsbG8td29ybGQtaW1hZ2U=",
+            certification_accepted=True,
+        )
+        with patch.dict(os.environ, {"W9_ENCRYPTION_KEY": key}):
+            cipher = w9._cipher()
+            request_row = {
+                "id": "request-1",
+                "prefilled_legal_name": "Taylor Taxpayer",
+                "prefilled_tin_ciphertext": cipher.encrypt(b"123456789").decode("utf-8"),
+                "prefilled_tin_type": "ssn",
+            }
+            resolved = w9._resolve_w9_submission(request_row, public_payload, cipher)
+
+        self.assertEqual(resolved.legal_name, "Taylor Taxpayer")
+        self.assertEqual(resolved.tin_digits, "123456789")
+        self.assertEqual(resolved.tin_type, "ssn")
+
+    def test_unprefilled_public_fields_remain_available_to_signer(self):
+        payload = w9.W9PublicSubmission(
+            legal_name="Signer Provided Name",
+            business_name="",
+            tax_classification="individual",
+            address_line1="123 Main Street",
+            address_line2="",
+            city="Austin",
+            state="TX",
+            zip_code="78701",
+            tin_type="ein",
+            tin="12-3456789",
+            typed_name="Signer Provided Name",
+            signature="data:image/png;base64,aGVsbG8td29ybGQtaW1hZ2U=",
+            certification_accepted=True,
+        )
+        resolved = w9._resolve_w9_submission({}, payload, Fernet(Fernet.generate_key()))
+
+        self.assertEqual(resolved.legal_name, "Signer Provided Name")
+        self.assertEqual(resolved.tin_type, "ein")
+        self.assertEqual(resolved.tin_digits, "123456789")
+
     def test_service_role_w9_lookup_is_scoped_to_creating_attorney(self):
         supabase = _FakeOwnedW9Supabase([{"id": "request-1", "sent_by": "attorney-1"}])
 
