@@ -551,17 +551,25 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
             )}
           </div>
 
-          {/* Case picker */}
-          {cases.length > 0 && (
+          {/* Case picker — always show after client is selected */}
+          {selectedClientId && (
             <div>
-              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Link to Case</label>
-              <select value={caseId} onChange={(e) => setCaseId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">-- No case --</option>
-                {cases.map(c => (
-                  <option key={c.id} value={c.id}>{c.plaintiff_name || 'Untitled'} ({c.status})</option>
-                ))}
-              </select>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Link to Case *</label>
+              {cases.length > 0 ? (
+                <select value={caseId} onChange={(e) => setCaseId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">-- Select a case --</option>
+                  {cases.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.plaintiff_name || 'Untitled'} — {c.status} ({new Date(c.created_at).toLocaleDateString()})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2 border border-amber-200">
+                  No cases found for this client.
+                </p>
+              )}
             </div>
           )}
 
