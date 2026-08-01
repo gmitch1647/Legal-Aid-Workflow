@@ -535,9 +535,15 @@ async def complete_signing(token: str, request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid signature data.")
 
-    # Embed the signature into the PDF
+    # Embed the signature into detected execution fields and retain the placement audit.
     try:
-        signed_pdf = _embed_signature(file_bytes, sig_bytes, typed_name, session["signer_name"])
+        signed_pdf, signature_placement = _embed_signature(
+            file_bytes,
+            sig_bytes,
+            typed_name,
+            session["signer_name"],
+            return_placement=True,
+        )
     except Exception as e:
         logger.error("Failed to embed signature: %s", e)
         raise HTTPException(status_code=500, detail=f"Signature embedding failed: {e}")
@@ -565,6 +571,7 @@ async def complete_signing(token: str, request: Request):
         "ip_address": client_ip,
         "user_agent": request.headers.get("user-agent", ""),
         "signed_at": now,
+        "signature_placement": signature_placement,
     }
 
     supabase.table("signing_sessions").update({
@@ -652,55 +659,168 @@ async def download_signed_pdf(token: str, authorization: str = Header(default=No
 # Helper — embed signature image into PDF using PyMuPDF (fitz)
 # ---------------------------------------------------------------------------
 
-def _embed_signature(pdf_bytes: bytes, sig_image_bytes: bytes, typed_name: str, signer_name: str) -> bytes:
-    """Overlay a signature image + typed name + date onto the last page of a PDF."""
+def _execution_block_placement(doc) -> Optional[dict]:
+    """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
+
+    The detector intentionally chooses the leftmost paired fields in the lower
+    portion of a page. This matches common settlement-agreement layouts while
+    avoiding a company-side execution block that is typically positioned right.
+    """
+    import fitz  # PyMuPDF
+
+    for page in reversed(doc):
+        page_rect = page.rect
+        by_labels = [
+            rect for rect in page.search_for("By:")
+            if rect.y0 >= page_rect.height * 0.55
+        ]
+        date_labels = [
+            rect for rect in page.search_for("Date:")
+            if rect.y0 >= page_rect.height * 0.55
+        ]
+        if not by_labels or not date_labels:
+            continue
+
+        candidates = []
+        for by_rect in by_labels:
+            matching_dates = [
+                date_rect for date_rect in date_labels
+                if date_rect.y0 > by_rect.y0
+                and date_rect.y0 - by_rect.y0 <= 105
+                and abs(date_rect.x0 - by_rect.x0) <= 24
+            ]
+            if matching_dates:
+                candidates.append((by_rect, min(matching_dates, key=lambda rect: rect.y0)))
+        if not candidates:
+            continue
+
+        # The leftmost paired execution fields are the client-facing block.
+        by_rect, date_rect = min(candidates, key=lambda pair: (pair[0].x0, pair[0].y0))
+        next_column = min(
+            (candidate_by.x0 for candidate_by, _ in candidates if candidate_by.x0 > by_rect.x0 + 80),
+            default=page_rect.width - 54,
+        )
+        field_left = by_rect.x1 + 10
+        # Execution lines are commonly shorter than the space between columns;
+        # keep the artwork within the client line instead of spanning the gap.
+        field_right = min(next_column - 24, field_left + 155)
+        date_x = max(field_left, date_rect.x1 + 10)
+        if field_right - field_left < 80:
+            continue
+
+        # The signature artwork sits just above the existing `By:` line, while
+        # the written date fills the existing `Date:` line instead of adding a
+        # new date label elsewhere on the page.
+        signature_rect = fitz.Rect(
+            field_left,
+            max(by_rect.y0 - 24, 36),
+            field_right,
+            max(by_rect.y1 - 2, by_rect.y0 + 14),
+        )
+        return {
+            "strategy": "detected_execution_block",
+            "page": page.number,
+            "signature_rect": [
+                round(signature_rect.x0, 2), round(signature_rect.y0, 2),
+                round(signature_rect.x1, 2), round(signature_rect.y1, 2),
+            ],
+            "date_origin": [round(date_x, 2), round(date_rect.y1 - 2, 2)],
+        }
+    return None
+
+
+def _fallback_placement(page) -> dict:
+    """Return the legacy last-page placement only when no execution block is found."""
+    page_rect = page.rect
+    sig_x = 72
+    sig_y = page_rect.height - 120
+    return {
+        "strategy": "fallback_last_page",
+        "page": page.number,
+        "signature_rect": [sig_x, sig_y, sig_x + 200, sig_y + 50],
+        "date_origin": [sig_x + 280, sig_y + 70],
+    }
+
+
+def _embed_signature(
+    pdf_bytes: bytes,
+    sig_image_bytes: bytes,
+    typed_name: str,
+    signer_name: str,
+    return_placement: bool = False,
+):
+    """Embed a signature in detected execution fields, with a safe visual fallback."""
     import fitz  # PyMuPDF
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    last_page = doc[-1]
-    page_rect = last_page.rect
-
-    sig_x = 72
-    sig_y = page_rect.height - 120
-    line_width = 250
     date_str = datetime.now(timezone.utc).strftime("%m/%d/%Y")
     display_name = typed_name or signer_name
+    placement = _execution_block_placement(doc)
+    if placement is None:
+        placement = _fallback_placement(doc[-1])
+        logger.info("No execution block detected; using last-page fallback placement")
+    else:
+        logger.info(
+            "Detected client execution block on page %s at %s",
+            placement["page"] + 1,
+            placement["signature_rect"],
+        )
 
-    # Draw signature line
-    last_page.draw_line(
-        fitz.Point(sig_x, sig_y + 55),
-        fitz.Point(sig_x + line_width, sig_y + 55),
-        color=(0, 0, 0), width=0.5,
-    )
+    page = doc[placement["page"]]
+    sig_rect = fitz.Rect(placement["signature_rect"])
+    date_x, date_y = placement["date_origin"]
 
-    # Embed signature image above the line
     try:
-        sig_rect = fitz.Rect(sig_x, sig_y, sig_x + 200, sig_y + 50)
-        last_page.insert_image(sig_rect, stream=sig_image_bytes)
-    except Exception as e:
-        logger.warning("Could not embed signature image: %s", e)
+        page.insert_image(sig_rect, stream=sig_image_bytes)
+    except Exception as exc:
+        logger.warning("Could not embed signature image: %s", exc)
+        page.insert_text(
+            fitz.Point(sig_rect.x0, sig_rect.y1 - 2),
+            display_name,
+            fontsize=9,
+            fontname="helv",
+            color=(0, 0, 0),
+        )
 
-    # Typed name below signature line
-    last_page.insert_text(
-        fitz.Point(sig_x, sig_y + 70),
-        display_name,
-        fontsize=10, fontname="helv", color=(0, 0, 0),
-    )
-
-    # Date on the right
-    last_page.insert_text(
-        fitz.Point(sig_x + line_width + 30, sig_y + 70),
-        f"Date: {date_str}",
-        fontsize=10, fontname="helv", color=(0, 0, 0),
-    )
-
-    # "Electronically signed" notice
-    last_page.insert_text(
-        fitz.Point(sig_x, sig_y + 85),
-        f"Electronically signed via LegalFlow on {date_str}",
-        fontsize=7, fontname="helv", color=(0.4, 0.4, 0.4),
-    )
+    if placement["strategy"] == "detected_execution_block":
+        page.insert_text(
+            fitz.Point(date_x, date_y),
+            date_str,
+            fontsize=10,
+            fontname="helv",
+            color=(0, 0, 0),
+        )
+    else:
+        page.draw_line(
+            fitz.Point(sig_rect.x0, sig_rect.y1 + 5),
+            fitz.Point(sig_rect.x1 + 50, sig_rect.y1 + 5),
+            color=(0, 0, 0),
+            width=0.5,
+        )
+        page.insert_text(
+            fitz.Point(sig_rect.x0, sig_rect.y1 + 20),
+            display_name,
+            fontsize=10,
+            fontname="helv",
+            color=(0, 0, 0),
+        )
+        page.insert_text(
+            fitz.Point(date_x, date_y),
+            f"Date: {date_str}",
+            fontsize=10,
+            fontname="helv",
+            color=(0, 0, 0),
+        )
+        page.insert_text(
+            fitz.Point(sig_rect.x0, sig_rect.y1 + 35),
+            f"Electronically signed via LegalFlow on {date_str}",
+            fontsize=7,
+            fontname="helv",
+            color=(0.4, 0.4, 0.4),
+        )
 
     output = doc.tobytes(deflate=True)
     doc.close()
+    if return_placement:
+        return output, placement
     return output

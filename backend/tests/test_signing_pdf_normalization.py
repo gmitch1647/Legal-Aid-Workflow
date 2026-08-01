@@ -1,13 +1,16 @@
 """Regression tests for immutable source attachments and signing-PDF derivatives."""
 
 import asyncio
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import fitz
 from docx import Document
+from PIL import Image
 
 from routers import signing
 
@@ -172,6 +175,69 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(signed_path, "signing/session-123/signed_agreement.pdf")
         self.assertNotEqual(source_path, preview_path)
         self.assertNotEqual(source_path, signed_path)
+
+    def _two_party_execution_pdf(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((100, 590), "CLIENT EXAMPLE", fontsize=11)
+        page.insert_text((100, 625), "By:", fontsize=11)
+        page.insert_text((100, 655), "Date:", fontsize=11)
+        page.insert_text((380, 590), "COMPANY EXAMPLE, LLC", fontsize=11)
+        page.insert_text((380, 625), "By:", fontsize=11)
+        page.insert_text((380, 655), "Title:", fontsize=11)
+        page.insert_text((380, 685), "Date:", fontsize=11)
+        pdf_bytes = document.tobytes()
+        document.close()
+        return pdf_bytes
+
+    def _signature_png(self):
+        image = Image.new("RGBA", (120, 30), "white")
+        image.putpixel((5, 5), (0, 0, 0, 255))
+        payload = io.BytesIO()
+        image.save(payload, format="PNG")
+        return payload.getvalue()
+
+    def test_execution_block_detector_selects_left_client_fields(self):
+        document = fitz.open(stream=self._two_party_execution_pdf(), filetype="pdf")
+        placement = signing._execution_block_placement(document)
+        document.close()
+
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement["strategy"], "detected_execution_block")
+        self.assertEqual(placement["page"], 0)
+        self.assertGreater(placement["signature_rect"][0], 110)
+        self.assertLess(placement["signature_rect"][2], 380)
+        self.assertLess(placement["date_origin"][0], 380)
+
+    def test_embedding_uses_detected_execution_block_and_returns_audit_metadata(self):
+        signed_pdf, placement = signing._embed_signature(
+            self._two_party_execution_pdf(),
+            self._signature_png(),
+            "Client Example",
+            "Client Example",
+            return_placement=True,
+        )
+
+        self.assertTrue(signed_pdf.startswith(b"%PDF"))
+        self.assertEqual(placement["strategy"], "detected_execution_block")
+        self.assertEqual(placement["page"], 0)
+
+    def test_embedding_falls_back_when_no_execution_fields_are_present(self):
+        document = fitz.open()
+        document.new_page(width=612, height=792).insert_text((72, 72), "No execution block")
+        pdf_bytes = document.tobytes()
+        document.close()
+
+        _, placement = signing._embed_signature(
+            pdf_bytes,
+            self._signature_png(),
+            "Client Example",
+            "Client Example",
+            return_placement=True,
+        )
+
+        self.assertEqual(placement["strategy"], "fallback_last_page")
+        self.assertEqual(placement["page"], 0)
 
     def test_real_docx_is_converted_to_valid_pdf(self):
         document = Document()
