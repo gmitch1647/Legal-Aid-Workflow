@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
-  sendDocumentForSignature,
+  sendDocumentForSignature, createSigningSession,
   getSignatureRequests, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadSignedDocument,
 } from '../../lib/api';
@@ -128,16 +128,15 @@ export default function ESignatures() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-medium text-slate-900">E-Signatures</h1>
-          <p className="text-sm text-slate-500 mt-1">Send documents for signing via Dropbox Sign</p>
+          <p className="text-sm text-slate-500 mt-1">Send documents for client signatures</p>
         </div>
         <div className="flex gap-2">
           <button onClick={loadData}
             className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </button>
-          <button onClick={() => { setShowSendModal(true); loadTemplates(); }}
-            disabled={!configured}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+          <button onClick={() => { setShowSendModal(true); if (configured) loadTemplates(); }}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
             <Send className="w-4 h-4" /> Send for Signature
           </button>
         </div>
@@ -373,12 +372,11 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
         fd.append('signer_name', signerName);
         fd.append('signer_email', signerEmail);
         fd.append('title', title || `${DOC_TYPES.find(d => d.value === docType)?.label || 'Document'} — ${signerName}`);
-        fd.append('subject', subject);
-        fd.append('message', message);
         fd.append('document_type', docType);
+        fd.append('message', message);
         if (caseId) fd.append('case_id', caseId);
         if (selectedClientId) fd.append('client_id', selectedClientId);
-        await sendDocumentForSignature(fd);
+        await createSigningSession(fd);
       } else {
         await sendSignatureRequest({
           template_id: selectedTemplate,

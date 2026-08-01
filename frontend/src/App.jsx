@@ -34,6 +34,7 @@ import { getNotifications, markNotificationRead } from './lib/api';
 // ---------------------------------------------------------------------------
 const Login = React.lazy(() => import('./pages/Login'));
 const IntakeForm = React.lazy(() => import('./pages/IntakeForm'));
+const SignDocument = React.lazy(() => import('./pages/SignDocument'));
 
 // Attorney pages
 const AttorneyDashboard = React.lazy(() => import('./pages/attorney/Dashboard'));
@@ -513,6 +514,7 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/intake" element={<IntakeForm />} />
           <Route path="/intake/:slug" element={<IntakeForm />} />
+          <Route path="/sign/:token" element={<SignDocument />} />
 
           {/* Attorney portal */}
           <Route

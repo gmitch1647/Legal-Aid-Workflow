@@ -955,6 +955,20 @@ export async function sendSignatureRequest(data) {
   });
 }
 
+export async function createSigningSession(formData) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/signing/create`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to create signing session');
+  }
+  return response.json();
+}
+
 export async function sendDocumentForSignature(formData) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/esign/send-document`, {

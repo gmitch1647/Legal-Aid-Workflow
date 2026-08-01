@@ -13,3 +13,5 @@ python-jose[cryptography]>=3.3.0,<4.0.0
 httpx>=0.26.0,<1.0.0
 python-dotenv>=1.0.0,<2.0.0
 twilio>=8.0.0,<10.0.0
+reportlab>=4.0,<6.0.0
+PyMuPDF>=1.23.0,<2.0.0

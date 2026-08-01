@@ -9,20 +9,22 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hello-pangea/dnd": "^16.5.0",
+    "@supabase/supabase-js": "^2.39.3",
+    "date-fns": "^3.3.1",
+    "lucide-react": "^0.312.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.0.379",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.3",
-    "@supabase/supabase-js": "^2.39.3",
-    "lucide-react": "^0.312.0",
-    "@hello-pangea/dnd": "^16.5.0",
-    "date-fns": "^3.3.1",
-    "pdfjs-dist": "^4.0.379"
+    "signature_pad": "^5.1.4"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^5.0.12",
-    "tailwindcss": "^3.4.1",
+    "autoprefixer": "^10.4.17",
     "postcss": "^8.4.33",
-    "autoprefixer": "^10.4.17"
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.0.12"
   }
 }
