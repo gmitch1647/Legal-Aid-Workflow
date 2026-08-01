@@ -360,81 +360,58 @@ async def download_signed_pdf(token: str, authorization: str = Header(default=No
 
 
 # ---------------------------------------------------------------------------
-# Helper — embed signature image into PDF using ReportLab + PyPDF2
+# Helper — embed signature image into PDF using PyMuPDF (fitz)
 # ---------------------------------------------------------------------------
 
 def _embed_signature(pdf_bytes: bytes, sig_image_bytes: bytes, typed_name: str, signer_name: str) -> bytes:
     """Overlay a signature image + typed name + date onto the last page of a PDF."""
-    from io import BytesIO
+    import fitz  # PyMuPDF
 
-    from PIL import Image
-    from PyPDF2 import PdfReader, PdfWriter
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas as rl_canvas
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    last_page = doc[-1]
+    page_rect = last_page.rect
 
-    reader = PdfReader(BytesIO(pdf_bytes))
-    writer = PdfWriter()
+    sig_x = 72
+    sig_y = page_rect.height - 120
+    line_width = 250
+    date_str = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+    display_name = typed_name or signer_name
 
-    last_page_idx = len(reader.pages) - 1
+    # Draw signature line
+    last_page.draw_line(
+        fitz.Point(sig_x, sig_y + 55),
+        fitz.Point(sig_x + line_width, sig_y + 55),
+        color=(0, 0, 0), width=0.5,
+    )
 
-    for i, page in enumerate(reader.pages):
-        if i == last_page_idx:
-            page_width = float(page.mediabox.width)
-            page_height = float(page.mediabox.height)
+    # Embed signature image above the line
+    try:
+        sig_rect = fitz.Rect(sig_x, sig_y, sig_x + 200, sig_y + 50)
+        last_page.insert_image(sig_rect, stream=sig_image_bytes)
+    except Exception as e:
+        logger.warning("Could not embed signature image: %s", e)
 
-            overlay_buf = BytesIO()
-            c = rl_canvas.Canvas(overlay_buf, pagesize=(page_width, page_height))
+    # Typed name below signature line
+    last_page.insert_text(
+        fitz.Point(sig_x, sig_y + 70),
+        display_name,
+        fontsize=10, fontname="helv", color=(0, 0, 0),
+    )
 
-            # Draw signature line
-            sig_x = 72
-            sig_y = 100
-            line_width = 250
+    # Date on the right
+    last_page.insert_text(
+        fitz.Point(sig_x + line_width + 30, sig_y + 70),
+        f"Date: {date_str}",
+        fontsize=10, fontname="helv", color=(0, 0, 0),
+    )
 
-            c.setStrokeColorRGB(0, 0, 0)
-            c.setLineWidth(0.5)
-            c.line(sig_x, sig_y, sig_x + line_width, sig_y)
+    # "Electronically signed" notice
+    last_page.insert_text(
+        fitz.Point(sig_x, sig_y + 85),
+        f"Electronically signed via LegalFlow on {date_str}",
+        fontsize=7, fontname="helv", color=(0.4, 0.4, 0.4),
+    )
 
-            # Draw signature image above the line
-            try:
-                sig_img = Image.open(BytesIO(sig_image_bytes))
-                if sig_img.mode != "RGBA":
-                    sig_img = sig_img.convert("RGBA")
-                img_width, img_height = sig_img.size
-                aspect = img_width / img_height
-                draw_height = 50
-                draw_width = draw_height * aspect
-                if draw_width > line_width:
-                    draw_width = line_width
-                    draw_height = draw_width / aspect
-
-                img_reader = ImageReader(sig_img)
-                c.drawImage(img_reader, sig_x, sig_y + 5, draw_width, draw_height, mask="auto")
-            except Exception as e:
-                logger.warning("Could not embed signature image: %s", e)
-
-            # Typed name below signature line
-            c.setFont("Helvetica", 10)
-            display_name = typed_name or signer_name
-            c.drawString(sig_x, sig_y - 15, display_name)
-
-            # Date on the right
-            date_str = datetime.now(timezone.utc).strftime("%m/%d/%Y")
-            c.drawString(sig_x + line_width + 30, sig_y - 15, f"Date: {date_str}")
-
-            # "Electronically signed" notice
-            c.setFont("Helvetica", 7)
-            c.setFillColorRGB(0.4, 0.4, 0.4)
-            c.drawString(sig_x, sig_y - 28, f"Electronically signed via LegalFlow on {date_str}")
-
-            c.save()
-            overlay_buf.seek(0)
-
-            overlay_reader = PdfReader(overlay_buf)
-            page.merge_page(overlay_reader.pages[0])
-
-        writer.add_page(page)
-
-    output = BytesIO()
-    writer.write(output)
-    return output.getvalue()
+    output = doc.tobytes(deflate=True)
+    doc.close()
+    return output
