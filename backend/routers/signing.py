@@ -20,8 +20,11 @@ import io
 import logging
 import os
 import secrets
+import subprocess
+import tempfile
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
@@ -34,6 +37,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 STORAGE_BUCKET = "documents"
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 async def _get_current_user(authorization: str) -> dict:
@@ -48,6 +53,114 @@ def _require_attorney(profile: dict):
 
 def _generate_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def _safe_filename(filename: str) -> str:
+    """Return a basename suitable for a storage-path component."""
+    safe_name = Path(filename or "document").name.strip()
+    return safe_name or "document"
+
+
+def _convert_docx_to_pdf(docx_bytes: bytes) -> bytes:
+    """Convert DOCX bytes to a verified PDF using LibreOffice headless mode."""
+    with tempfile.TemporaryDirectory(prefix="legalflow-signing-") as temp_dir:
+        temp_path = Path(temp_dir)
+        source_path = temp_path / "source.docx"
+        output_dir = temp_path / "output"
+        profile_dir = temp_path / "libreoffice-profile"
+        source_path.write_bytes(docx_bytes)
+        output_dir.mkdir()
+        profile_dir.mkdir()
+
+        try:
+            result = subprocess.run(
+                [
+                    "libreoffice",
+                    "--headless",
+                    f"-env:UserInstallation={profile_dir.as_uri()}",
+                    "--convert-to",
+                    "pdf:writer_pdf_Export",
+                    "--outdir",
+                    str(output_dir),
+                    str(source_path),
+                ],
+                capture_output=True,
+                check=False,
+                timeout=90,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "DOCX conversion is unavailable because LibreOffice is not installed."
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("DOCX conversion timed out. Please try a smaller document.") from exc
+
+        pdf_candidates = list(output_dir.glob("*.pdf"))
+        if result.returncode != 0 or not pdf_candidates:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                "Could not convert the DOCX to PDF. "
+                f"LibreOffice reported: {stderr or 'an unknown conversion error'}"
+            )
+
+        pdf_bytes = pdf_candidates[0].read_bytes()
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise RuntimeError("DOCX conversion did not produce a valid PDF.")
+        return pdf_bytes
+
+
+def _normalize_upload_to_pdf(
+    file_bytes: bytes,
+    filename: str,
+    content_type: Optional[str],
+) -> tuple[bytes, str]:
+    """Return a PDF payload and a canonical PDF filename for a signing session."""
+    safe_filename = _safe_filename(filename)
+    suffix = Path(safe_filename).suffix.lower()
+
+    if suffix == ".docx" or content_type == DOCX_MIME_TYPE:
+        pdf_bytes = _convert_docx_to_pdf(file_bytes)
+    elif file_bytes.startswith(b"%PDF"):
+        pdf_bytes = file_bytes
+    else:
+        raise ValueError("Only valid PDF and DOCX files can be sent for signature.")
+
+    stem = Path(safe_filename).stem or "document"
+    return pdf_bytes, f"{stem}.pdf"
+
+
+def _ensure_session_pdf(supabase, session: dict) -> str:
+    """Return a PDF storage path, upgrading legacy DOCX sessions when needed."""
+    original_path = session["original_path"]
+    if original_path.lower().endswith(".pdf"):
+        return original_path
+    if not original_path.lower().endswith(".docx"):
+        raise RuntimeError("The stored signing document is neither a PDF nor a DOCX file.")
+
+    try:
+        docx_bytes = supabase.storage.from_(STORAGE_BUCKET).download(original_path)
+        if not docx_bytes:
+            raise RuntimeError("The stored DOCX could not be downloaded.")
+        pdf_bytes = _convert_docx_to_pdf(docx_bytes)
+        pdf_path = str(Path(original_path).with_suffix(".pdf"))
+        supabase.storage.from_(STORAGE_BUCKET).upload(
+            path=pdf_path,
+            file=pdf_bytes,
+            file_options={"content-type": "application/pdf", "upsert": "true"},
+        )
+        supabase.table("signing_sessions").update(
+            {
+                "original_path": pdf_path,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", session["id"]).execute()
+        session["original_path"] = pdf_path
+        logger.info("Converted legacy signing session %s to PDF", session["id"])
+        return pdf_path
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Could not prepare the document for signing: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -120,22 +233,36 @@ async def create_signing_session(
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
-    content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
+    uploaded_content = await file.read()
+    if not uploaded_content:
+        raise HTTPException(status_code=400, detail="Please choose a PDF or DOCX file to upload.")
+    if len(uploaded_content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 20 MB)")
+
+    source_filename = _safe_filename(file.filename or "document.pdf")
+    try:
+        pdf_content, pdf_filename = _normalize_upload_to_pdf(
+            uploaded_content,
+            source_filename,
+            file.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        logger.exception("Could not convert signing document %s", source_filename)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     supabase = get_supabase()
     session_id = str(uuid.uuid4())
     token = _generate_token()
-    filename = file.filename or "document.pdf"
 
-    # Store the original PDF in Supabase Storage
-    storage_path = f"signing/{session_id}/original_{filename}"
+    # Store a canonical PDF so the public signer can always preview it.
+    storage_path = f"signing/{session_id}/original_{pdf_filename}"
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
             path=storage_path,
-            file=content,
-            file_options={"content-type": file.content_type or "application/pdf"},
+            file=pdf_content,
+            file_options={"content-type": "application/pdf"},
         )
     except Exception as e:
         logger.error("Failed to upload signing document: %s", e)
@@ -163,7 +290,11 @@ async def create_signing_session(
         supabase.table("signing_sessions").insert(record).execute()
     except Exception as e:
         logger.error("Failed to create signing session: %s", e)
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        try:
+            supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+        except Exception:
+            logger.warning("Could not clean up uploaded signing document %s", storage_path)
+        raise HTTPException(status_code=500, detail="Could not create the signing session.") from e
 
     # Also insert into signature_requests for unified tracking
     try:
@@ -240,10 +371,17 @@ async def get_signing_session(token: str):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="This document has already been signed.")
 
-    # Generate a temporary signed URL for the PDF
+    # Legacy DOCX sessions are converted before a recipient receives a preview URL.
+    try:
+        pdf_path = _ensure_session_pdf(supabase, session)
+    except RuntimeError as exc:
+        logger.exception("Could not prepare signing session %s", session["id"])
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Generate a temporary signed URL for the canonical PDF.
     try:
         url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
-            session["original_path"], 3600
+            pdf_path, 3600
         )
         pdf_url = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
     except Exception as e:
@@ -286,22 +424,21 @@ async def complete_signing(token: str, request: Request):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="Already signed.")
 
-    # Download the original document
+    # Normalize legacy DOCX sessions before loading the document for signing.
     try:
-        file_bytes = supabase.storage.from_(STORAGE_BUCKET).download(session["original_path"])
+        pdf_path = _ensure_session_pdf(supabase, session)
+        file_bytes = supabase.storage.from_(STORAGE_BUCKET).download(pdf_path)
         if file_bytes is None:
             raise RuntimeError("Download returned None")
-        logger.info("Downloaded %d bytes from %s", len(file_bytes), session["original_path"])
+        logger.info("Downloaded %d bytes from %s", len(file_bytes), pdf_path)
+    except RuntimeError as exc:
+        logger.error("Could not prepare original document: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as e:
         logger.error("Failed to download original document: %s", e)
-        raise HTTPException(status_code=500, detail="Could not load document.")
+        raise HTTPException(status_code=500, detail="Could not load document.") from e
 
-    # If it's a DOCX, convert to PDF first
-    original_path = session["original_path"].lower()
-    if original_path.endswith(".docx"):
-        file_bytes = _docx_to_pdf(file_bytes)
-
-    # Verify it's actually a PDF
+    # Verify it is a PDF before placing a signature.
     if not file_bytes[:5].startswith(b"%PDF"):
         logger.error("File is not a PDF. First 20 bytes: %s", file_bytes[:20])
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF. Please upload a PDF document.")
@@ -481,18 +618,3 @@ def _embed_signature(pdf_bytes: bytes, sig_image_bytes: bytes, typed_name: str, 
     output = doc.tobytes(deflate=True)
     doc.close()
     return output
-
-
-def _docx_to_pdf(docx_bytes: bytes) -> bytes:
-    """Convert a DOCX file to PDF using PyMuPDF."""
-    import fitz
-    from io import BytesIO
-
-    try:
-        doc = fitz.open(stream=docx_bytes, filetype="docx")
-        pdf_bytes = doc.convert_to_pdf()
-        doc.close()
-        return pdf_bytes
-    except Exception as e:
-        logger.error("DOCX to PDF conversion failed: %s", e)
-        raise RuntimeError(f"Could not convert DOCX to PDF: {e}")
