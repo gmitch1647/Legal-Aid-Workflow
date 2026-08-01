@@ -12,6 +12,33 @@ async function getAccessToken() {
   return session?.access_token ?? null;
 }
 
+function apiErrorMessage(errorBody, fallback) {
+  const detail = errorBody?.detail ?? errorBody;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (!item || typeof item !== 'object') return '';
+        const field = Array.isArray(item.loc)
+          ? item.loc.filter((part) => part !== 'body').join(' ')
+          : '';
+        const message = typeof item.msg === 'string' ? item.msg : '';
+        return field && message ? `${field}: ${message}` : message;
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join(' ');
+  }
+
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.message === 'string' && detail.message.trim()) return detail.message;
+    if (typeof detail.error === 'string' && detail.error.trim()) return detail.error;
+  }
+
+  return fallback;
+}
+
 /**
  * Core fetch wrapper that adds Authorization header and handles JSON.
  */
@@ -43,7 +70,7 @@ export async function request(path, options = {}) {
     } catch {
       errorBody = { detail: response.statusText };
     }
-    const error = new Error(errorBody.detail || `Request failed: ${response.status}`);
+    const error = new Error(apiErrorMessage(errorBody, `Request failed: ${response.status}`));
     error.status = response.status;
     error.body = errorBody;
     throw error;
@@ -1060,7 +1087,7 @@ export async function downloadCompletedW9(id) {
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || 'W-9 download failed');
+    throw new Error(apiErrorMessage(detail, 'W-9 download failed'));
   }
   return response.blob();
 }
@@ -1069,7 +1096,7 @@ export async function getPublicW9(token) {
   const response = await fetch(`${BASE_URL}/w9/${token}`);
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || 'W-9 request not found');
+    throw new Error(apiErrorMessage(detail, 'W-9 request not found'));
   }
   return response.json();
 }
@@ -1082,7 +1109,7 @@ export async function submitPublicW9(token, data) {
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || 'W-9 submission failed');
+    throw new Error(apiErrorMessage(detail, 'W-9 submission failed'));
   }
   return response.json();
 }

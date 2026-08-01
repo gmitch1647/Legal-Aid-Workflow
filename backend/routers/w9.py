@@ -493,6 +493,14 @@ class W9PublicSubmission(BaseModel):
     def normalize_optional_tin(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_tin(value)
 
+    @field_validator("llc_tax_classification", mode="before")
+    @classmethod
+    def normalize_optional_llc_classification(cls, value):
+        # The browser holds an empty select value for non-LLC filers. Convert it
+        # before Literal validation so an ordinary individual/corporation W-9
+        # does not receive FastAPI's structured 422 error response.
+        return None if value is None or (isinstance(value, str) and not value.strip()) else value
+
     @field_validator("business_name", "address_line2")
     @classmethod
     def empty_optional_text_is_none(cls, value: Optional[str]) -> Optional[str]:

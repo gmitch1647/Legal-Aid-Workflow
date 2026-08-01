@@ -132,6 +132,26 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertIsNone(w9._detect_tin_from_text("Account number: 123456789"))
         self.assertEqual(w9._detect_legal_name_from_text("Legal Name: Taylor Taxpayer"), "Taylor Taxpayer")
 
+    def test_public_submission_accepts_blank_non_llc_classification(self):
+        payload = w9.W9PublicSubmission(
+            legal_name="Test Taxpayer",
+            business_name="",
+            tax_classification="individual",
+            llc_tax_classification="",
+            address_line1="123 Main Street",
+            address_line2="",
+            city="Austin",
+            state="TX",
+            zip_code="78701",
+            tin_type="ssn",
+            tin="123-45-6789",
+            typed_name="Test Taxpayer",
+            signature="data:image/png;base64,aGVsbG8td29ybGQtaW1hZ2U=",
+            certification_accepted=True,
+        )
+
+        self.assertIsNone(payload.llc_tax_classification)
+
     def test_server_locked_prefill_overrides_public_name_and_tin(self):
         key = Fernet.generate_key().decode("utf-8")
         public_payload = w9.W9PublicSubmission(
