@@ -1,0 +1,182 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Download,
+  FileKey,
+  FileText,
+  Loader2,
+  LockKeyhole,
+  Plus,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  XCircle,
+} from 'lucide-react';
+import {
+  cancelW9Request,
+  createW9Request,
+  downloadCompletedW9,
+  getCases,
+  getW9Request,
+  listW9Requests,
+} from '../../lib/api';
+
+const blankRequest = {
+  signer_name: '',
+  signer_email: '',
+  case_id: '',
+  client_id: '',
+  title: 'Form W-9 — Taxpayer Information and Certification',
+  message: 'Please complete and sign the requested Form W-9. Your taxpayer identification number is encrypted and retained only in LegalFlow’s private records.',
+  expires_in_days: 14,
+};
+
+function statusStyle(status) {
+  const styles = {
+    awaiting_submission: 'bg-amber-50 text-amber-700 border-amber-200',
+    complete: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    expired: 'bg-slate-100 text-slate-600 border-slate-200',
+    cancelled: 'bg-red-50 text-red-700 border-red-200',
+  };
+  return styles[status] || 'bg-slate-100 text-slate-600 border-slate-200';
+}
+
+function prettyStatus(status) {
+  return (status || '').replace(/_/g, ' ').replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export default function W9Requests() {
+  const [requests, setRequests] = useState([]);
+  const [cases, setCases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [showComposer, setShowComposer] = useState(false);
+  const [form, setForm] = useState(blankRequest);
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const requestCounts = useMemo(() => ({
+    pending: requests.filter((request) => request.status === 'awaiting_submission').length,
+    complete: requests.filter((request) => request.status === 'complete').length,
+  }), [requests]);
+
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      const [requestRows, caseRows] = await Promise.all([listW9Requests(), getCases()]);
+      setRequests(Array.isArray(requestRows) ? requestRows : requestRows?.data || []);
+      setCases(Array.isArray(caseRows) ? caseRows : caseRows?.cases || caseRows?.data || []);
+    } catch (err) {
+      setError(err.message || 'Unable to load W-9 requests.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  function updateForm(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function chooseCase(caseId) {
+    const matchingCase = cases.find((item) => String(item.id) === caseId);
+    setForm((current) => ({
+      ...current,
+      case_id: caseId,
+      client_id: matchingCase?.client_id || current.client_id,
+      signer_name: current.signer_name || matchingCase?.client_name || matchingCase?.client?.full_name || '',
+      signer_email: current.signer_email || matchingCase?.client_email || matchingCase?.client?.email || '',
+    }));
+  }
+
+  async function sendRequest(event) {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+    setSending(true);
+    try {
+      await createW9Request({
+        ...form,
+        case_id: form.case_id || null,
+        client_id: form.client_id || null,
+        expires_in_days: Number(form.expires_in_days),
+      });
+      setForm(blankRequest);
+      setShowComposer(false);
+      setSuccess('The secure Form W-9 request was created and sent.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'The W-9 request could not be created.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function openDetail(id) {
+    setDetailLoading(true);
+    setError('');
+    try {
+      setDetail(await getW9Request(id));
+    } catch (err) {
+      setError(err.message || 'Unable to load W-9 details.');
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function download(request) {
+    try {
+      const blob = await downloadCompletedW9(request.id);
+      downloadBlob(blob, `W-9_${request.signer_name || 'completed'}.pdf`);
+    } catch (err) {
+      setError(err.message || 'Unable to download the completed W-9.');
+    }
+  }
+
+  async function cancel(request) {
+    if (!window.confirm(`Cancel the pending W-9 request for ${request.signer_name}?`)) return;
+    try {
+      await cancelW9Request(request.id);
+      if (detail?.id === request.id) setDetail(null);
+      setSuccess('The pending W-9 request was cancelled.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Unable to cancel the W-9 request.');
+    }
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-6">
+      <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div><div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-blue-700"><FileKey className="w-4 h-4" />Tax documentation</div><h1 className="mt-1 text-3xl font-bold text-slate-950">Form W-9 Requests</h1><p className="mt-2 max-w-2xl text-sm text-slate-600">Collect taxpayer information and certification through encrypted, attorney-only LegalFlow records.</p></div>
+        <button onClick={() => { setShowComposer(true); setSuccess(''); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800"><Plus className="w-4 h-4" />Send Form W-9</button>
+      </header>
+
+      <div className="grid sm:grid-cols-3 gap-4"><div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Pending</p><p className="mt-1 text-2xl font-bold text-amber-700">{requestCounts.pending}</p></div><div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Completed</p><p className="mt-1 text-2xl font-bold text-emerald-700">{requestCounts.complete}</p></div><div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-center gap-3"><LockKeyhole className="w-6 h-6 text-emerald-700" /><p className="text-sm text-emerald-900">Taxpayer IDs are encrypted and never displayed in this list.</p></div></div>
+
+      {(error || success) && <div className={`rounded-xl border p-4 text-sm ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>{error ? <AlertCircle className="inline mr-2 w-4 h-4" /> : <CheckCircle2 className="inline mr-2 w-4 h-4" />}{error || success}</div>}
+
+      {showComposer && <section className="rounded-2xl border border-blue-200 bg-white shadow-sm p-5 md:p-7"><div className="flex justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900">Send secure Form W-9</h2><p className="mt-1 text-sm text-slate-500">The signer receives a private, time-limited link. Do not request taxpayer IDs through email.</p></div><button onClick={() => setShowComposer(false)} className="text-slate-400 hover:text-slate-700"><XCircle className="w-5 h-5" /></button></div><form onSubmit={sendRequest} className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4"><label className="block md:col-span-2"><span className="block text-sm font-semibold text-slate-700">Related case <span className="font-normal text-slate-400">(optional)</span></span><select value={form.case_id} onChange={(event) => chooseCase(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5"><option value="">No linked case</option>{cases.map((caseItem) => <option key={caseItem.id} value={caseItem.id}>{caseItem.case_number ? `${caseItem.case_number} — ` : ''}{caseItem.client_name || caseItem.title || caseItem.id}</option>)}</select></label><label className="block"><span className="block text-sm font-semibold text-slate-700">Signer full name</span><input required value={form.signer_name} onChange={(event) => updateForm('signer_name', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="block"><span className="block text-sm font-semibold text-slate-700">Signer email</span><input required type="email" value={form.signer_email} onChange={(event) => updateForm('signer_email', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="block md:col-span-2"><span className="block text-sm font-semibold text-slate-700">Request title</span><input required value={form.title} onChange={(event) => updateForm('title', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="block md:col-span-2"><span className="block text-sm font-semibold text-slate-700">Message to signer</span><textarea value={form.message} onChange={(event) => updateForm('message', event.target.value)} rows="3" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="block"><span className="block text-sm font-semibold text-slate-700">Link expiry</span><select value={form.expires_in_days} onChange={(event) => updateForm('expires_in_days', event.target.value)} className="mt-1.5 rounded-lg border border-slate-300 px-3 py-2.5"><option value="7">7 days</option><option value="14">14 days</option><option value="21">21 days</option><option value="30">30 days</option></select></label><div className="md:col-span-2 flex justify-end"><button disabled={sending} className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">{sending ? <><Loader2 className="w-4 h-4 animate-spin" />Sending…</> : <><Send className="w-4 h-4" />Send secure W-9 request</>}</button></div></form></section>}
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Requests</h2><button onClick={load} className="inline-flex items-center gap-2 text-sm font-medium text-blue-700 hover:text-blue-800"><RefreshCw className="w-4 h-4" />Refresh</button></div>{loading ? <div className="p-12 flex justify-center"><Loader2 className="w-7 h-7 animate-spin text-blue-600" /></div> : requests.length === 0 ? <div className="p-12 text-center"><FileText className="mx-auto w-9 h-9 text-slate-300" /><p className="mt-3 font-medium text-slate-700">No W-9 requests yet</p><p className="mt-1 text-sm text-slate-500">Create a secure request when a settlement requires a completed Form W-9.</p></div> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-3 font-semibold">Signer</th><th className="px-5 py-3 font-semibold">Status</th><th className="px-5 py-3 font-semibold">Expires / completed</th><th className="px-5 py-3 font-semibold text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{requests.map((request) => <tr key={request.id} className="hover:bg-slate-50"><td className="px-5 py-4"><p className="font-semibold text-slate-900">{request.signer_name}</p><p className="text-slate-500">{request.signer_email}</p></td><td className="px-5 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusStyle(request.status)}`}>{prettyStatus(request.status)}</span></td><td className="px-5 py-4 text-slate-600">{request.submitted_at ? `Completed ${new Date(request.submitted_at).toLocaleDateString()}` : request.expires_at ? `Expires ${new Date(request.expires_at).toLocaleDateString()}` : '—'}</td><td className="px-5 py-4"><div className="flex justify-end gap-2"><button onClick={() => openDetail(request.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">Details</button>{request.status === 'complete' && <button onClick={() => download(request)} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"><Download className="w-3.5 h-3.5" />PDF</button>}{request.status === 'awaiting_submission' && <button onClick={() => cancel(request)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Cancel</button>}</div></td></tr>)}</tbody></table></div>}</section>
+
+      {(detail || detailLoading) && <div className="fixed inset-0 z-50 bg-slate-950/40 p-4 flex items-center justify-center"><section className="max-w-xl w-full max-h-[90vh] overflow-auto rounded-2xl bg-white shadow-xl p-6"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-wider text-blue-700">Secure W-9 record</p><h2 className="mt-1 text-xl font-bold text-slate-900">{detail?.signer_name || 'Loading…'}</h2></div><button onClick={() => setDetail(null)} className="text-slate-400 hover:text-slate-700"><XCircle className="w-5 h-5" /></button></div>{detailLoading ? <div className="py-12 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-blue-600" /></div> : detail && <><div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm"><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Status</p><p className="mt-1 font-semibold">{prettyStatus(detail.status)}</p></div><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Taxpayer ID</p><p className="mt-1 font-semibold">{detail.submission ? `${detail.submission.tin_type.toUpperCase()} ending ${detail.submission.tin_last4}` : 'Not submitted'}</p></div></div>{detail.submission && <><div className="mt-5 rounded-xl border border-slate-200 p-4"><h3 className="font-semibold text-slate-900">Submitted taxpayer information</h3><p className="mt-2 text-sm text-slate-600">{detail.submission.legal_name}{detail.submission.business_name ? ` · ${detail.submission.business_name}` : ''}</p><p className="text-sm text-slate-600">{prettyStatus(detail.submission.tax_classification)}{detail.submission.llc_tax_classification ? ` (${detail.submission.llc_tax_classification})` : ''}</p><p className="mt-2 text-sm text-slate-600">{detail.submission.address_line1}{detail.submission.address_line2 ? `, ${detail.submission.address_line2}` : ''}<br />{detail.submission.city}, {detail.submission.state} {detail.submission.zip_code}</p></div><div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4"><div className="flex gap-2"><ShieldCheck className="w-5 h-5 text-emerald-700 shrink-0" /><div><h3 className="font-semibold text-emerald-950">Signing audit</h3><p className="mt-1 text-sm text-emerald-900">Submitted {detail.submission.submitted_at ? new Date(detail.submission.submitted_at).toLocaleString() : '—'}</p><p className="mt-1 text-sm text-emerald-900">Signer IP: {detail.submission.audit_trail?.signer_ip || 'Unavailable'} · {detail.submission.audit_trail?.ip_source || '—'}</p><p className="mt-1 text-xs text-emerald-800">The IP is retained in LegalFlow’s private audit record and is not printed on the completed Form W-9.</p></div></div></div><button onClick={() => download(detail)} className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"><Download className="w-4 h-4" />Download completed Form W-9</button></>}</>}</section></div>}
+    </div>
+  );
+}

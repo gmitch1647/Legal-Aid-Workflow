@@ -18,6 +18,7 @@ import {
   CalendarDays,
   Mail,
   PenLine,
+  FileKey,
 } from 'lucide-react';
 import {
   supabase,
@@ -35,6 +36,7 @@ import { getNotifications, markNotificationRead } from './lib/api';
 const Login = React.lazy(() => import('./pages/Login'));
 const IntakeForm = React.lazy(() => import('./pages/IntakeForm'));
 const SignDocument = React.lazy(() => import('./pages/SignDocument'));
+const W9Form = React.lazy(() => import('./pages/W9Form'));
 
 // Attorney pages
 const AttorneyDashboard = React.lazy(() => import('./pages/attorney/Dashboard'));
@@ -49,6 +51,7 @@ const CalendarPage = React.lazy(() => import('./pages/attorney/Calendar'));
 const FormsPage = React.lazy(() => import('./pages/attorney/Forms'));
 const DisputeLetters = React.lazy(() => import('./pages/attorney/DisputeLetters'));
 const ESignatures = React.lazy(() => import('./pages/attorney/ESignatures'));
+const W9Requests = React.lazy(() => import('./pages/attorney/W9Requests'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -443,6 +446,7 @@ const allAttorneyLinks = [
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/w9', label: 'W-9 Forms', icon: FileKey, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
@@ -515,6 +519,7 @@ export default function App() {
           <Route path="/intake" element={<IntakeForm />} />
           <Route path="/intake/:slug" element={<IntakeForm />} />
           <Route path="/sign/:token" element={<SignDocument />} />
+          <Route path="/w9/:token" element={<W9Form />} />
 
           {/* Attorney portal */}
           <Route
@@ -530,6 +535,7 @@ export default function App() {
             <Route path="draft" element={<DraftComplaint />} />
             <Route path="disputes" element={<DisputeLetters />} />
             <Route path="esign" element={<ESignatures />} />
+            <Route path="w9" element={<W9Requests />} />
             <Route path="pipeline" element={<CasePipeline />} />
             <Route path="cases/:id" element={<CaseDetail />} />
             <Route path="agents" element={<AgentChat />} />

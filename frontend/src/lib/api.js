@@ -1024,3 +1024,65 @@ export async function downloadSignedDocument(id) {
   if (!response.ok) throw new Error('Download failed');
   return response.blob();
 }
+
+
+// ---------------------------------------------------------------------------
+// Secure Form W-9
+// ---------------------------------------------------------------------------
+
+export async function createW9Request(data) {
+  return request('/w9/create', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function listW9Requests() {
+  return request('/w9/attorney/requests');
+}
+
+export async function getW9Request(id) {
+  return request(`/w9/attorney/requests/${id}`);
+}
+
+export async function cancelW9Request(id) {
+  return request(`/w9/attorney/requests/${id}/cancel`, { method: 'POST' });
+}
+
+export async function downloadCompletedW9(id) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/w9/attorney/requests/${id}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail || 'W-9 download failed');
+  }
+  return response.blob();
+}
+
+export async function getPublicW9(token) {
+  const response = await fetch(`${BASE_URL}/w9/${token}`);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail || 'W-9 request not found');
+  }
+  return response.json();
+}
+
+export async function submitPublicW9(token, data) {
+  const response = await fetch(`${BASE_URL}/w9/${token}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail || 'W-9 submission failed');
+  }
+  return response.json();
+}
+
+export function publicW9TemplateUrl(token) {
+  return `${BASE_URL}/w9/${token}/template`;
+}
