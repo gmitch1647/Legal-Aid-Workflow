@@ -44,6 +44,8 @@ import {
   downloadMemo,
   getStaffAttorneys,
   assignAttorneyToClient,
+  getReferralPartners,
+  assignReferral,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
 
@@ -354,6 +356,11 @@ export default function CaseDetail() {
   const [newNote, setNewNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
 
+  // Referral partner
+  const [referralPartners, setReferralPartners] = useState([]);
+  const [selectedPartnerId, setSelectedPartnerId] = useState('');
+  const [savingPartner, setSavingPartner] = useState(false);
+
   // Timeline expanded
   const [timelineExpanded, setTimelineExpanded] = useState(true);
 
@@ -365,6 +372,7 @@ export default function CaseDetail() {
       setCaseData(data);
       setComplaintText(data.complaint_text || data.complaint_draft || '');
       setNotes(data.attorney_notes || data.notes || []);
+      setSelectedPartnerId(data.referral_partner_id || '');
     } catch (err) {
       console.error('Failed to load case:', err);
       setError(err.message || 'Failed to load case');
@@ -401,6 +409,7 @@ export default function CaseDetail() {
     fetchPipeline();
     fetchDocuments();
     getStaffAttorneys().then(data => setStaffAttorneys(data || [])).catch(() => {});
+    getReferralPartners().then(data => setReferralPartners(data || [])).catch(() => {});
   }, [fetchCase, fetchPipeline, fetchDocuments]);
 
   // Poll pipeline when agents are processing
@@ -915,6 +924,35 @@ export default function CaseDetail() {
                   }) : (
                     <p className="text-sm text-slate-500">No defendants listed</p>
                   )}
+                </div>
+              </div>
+
+              {/* Referral Partner */}
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Referral Partner (CRO)</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <select
+                    value={selectedPartnerId}
+                    onChange={async (e) => {
+                      const pid = e.target.value;
+                      setSelectedPartnerId(pid);
+                      setSavingPartner(true);
+                      try {
+                        await assignReferral({ partner_id: pid, case_id: id });
+                        fetchCase();
+                      } catch (err) { console.error('Failed to assign partner:', err); }
+                      finally { setSavingPartner(false); }
+                    }}
+                    className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">-- No referral partner --</option>
+                    {referralPartners.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.full_name}{p.company ? ` (${p.company})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {savingPartner && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
                 </div>
               </div>
 

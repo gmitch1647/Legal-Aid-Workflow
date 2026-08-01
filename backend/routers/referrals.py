@@ -122,25 +122,26 @@ async def delete_referral_partner(partner_id: str, authorization: str = Header(d
 class AssignReferralRequest(BaseModel):
     client_id: Optional[str] = None
     case_id: Optional[str] = None
-    partner_id: str
+    partner_id: Optional[str] = None
 
 
 @router.post("/assign")
 async def assign_referral(body: AssignReferralRequest, authorization: str = Header(default=None)):
-    """Assign a referral partner to a client and/or case."""
+    """Assign (or unassign) a referral partner to a client and/or case."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
     supabase = get_supabase()
+    value = body.partner_id if body.partner_id else None
 
     if body.client_id:
         supabase.table("profiles").update(
-            {"referral_partner_id": body.partner_id}
+            {"referral_partner_id": value}
         ).eq("id", body.client_id).execute()
 
     if body.case_id:
         supabase.table("cases").update(
-            {"referral_partner_id": body.partner_id}
+            {"referral_partner_id": value}
         ).eq("id", body.case_id).execute()
 
     return {"assigned": True}
