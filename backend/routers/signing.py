@@ -240,16 +240,6 @@ async def get_signing_session(token: str):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="This document has already been signed.")
 
-    # Generate a temporary signed URL for the PDF
-    try:
-        url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
-            session["original_path"], 3600
-        )
-        pdf_url = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
-    except Exception as e:
-        logger.error("Failed to create signed URL: %s", e)
-        pdf_url = ""
-
     return {
         "session_id": session["id"],
         "title": session["title"],
@@ -259,8 +249,37 @@ async def get_signing_session(token: str):
         "attorney_name": session.get("attorney_name", ""),
         "message": session.get("message", ""),
         "status": session["status"],
-        "pdf_url": pdf_url,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /{token}/pdf — public endpoint, serves the PDF directly (no CORS issues)
+# ---------------------------------------------------------------------------
+
+@router.get("/{token}/pdf")
+async def get_signing_pdf(token: str):
+    supabase = get_supabase()
+
+    resp = supabase.table("signing_sessions").select("original_path, status").eq("token", token).limit(1).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    session = resp.data[0]
+    if session["status"] in ("signed", "complete"):
+        raise HTTPException(status_code=400, detail="Already signed.")
+
+    try:
+        pdf_bytes = supabase.storage.from_(STORAGE_BUCKET).download(session["original_path"])
+    except Exception as e:
+        logger.error("Failed to download PDF for signing: %s", e)
+        raise HTTPException(status_code=500, detail="Could not load document.")
+
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 # ---------------------------------------------------------------------------

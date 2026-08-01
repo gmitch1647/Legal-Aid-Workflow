@@ -61,8 +61,10 @@ export default function SignDocument() {
 
   // Render PDF preview
   useEffect(() => {
-    if (!session?.pdf_url || !pdfCanvasRef.current) return;
+    if (!session || !pdfCanvasRef.current) return;
     let cancelled = false;
+
+    const pdfUrl = `${API_URL}/signing/${token}/pdf`;
 
     async function renderPdf() {
       try {
@@ -72,7 +74,7 @@ export default function SignDocument() {
           import.meta.url
         ).toString();
 
-        const pdf = await pdfjsLib.getDocument(session.pdf_url).promise;
+        const pdf = await pdfjsLib.getDocument(pdfUrl).promise;
         const container = pdfCanvasRef.current;
         if (cancelled || !container) return;
         container.innerHTML = '';
@@ -100,7 +102,7 @@ export default function SignDocument() {
 
     renderPdf();
     return () => { cancelled = true; };
-  }, [session?.pdf_url]);
+  }, [session, token]);
 
   async function handleSubmit() {
     let signatureData;
