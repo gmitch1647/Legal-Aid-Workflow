@@ -955,6 +955,10 @@ export async function sendSignatureRequest(data) {
   });
 }
 
+export async function testSigningStorage() {
+  return request('/signing/test');
+}
+
 export async function createSigningSession(formData) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/signing/create`, {

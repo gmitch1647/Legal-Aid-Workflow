@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
-  sendDocumentForSignature, createSigningSession,
+  sendDocumentForSignature, createSigningSession, testSigningStorage,
   getSignatureRequests, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadSignedDocument,
 } from '../../lib/api';
@@ -32,6 +32,8 @@ export default function ESignatures() {
   const [detailData, setDetailData] = useState(null);
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -148,6 +150,24 @@ export default function ESignatures() {
           <strong>Dropbox Sign not configured.</strong> Add your <code className="bg-amber-100 px-1 rounded">DROPBOX_SIGN_API_KEY</code> environment variable in Railway to enable e-signatures.
         </div>
       )}
+
+      {/* Diagnostic test */}
+      <div className="mb-4 flex items-center gap-3">
+        <button onClick={async () => {
+          setTesting(true); setTestResult(null);
+          try { const r = await testSigningStorage(); setTestResult(r); }
+          catch (e) { setTestResult({ error: e.message }); }
+          finally { setTesting(false); }
+        }} disabled={testing}
+          className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 disabled:opacity-50">
+          {testing ? 'Testing...' : 'Test Storage Connection'}
+        </button>
+        {testResult && (
+          <pre className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 max-w-xl overflow-auto">
+            {JSON.stringify(testResult, null, 2)}
+          </pre>
+        )}
+      </div>
 
       {/* Filter tabs + search */}
       <div className="flex items-center gap-3 mb-4">
