@@ -235,12 +235,25 @@ async def complete_signing(token: str, request: Request):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="Already signed.")
 
-    # Download the original PDF
+    # Download the original document
     try:
-        pdf_bytes = supabase.storage.from_(STORAGE_BUCKET).download(session["original_path"])
+        file_bytes = supabase.storage.from_(STORAGE_BUCKET).download(session["original_path"])
+        if file_bytes is None:
+            raise RuntimeError("Download returned None")
+        logger.info("Downloaded %d bytes from %s", len(file_bytes), session["original_path"])
     except Exception as e:
-        logger.error("Failed to download original PDF: %s", e)
+        logger.error("Failed to download original document: %s", e)
         raise HTTPException(status_code=500, detail="Could not load document.")
+
+    # If it's a DOCX, convert to PDF first
+    original_path = session["original_path"].lower()
+    if original_path.endswith(".docx"):
+        file_bytes = _docx_to_pdf(file_bytes)
+
+    # Verify it's actually a PDF
+    if not file_bytes[:5].startswith(b"%PDF"):
+        logger.error("File is not a PDF. First 20 bytes: %s", file_bytes[:20])
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF. Please upload a PDF document.")
 
     # Decode the signature image from base64
     try:
@@ -252,7 +265,7 @@ async def complete_signing(token: str, request: Request):
 
     # Embed the signature into the PDF
     try:
-        signed_pdf = _embed_signature(pdf_bytes, sig_bytes, typed_name, session["signer_name"])
+        signed_pdf = _embed_signature(file_bytes, sig_bytes, typed_name, session["signer_name"])
     except Exception as e:
         logger.error("Failed to embed signature: %s", e)
         raise HTTPException(status_code=500, detail=f"Signature embedding failed: {e}")
@@ -417,3 +430,18 @@ def _embed_signature(pdf_bytes: bytes, sig_image_bytes: bytes, typed_name: str, 
     output = doc.tobytes(deflate=True)
     doc.close()
     return output
+
+
+def _docx_to_pdf(docx_bytes: bytes) -> bytes:
+    """Convert a DOCX file to PDF using PyMuPDF."""
+    import fitz
+    from io import BytesIO
+
+    try:
+        doc = fitz.open(stream=docx_bytes, filetype="docx")
+        pdf_bytes = doc.convert_to_pdf()
+        doc.close()
+        return pdf_bytes
+    except Exception as e:
+        logger.error("DOCX to PDF conversion failed: %s", e)
+        raise RuntimeError(f"Could not convert DOCX to PDF: {e}")
