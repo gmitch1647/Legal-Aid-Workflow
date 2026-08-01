@@ -17,7 +17,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 
 from utils.supabase_client import get_supabase
@@ -250,6 +250,144 @@ async def send_signature_request(
         "status": "awaiting_signature",
         "details_url": sig_data.get("details_url"),
         "signing_url": sig_data.get("signing_url"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /send-document — send a file (PDF/DOCX) for signature
+# ---------------------------------------------------------------------------
+
+@router.post("/send-document")
+async def send_document_for_signature(
+    file: UploadFile = File(...),
+    signer_name: str = Form(...),
+    signer_email: str = Form(...),
+    title: str = Form("Document for Signature"),
+    subject: str = Form("Please sign this document"),
+    message: str = Form("Please review and sign the attached document."),
+    document_type: str = Form("settlement"),
+    case_id: str = Form(None),
+    client_id: str = Form(None),
+    authorization: str = Header(default=None),
+):
+    """Upload a PDF/DOCX and send it for signature via Dropbox Sign.
+
+    Signature, printed-name, and date fields are auto-placed at the
+    bottom of the last page so the attorney doesn't need to position them.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    if not _is_configured():
+        raise HTTPException(status_code=400, detail="Dropbox Sign not configured. Set DROPBOX_SIGN_API_KEY.")
+
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 20 MB)")
+
+    filename = file.filename or "document.pdf"
+    content_type = file.content_type or "application/pdf"
+
+    import httpx
+
+    form_data = {
+        "title": title,
+        "subject": subject,
+        "message": message,
+        "signers[0][email_address]": signer_email,
+        "signers[0][name]": signer_name,
+        "test_mode": "0",
+        "form_fields_per_document": json.dumps([[
+            {
+                "api_id": "sig_1",
+                "type": "signature",
+                "x": 72,
+                "y": 640,
+                "width": 200,
+                "height": 40,
+                "required": True,
+                "signer": "0",
+                "page": None,
+            },
+            {
+                "api_id": "name_1",
+                "type": "text",
+                "x": 72,
+                "y": 690,
+                "width": 200,
+                "height": 20,
+                "required": True,
+                "signer": "0",
+                "page": None,
+                "name": "Printed Name",
+            },
+            {
+                "api_id": "date_1",
+                "type": "date_signed",
+                "x": 350,
+                "y": 690,
+                "width": 120,
+                "height": 20,
+                "required": True,
+                "signer": "0",
+                "page": None,
+            },
+        ]]),
+    }
+
+    if _get_client_id():
+        form_data["client_id"] = _get_client_id()
+
+    files_payload = {
+        "file[0]": (filename, content, content_type),
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{DROPBOX_SIGN_BASE}/signature_request/send",
+            data=form_data,
+            files=files_payload,
+            auth=(_get_api_key(), ""),
+        )
+
+    if resp.status_code not in (200, 201):
+        logger.error("Dropbox Sign send-document failed: %s %s", resp.status_code, resp.text[:500])
+        detail = "Failed to send signature request"
+        try:
+            err = resp.json()
+            detail = err.get("error", {}).get("error_msg", detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    sig_data = resp.json().get("signature_request", {})
+    signature_request_id = sig_data.get("signature_request_id")
+
+    supabase = get_supabase()
+    record = {
+        "id": signature_request_id,
+        "title": title,
+        "document_type": document_type,
+        "signer_name": signer_name,
+        "signer_email": signer_email,
+        "case_id": case_id if case_id else None,
+        "client_id": client_id if client_id else None,
+        "status": "awaiting_signature",
+        "sent_by": profile["id"],
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        supabase.table("signature_requests").insert(record).execute()
+    except Exception as e:
+        logger.warning("Could not save signature request to DB: %s", e)
+
+    return {
+        "signature_request_id": signature_request_id,
+        "title": title,
+        "status": "awaiting_signature",
+        "details_url": sig_data.get("details_url"),
     }
 
 

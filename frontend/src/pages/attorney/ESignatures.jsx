@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import {
   PenLine, Send, Download, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
-  ChevronDown, X, Search, User,
+  ChevronDown, X, Search, User, Upload,
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
+  sendDocumentForSignature,
   getSignatureRequests, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadSignedDocument,
 } from '../../lib/api';
@@ -297,57 +298,100 @@ function ReminderBtn({ id }) {
 // ---------------------------------------------------------------------------
 
 function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
+  const [mode, setMode] = useState('upload');
   const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [uploadedFile, setUploadedFile] = useState(null);
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState('Please sign this document');
   const [message, setMessage] = useState('Please review and sign the attached document at your earliest convenience.');
   const [signerName, setSignerName] = useState('');
   const [signerEmail, setSignerEmail] = useState('');
-  const [docType, setDocType] = useState('w9');
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [docType, setDocType] = useState('settlement');
   const [caseId, setCaseId] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
-  // Client picker
   const [clients, setClients] = useState([]);
-  const [loadingClients, setLoadingClients] = useState(false);
   const [clientSearch, setClientSearch] = useState('');
+  const [cases, setCases] = useState([]);
 
   useEffect(() => {
     loadClients();
   }, []);
 
   async function loadClients() {
-    setLoadingClients(true);
     try {
       const { data } = await supabase.from('profiles').select('*').eq('role', 'client').order('full_name');
       setClients(data || []);
     } catch (err) { console.error(err); }
-    finally { setLoadingClients(false); }
   }
 
-  function pickClient(client) {
+  async function pickClient(client) {
     setSignerName(client.full_name || '');
     setSignerEmail(client.email || '');
+    setSelectedClientId(client.id);
+    setClientSearch('');
+    try {
+      const { data } = await supabase.from('cases').select('id, plaintiff_name, status, created_at').eq('client_id', client.id).order('created_at', { ascending: false });
+      setCases(data || []);
+      if (data?.length === 1) setCaseId(data[0].id);
+    } catch (err) { console.error(err); }
+  }
+
+  function handleFileDrop(e) {
+    e.preventDefault();
+    const f = e.dataTransfer?.files?.[0] || e.target?.files?.[0];
+    if (f) {
+      const valid = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      if (!valid.includes(f.type) && !f.name.match(/\.(pdf|docx)$/i)) {
+        setError('Only PDF and DOCX files are supported');
+        return;
+      }
+      if (f.size > 20 * 1024 * 1024) {
+        setError('File too large (max 20 MB)');
+        return;
+      }
+      setUploadedFile(f);
+      setError('');
+      if (!title) setTitle(f.name.replace(/\.(pdf|docx)$/i, ''));
+    }
   }
 
   async function handleSend() {
-    if (!selectedTemplate) { setError('Select a template'); return; }
     if (!signerName || !signerEmail) { setError('Signer name and email required'); return; }
+
+    if (mode === 'upload' && !uploadedFile) { setError('Upload a document'); return; }
+    if (mode === 'template' && !selectedTemplate) { setError('Select a template'); return; }
 
     setSending(true);
     setError('');
     try {
-      await sendSignatureRequest({
-        template_id: selectedTemplate,
-        title: title || `${DOC_TYPES.find(d => d.value === docType)?.label || 'Document'} — ${signerName}`,
-        subject,
-        message,
-        signer_name: signerName,
-        signer_email: signerEmail,
-        document_type: docType,
-        case_id: caseId || null,
-      });
+      if (mode === 'upload') {
+        const fd = new FormData();
+        fd.append('file', uploadedFile);
+        fd.append('signer_name', signerName);
+        fd.append('signer_email', signerEmail);
+        fd.append('title', title || `${DOC_TYPES.find(d => d.value === docType)?.label || 'Document'} — ${signerName}`);
+        fd.append('subject', subject);
+        fd.append('message', message);
+        fd.append('document_type', docType);
+        if (caseId) fd.append('case_id', caseId);
+        if (selectedClientId) fd.append('client_id', selectedClientId);
+        await sendDocumentForSignature(fd);
+      } else {
+        await sendSignatureRequest({
+          template_id: selectedTemplate,
+          title: title || `${DOC_TYPES.find(d => d.value === docType)?.label || 'Document'} — ${signerName}`,
+          subject,
+          message,
+          signer_name: signerName,
+          signer_email: signerEmail,
+          document_type: docType,
+          case_id: caseId || null,
+          client_id: selectedClientId || null,
+        });
+      }
       onSent();
     } catch (err) {
       setError(err.message);
@@ -357,12 +401,12 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
   }
 
   const DOC_TYPES = [
-    { value: 'w9', label: 'W-9' },
+    { value: 'settlement', label: 'Settlement Agreement' },
     { value: 'engagement_letter', label: 'Engagement Letter' },
     { value: 'retainer', label: 'Retainer Agreement' },
     { value: 'authorization', label: 'Authorization Form' },
     { value: 'hipaa', label: 'HIPAA Release' },
-    { value: 'settlement', label: 'Settlement Agreement' },
+    { value: 'w9', label: 'W-9' },
     { value: 'affidavit', label: 'Affidavit' },
     { value: 'general', label: 'General Document' },
   ];
@@ -372,32 +416,79 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
     (c.email || '').toLowerCase().includes(clientSearch.toLowerCase())
   );
 
+  const canSend = signerName && signerEmail && (mode === 'upload' ? uploadedFile : selectedTemplate);
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white rounded-t-2xl">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 sticky top-0 bg-white rounded-t-2xl z-10">
           <h2 className="text-lg font-bold text-slate-900">Send for Signature</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
         </div>
 
         <div className="p-5 space-y-4">
-          {/* Template selector */}
-          <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Template *</label>
-            {loadingTemplates ? (
-              <div className="flex items-center gap-2 text-sm text-slate-400 py-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading templates...</div>
-            ) : templates.length === 0 ? (
-              <div className="text-sm text-amber-600 bg-amber-50 rounded-lg p-3 border border-amber-200">
-                No templates found. Create templates in your Dropbox Sign dashboard first.
-              </div>
-            ) : (
-              <select value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">— Select template —</option>
-                {templates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-              </select>
-            )}
+          {/* Mode toggle */}
+          <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
+            <button onClick={() => setMode('upload')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition ${
+                mode === 'upload' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}>
+              <Upload className="w-4 h-4" /> Upload Document
+            </button>
+            <button onClick={() => setMode('template')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition ${
+                mode === 'template' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}>
+              <FileText className="w-4 h-4" /> Use Template
+            </button>
           </div>
+
+          {/* Upload or template selector */}
+          {mode === 'upload' ? (
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Document (PDF or DOCX) *</label>
+              {uploadedFile ? (
+                <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <FileText className="w-5 h-5 text-blue-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-blue-900 truncate">{uploadedFile.name}</div>
+                    <div className="text-xs text-blue-600">{(uploadedFile.size / 1024).toFixed(0)} KB</div>
+                  </div>
+                  <button onClick={() => setUploadedFile(null)} className="text-blue-400 hover:text-blue-600"><X className="w-4 h-4" /></button>
+                </div>
+              ) : (
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleFileDrop}
+                  className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50/50 transition cursor-pointer"
+                  onClick={() => document.getElementById('esign-file-input').click()}
+                >
+                  <Upload className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm text-slate-500">Drop your settlement agreement here or <span className="text-blue-600 font-medium">browse</span></p>
+                  <p className="text-xs text-slate-400 mt-1">PDF or DOCX, up to 20 MB</p>
+                  <input id="esign-file-input" type="file" accept=".pdf,.docx" className="hidden" onChange={handleFileDrop} />
+                </div>
+              )}
+              <p className="text-xs text-slate-400 mt-2">Signature, name, and date fields will be added automatically at the bottom of the document.</p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Template *</label>
+              {loadingTemplates ? (
+                <div className="flex items-center gap-2 text-sm text-slate-400 py-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading templates...</div>
+              ) : templates.length === 0 ? (
+                <div className="text-sm text-amber-600 bg-amber-50 rounded-lg p-3 border border-amber-200">
+                  No templates found. Create templates in your Dropbox Sign dashboard first.
+                </div>
+              ) : (
+                <select value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">-- Select template --</option>
+                  {templates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                </select>
+              )}
+            </div>
+          )}
 
           {/* Document type */}
           <div>
@@ -417,7 +508,7 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
             {clientSearch && filteredClients.length > 0 && (
               <div className="max-h-32 overflow-y-auto border border-slate-200 rounded-lg">
                 {filteredClients.slice(0, 8).map(c => (
-                  <button key={c.id} onClick={() => { pickClient(c); setClientSearch(''); }}
+                  <button key={c.id} onClick={() => pickClient(c)}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center gap-2">
                     <User className="w-3.5 h-3.5 text-slate-400" />
                     <span className="font-medium">{c.full_name}</span>
@@ -427,6 +518,20 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
               </div>
             )}
           </div>
+
+          {/* Case picker */}
+          {cases.length > 0 && (
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Link to Case</label>
+              <select value={caseId} onChange={(e) => setCaseId(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">-- No case --</option>
+                {cases.map(c => (
+                  <option key={c.id} value={c.id}>{c.plaintiff_name || 'Untitled'} ({c.status})</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Signer details */}
           <div className="grid grid-cols-2 gap-3">
@@ -469,9 +574,9 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
 
         <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">Cancel</button>
-          <button onClick={handleSend} disabled={sending || !selectedTemplate || !signerName || !signerEmail}
+          <button onClick={handleSend} disabled={sending || !canSend}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
-            {sending ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</> : <><Send className="w-4 h-4" /> Send</>}
+            {sending ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</> : <><Send className="w-4 h-4" /> Send for Signature</>}
           </button>
         </div>
       </div>

@@ -955,6 +955,20 @@ export async function sendSignatureRequest(data) {
   });
 }
 
+export async function sendDocumentForSignature(formData) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/esign/send-document`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to send document for signature');
+  }
+  return response.json();
+}
+
 export async function getSignatureRequests(caseId = null, clientId = null) {
   const params = new URLSearchParams();
   if (caseId) params.append('case_id', caseId);
