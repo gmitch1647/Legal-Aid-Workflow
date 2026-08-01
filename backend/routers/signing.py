@@ -54,6 +54,57 @@ def _generate_token() -> str:
 # POST /create — attorney uploads a document and creates a signing session
 # ---------------------------------------------------------------------------
 
+@router.get("/test")
+async def test_signing_storage(authorization: str = Header(default=None)):
+    """Diagnostic: upload a tiny test PDF to storage, download it back, verify."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+    test_pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+
+    test_path = "signing/_test/test.pdf"
+    result = {"steps": []}
+
+    # Upload
+    try:
+        supabase.storage.from_(STORAGE_BUCKET).upload(
+            path=test_path, file=test_pdf,
+            file_options={"content-type": "application/pdf"},
+        )
+        result["steps"].append({"upload": "OK", "size": len(test_pdf)})
+    except Exception as e:
+        err_str = str(e)
+        if "Duplicate" in err_str or "already exists" in err_str.lower():
+            result["steps"].append({"upload": "already exists (OK)"})
+        else:
+            result["steps"].append({"upload": f"FAILED: {e}"})
+            return result
+
+    # Download
+    try:
+        downloaded = supabase.storage.from_(STORAGE_BUCKET).download(test_path)
+        result["steps"].append({
+            "download": "OK",
+            "type": str(type(downloaded)),
+            "size": len(downloaded) if downloaded else 0,
+            "first_20_bytes": repr(downloaded[:20]) if downloaded else "None",
+            "is_pdf": downloaded[:4] == b"%PDF" if downloaded else False,
+        })
+    except Exception as e:
+        result["steps"].append({"download": f"FAILED: {e}"})
+        return result
+
+    # Cleanup
+    try:
+        supabase.storage.from_(STORAGE_BUCKET).remove([test_path])
+        result["steps"].append({"cleanup": "OK"})
+    except Exception:
+        pass
+
+    return result
+
+
 @router.post("/create")
 async def create_signing_session(
     file: UploadFile = File(...),
