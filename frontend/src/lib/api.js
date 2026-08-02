@@ -1207,6 +1207,17 @@ export async function uploadSettlementForClosingStatement(caseId, file) {
   });
 }
 
+export async function attachSigningSettlementForClosingStatement(caseId, signingSessionId) {
+  return request('/closing-statements/attach-signing-settlement', {
+    method: 'POST',
+    body: JSON.stringify({ case_id: caseId, signing_session_id: signingSessionId }),
+  });
+}
+
+export async function getClosingStatementSettlementSource(caseId) {
+  return request(`/closing-statements/settlement-source?case_id=${encodeURIComponent(caseId)}`);
+}
+
 export async function createClosingStatement(data) {
   return request('/closing-statements', {
     method: 'POST',

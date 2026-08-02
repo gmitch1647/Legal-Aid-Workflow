@@ -130,6 +130,7 @@ export default function SettlementCenter() {
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState(requestedCaseId);
   const [agreementRequests, setAgreementRequests] = useState([]);
+  const [creditDisclosureRequests, setCreditDisclosureRequests] = useState([]);
   const [w9Requests, setW9Requests] = useState([]);
   const [closingStatements, setClosingStatements] = useState([]);
   const [loadingCases, setLoadingCases] = useState(true);
@@ -167,6 +168,7 @@ export default function SettlementCenter() {
   const loadWorkflow = useCallback(async (caseId) => {
     if (!caseId) {
       setAgreementRequests([]);
+      setCreditDisclosureRequests([]);
       setW9Requests([]);
       setClosingStatements([]);
       return;
@@ -179,9 +181,9 @@ export default function SettlementCenter() {
         listW9Requests(caseId),
         getClosingStatements(),
       ]);
-      setAgreementRequests(
-        asRows(signatureRows, ['requests', 'data']).filter((row) => ['settlement', 'settlement_agreement'].includes(row.document_type)),
-      );
+      const signatureRequests = asRows(signatureRows, ['requests', 'data']);
+      setAgreementRequests(signatureRequests.filter((row) => ['settlement', 'settlement_agreement'].includes(row.document_type)));
+      setCreditDisclosureRequests(signatureRequests.filter((row) => row.document_type === 'credit_disclosure'));
       setW9Requests(asRows(w9Rows, ['requests', 'data']));
       setClosingStatements(
         asRows(statementRows, ['statements', 'data']).filter((row) => String(row.case_id) === String(caseId)),
@@ -197,9 +199,11 @@ export default function SettlementCenter() {
   useEffect(() => { loadWorkflow(selectedCaseId); }, [selectedCaseId, loadWorkflow]);
 
   const agreement = agreementRequests[0] || null;
+  const creditDisclosure = creditDisclosureRequests[0] || null;
   const w9 = w9Requests[0] || null;
   const closingStatement = closingStatements[0] || null;
   const agreementKind = requestStatus(agreement);
+  const creditDisclosureKind = requestStatus(creditDisclosure);
   const w9Kind = requestStatus(w9);
   const closingKind = closingStatus(closingStatement);
 
@@ -216,16 +220,31 @@ export default function SettlementCenter() {
   };
 
   const agreementNeedsReplacement = !agreement || agreementKind === 'not_started';
+  const creditDisclosureNeedsReplacement = !creditDisclosure || creditDisclosureKind === 'not_started';
 
   const openAgreementPanel = () => {
     setNotice('');
-    setAgreementPanel(agreementNeedsReplacement ? 'send' : 'status');
+    setAgreementPanel(agreementNeedsReplacement ? 'agreement-send' : 'agreement-status');
   };
 
-  const handleAgreementSent = async () => {
+  const openCreditDisclosurePanel = () => {
+    setNotice('');
+    setAgreementPanel(creditDisclosureNeedsReplacement ? 'disclosure-send' : 'disclosure-status');
+  };
+
+  const handleAgreementSent = async ({ documentType, settlementSource, attachmentError } = {}) => {
     setAgreementPanel(null);
     await loadWorkflow(selectedCaseId);
-    setNotice('Settlement agreement sent. The client has received a secure signing link, and the W-9 step is now ready.');
+    if (documentType === 'credit_disclosure') {
+      setNotice('Credit disclosure sent. Its signature status is now tracked with this settlement case.');
+      return;
+    }
+    if (attachmentError) {
+      setNotice(`Settlement agreement sent. ${attachmentError}`);
+      return;
+    }
+    const attachedName = settlementSource?.settlement_document?.file_name;
+    setNotice(`Settlement agreement sent${attachedName ? ` and ${attachedName} is now attached for the closing statement` : ''}. The client has received a secure signing link, and the W-9 step is now ready.`);
   };
 
   const nextStep = useMemo(() => {
@@ -316,8 +335,8 @@ export default function SettlementCenter() {
                   detail={agreement ? `${agreement.title || 'Settlement agreement'}${displayDate(agreement.sent_at || agreement.created_at) ? ` · ${agreementKind === 'complete' ? 'completed' : 'sent'} ${displayDate(agreement.submitted_at || agreement.sent_at || agreement.created_at)}` : ''}` : 'No settlement-agreement signature request is attached to this case yet.'}
                   actionLabel={agreementNeedsReplacement ? (agreement ? 'Send replacement' : 'Send agreement') : 'Review agreement'}
                   onAction={openAgreementPanel}
-                  secondaryLabel={agreementKind === 'pending' ? 'Request W-9 now' : null}
-                  onSecondary={agreementKind === 'pending' ? () => openStep('/attorney/w9') : null}
+                  secondaryLabel={creditDisclosureNeedsReplacement ? 'Send credit disclosure (if applicable)' : 'Review credit disclosure'}
+                  onSecondary={openCreditDisclosurePanel}
                 />
                 <StepCard
                   number="2"
@@ -341,23 +360,41 @@ export default function SettlementCenter() {
                 />
               </section>
 
-              <p className="px-1 text-xs leading-5 text-slate-500">The W-9 can be sent while the agreement is awaiting signature. The closing statement remains a separate review step because it requires the final settlement document and attorney-approved distribution.</p>
+              <p className="px-1 text-xs leading-5 text-slate-500">The optional credit disclosure can be sent from Step 1 only when that case requires it. The W-9 can be sent while the agreement is awaiting signature. The final settlement agreement is automatically attached to the closing-statement step, where you still review and approve the distribution.</p>
             </>
           )}
         </>
       )}
-      {agreementPanel === 'send' && selectedCaseId && (
+      {agreementPanel === 'agreement-send' && selectedCaseId && (
         <SettlementAgreementModal
-          key={`send-${selectedCaseId}`}
+          key={`agreement-send-${selectedCaseId}`}
           caseId={selectedCaseId}
+          mode="settlement"
           onClose={() => setAgreementPanel(null)}
           onSent={handleAgreementSent}
         />
       )}
-      {agreementPanel === 'status' && agreement && (
+      {agreementPanel === 'agreement-status' && agreement && (
         <SettlementAgreementStatusModal
-          key={`status-${agreement.id}`}
+          key={`agreement-status-${agreement.id}`}
           agreement={agreement}
+          onClose={() => setAgreementPanel(null)}
+          onRefresh={() => loadWorkflow(selectedCaseId)}
+        />
+      )}
+      {agreementPanel === 'disclosure-send' && selectedCaseId && (
+        <SettlementAgreementModal
+          key={`disclosure-send-${selectedCaseId}`}
+          caseId={selectedCaseId}
+          mode="credit_disclosure"
+          onClose={() => setAgreementPanel(null)}
+          onSent={handleAgreementSent}
+        />
+      )}
+      {agreementPanel === 'disclosure-status' && creditDisclosure && (
+        <SettlementAgreementStatusModal
+          key={`disclosure-status-${creditDisclosure.id}`}
+          agreement={creditDisclosure}
           onClose={() => setAgreementPanel(null)}
           onRefresh={() => loadWorkflow(selectedCaseId)}
         />

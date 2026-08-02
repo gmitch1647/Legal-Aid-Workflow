@@ -5,12 +5,17 @@ from __future__ import annotations
 import io
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import fitz
 from PIL import Image, ImageDraw
 from PyPDF2 import PdfReader
 
-from routers.closing_statements import _extract_settlement_suggestions, _money_to_cents
+from routers.closing_statements import (
+    _attach_settlement_signing_source,
+    _extract_settlement_suggestions,
+    _money_to_cents,
+)
 from routers.signing import _embed_signature, _execution_block_placement
 from utils.closing_statement_renderer import ClosingStatementData, money_in_words, render_closing_statement
 
@@ -48,6 +53,79 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
         result = _extract_settlement_suggestions(text)
         self.assertEqual(result["adverse_party"], "Acme Financial Services, LLC")
         self.assertEqual(result["adverse_party_source"], "settlement_caption")
+
+    def test_step_one_settlement_source_is_linked_to_case_documents(self):
+        class Response:
+            def __init__(self, data):
+                self.data = data
+
+        class Query:
+            def __init__(self, client, table_name):
+                self.client = client
+                self.table_name = table_name
+                self.operation = "select"
+                self.payload = None
+
+            def select(self, *_args):
+                return self
+
+            def eq(self, *_args):
+                return self
+
+            def order(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, *_args):
+                return self
+
+            def insert(self, payload):
+                self.operation = "insert"
+                self.payload = payload
+                return self
+
+            def execute(self):
+                if self.table_name == "signing_sessions":
+                    return Response([self.client.session])
+                if self.operation == "insert":
+                    self.client.inserted_document = self.payload
+                    return Response([self.payload])
+                return Response([])
+
+        class Storage:
+            def from_(self, _bucket):
+                return self
+
+            def download(self, _path):
+                return b"%PDF-1.7 linked settlement source"
+
+        class Supabase:
+            def __init__(self):
+                self.session = {
+                    "id": "session-1",
+                    "case_id": "case-1",
+                    "document_type": "settlement",
+                    "original_path": "signing/session-1/source_final-settlement.pdf",
+                    "sent_by": "attorney-1",
+                    "created_at": "2026-08-02T00:00:00+00:00",
+                }
+                self.inserted_document = None
+                self.storage = Storage()
+
+            def table(self, table_name):
+                return Query(self, table_name)
+
+        fake_supabase = Supabase()
+        with patch("routers.closing_statements.get_supabase", return_value=fake_supabase):
+            document = _attach_settlement_signing_source(
+                {"id": "case-1"},
+                {"id": "attorney-1"},
+                "session-1",
+            )
+
+        self.assertEqual(document["case_id"], "case-1")
+        self.assertEqual(document["storage_path"], "signing/session-1/source_final-settlement.pdf")
+        self.assertEqual(document["document_category"], "settlement")
+        self.assertEqual(document["uploaded_by"], "attorney-1")
 
     def test_money_parses_in_integer_cents(self):
         self.assertEqual(_money_to_cents("$1,234.56", "Settlement"), 123456)

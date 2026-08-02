@@ -221,6 +221,39 @@ def _read_settlement_upload(content: bytes, file_type: str, filename: str) -> st
     )
 
 
+def _settlement_suggestions_for_case(case: dict, text: str) -> tuple[dict, str]:
+    """Return reviewable settlement suggestions with case-record fallbacks."""
+    suggestions = _extract_settlement_suggestions(text)
+    suggestions["case_number"] = suggestions.get("case_number") or _case_number(case)
+    if not suggestions.get("adverse_party"):
+        try:
+            linked_adverse_party = _case_adverse_party(case["id"])
+        except Exception:
+            logger.warning("Could not load linked defendants for closing statement case %s", case.get("id"))
+            linked_adverse_party = None
+        if linked_adverse_party:
+            suggestions["adverse_party"] = linked_adverse_party
+            suggestions["adverse_party_source"] = "case"
+
+    source = suggestions.get("adverse_party_source")
+    if source == "case":
+        extraction_note = (
+            "The adverse party was filled from the defendants already linked to this case. "
+            "Review every suggested value before generating the statement."
+        )
+    elif source in {"settlement", "settlement_caption"}:
+        extraction_note = (
+            "The adverse party was found in the settlement and has been prefilled. "
+            "Review every suggested value before generating the statement."
+        )
+    else:
+        extraction_note = (
+            "LegalFlow could not identify an adverse party automatically. "
+            "Enter it manually after reviewing the settlement."
+        )
+    return suggestions, extraction_note
+
+
 def _fetch_case_for_attorney(case_id: str, profile: dict) -> tuple[dict, dict]:
     supabase = get_supabase()
     response = supabase.table("cases").select("*").eq("id", case_id).limit(1).execute()
@@ -294,6 +327,120 @@ def _selected_attorney(attorney_id: str) -> dict:
             ),
         )
     return attorney
+
+
+def _settlement_document_result(case: dict, document: dict) -> dict:
+    """Read a stored case settlement and return the standard editable suggestions."""
+    storage_path = str(document.get("storage_path") or "")
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="The saved settlement document has no storage location.")
+
+    filename = _safe_filename(str(document.get("file_name") or Path(storage_path).name), "settlement")
+    file_type = _normalized_file_type(str(document.get("file_type") or ""), filename)
+    try:
+        content = get_supabase().storage.from_(STORAGE_BUCKET).download(storage_path)
+        text = _read_settlement_upload(content, file_type, filename)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Could not read saved settlement %s: %s", storage_path, exc)
+        text = ""
+
+    suggestions, extraction_note = _settlement_suggestions_for_case(case, text)
+    return {
+        "settlement_document": document,
+        "suggestions": suggestions,
+        "extraction_note": extraction_note,
+    }
+
+
+def _latest_settlement_signing_session(case_id: str, signing_session_id: str | None = None) -> Optional[dict]:
+    """Return the requested or most recent case-linked settlement signing source."""
+    query = (
+        get_supabase().table("signing_sessions")
+        .select("id,title,document_type,original_path,case_id,sent_by,created_at")
+        .eq("case_id", case_id)
+    )
+    if signing_session_id:
+        query = query.eq("id", signing_session_id).limit(1)
+        response = query.execute()
+        session = (response.data or [None])[0]
+        if not session:
+            raise HTTPException(status_code=404, detail="The selected settlement agreement is not available for this case.")
+        if session.get("document_type") not in {"settlement", "settlement_agreement"}:
+            raise HTTPException(status_code=400, detail="Only a settlement agreement can be attached to a closing statement.")
+        return session
+
+    response = query.order("created_at", desc=True).limit(50).execute()
+    for session in response.data or []:
+        if session.get("document_type") in {"settlement", "settlement_agreement"}:
+            return session
+    return None
+
+
+def _attach_settlement_signing_source(case: dict, profile: dict, signing_session_id: str | None = None) -> Optional[dict]:
+    """Create one case-document reference to the immutable Step 1 settlement source."""
+    session = _latest_settlement_signing_session(case["id"], signing_session_id)
+    if not session:
+        return None
+
+    storage_path = str(session.get("original_path") or "")
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="The settlement agreement source file is unavailable.")
+
+    supabase = get_supabase()
+    existing = (
+        supabase.table("case_documents")
+        .select("*")
+        .eq("case_id", case["id"])
+        .eq("storage_path", storage_path)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]
+
+    source_name = _safe_filename(Path(storage_path).name.removeprefix("source_"), "settlement")
+    file_type = _normalized_file_type(None, source_name)
+    if file_type not in SUPPORTED_SETTLEMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="The settlement agreement must be a PDF or DOCX before it can be used for a closing statement.",
+        )
+
+    try:
+        content = supabase.storage.from_(STORAGE_BUCKET).download(storage_path)
+        if not content:
+            raise RuntimeError("No source bytes were returned.")
+        created = supabase.table("case_documents").insert({
+            "case_id": case["id"],
+            "file_name": source_name,
+            "file_type": file_type,
+            "file_size": len(content),
+            "storage_path": storage_path,
+            "document_category": "settlement",
+            "uploaded_by": session.get("sent_by") or profile["id"],
+        }).execute()
+        if not created.data:
+            raise RuntimeError("Settlement document metadata could not be saved.")
+        return created.data[0]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Could not link Step 1 settlement source to case %s", case["id"])
+        raise HTTPException(status_code=500, detail="Could not attach the settlement agreement to this case.") from exc
+
+
+class SigningSettlementAttachment(BaseModel):
+    case_id: str
+    signing_session_id: str = Field(min_length=1, max_length=120)
+
+    @field_validator("case_id")
+    @classmethod
+    def nonempty_case_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("A related case is required.")
+        return value.strip()
 
 
 class ClosingStatementCreate(BaseModel):
@@ -379,39 +526,54 @@ async def upload_and_extract_settlement(
         logger.exception("Could not store settlement for case %s", case_id)
         raise HTTPException(status_code=500, detail="Could not store the settlement document.") from exc
 
-    suggestions = _extract_settlement_suggestions(text)
-    suggestions["case_number"] = suggestions.get("case_number") or _case_number(case)
-    if not suggestions.get("adverse_party"):
-        try:
-            linked_adverse_party = _case_adverse_party(case["id"])
-        except Exception:
-            logger.warning("Could not load linked defendants for closing statement case %s", case_id)
-            linked_adverse_party = None
-        if linked_adverse_party:
-            suggestions["adverse_party"] = linked_adverse_party
-            suggestions["adverse_party_source"] = "case"
-
-    source = suggestions.get("adverse_party_source")
-    if source == "case":
-        extraction_note = (
-            "The adverse party was filled from the defendants already linked to this case. "
-            "Review every suggested value before generating the statement."
-        )
-    elif source in {"settlement", "settlement_caption"}:
-        extraction_note = (
-            "The adverse party was found in the uploaded settlement and has been prefilled. "
-            "Review every suggested value before generating the statement."
-        )
-    else:
-        extraction_note = (
-            "LegalFlow could not identify an adverse party automatically. "
-            "Enter it manually after reviewing the settlement."
-        )
+    suggestions, extraction_note = _settlement_suggestions_for_case(case, text)
     return {
         "settlement_document": document_response.data[0],
         "suggestions": suggestions,
         "extraction_note": extraction_note,
     }
+
+
+@router.post("/attach-signing-settlement", status_code=status.HTTP_201_CREATED)
+async def attach_signing_settlement(
+    payload: SigningSettlementAttachment,
+    authorization: str = Header(...),
+):
+    """Attach the Step 1 settlement source to the case for closing-statement reuse."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    case, _client = _fetch_case_for_attorney(payload.case_id, profile)
+    document = _attach_settlement_signing_source(case, profile, payload.signing_session_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="No settlement agreement is available for this case.")
+    return _settlement_document_result(case, document)
+
+
+@router.get("/settlement-source")
+async def get_settlement_source(
+    case_id: str,
+    authorization: str = Header(...),
+):
+    """Return a saved settlement source, attaching a Step 1 agreement on demand."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    case, _client = _fetch_case_for_attorney(case_id, profile)
+    supabase = get_supabase()
+    existing = (
+        supabase.table("case_documents")
+        .select("*")
+        .eq("case_id", case["id"])
+        .eq("document_category", "settlement")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    document = (existing.data or [None])[0]
+    if not document:
+        document = _attach_settlement_signing_source(case, profile)
+    if not document:
+        return {"settlement_document": None, "suggestions": {}, "extraction_note": None}
+    return _settlement_document_result(case, document)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

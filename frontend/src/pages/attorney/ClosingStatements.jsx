@@ -22,6 +22,7 @@ import {
   getAttorneys,
   getCases,
   getClosingStatements,
+  getClosingStatementSettlementSource,
   saveDownloadedBlob,
   sendClosingStatementForSignature,
   uploadSettlementForClosingStatement,
@@ -86,6 +87,7 @@ export default function ClosingStatements() {
   const [statement, setStatement] = useState(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [loadingSavedSettlement, setLoadingSavedSettlement] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
   const [showAddAttorney, setShowAddAttorney] = useState(false);
@@ -100,6 +102,7 @@ export default function ClosingStatements() {
   const fileInputRef = useRef(null);
   const previewCanvasRef = useRef(null);
   const previewRequestRef = useRef(0);
+  const settlementSourceRequestRef = useRef(0);
 
   const defaultAttorneyId = useMemo(
     () => attorneys.find((attorney) => attorney.is_default)?.id || '',
@@ -207,13 +210,53 @@ export default function ClosingStatements() {
     };
   }, [preview?.bytes]);
 
+  const applySettlementSource = (result, { notice = '' } = {}) => {
+    const suggestions = result?.suggestions || {};
+    if (!result?.settlement_document) return false;
+    setSettlement(result.settlement_document);
+    setForm((previous) => ({
+      ...previous,
+      case_number: suggestions.case_number || previous.case_number,
+      adverse_party: suggestions.adverse_party || previous.adverse_party,
+      account_reference: suggestions.account_reference || previous.account_reference,
+      gross_settlement_amount: suggestions.gross_settlement_amount || previous.gross_settlement_amount,
+      non_monetary_terms: suggestions.non_monetary_terms || previous.non_monetary_terms,
+    }));
+    if (notice) setNotice(notice);
+    return true;
+  };
+
+  const loadSavedSettlement = async (caseId) => {
+    if (!caseId) return;
+    const requestId = settlementSourceRequestRef.current + 1;
+    settlementSourceRequestRef.current = requestId;
+    setLoadingSavedSettlement(true);
+    try {
+      const result = await getClosingStatementSettlementSource(caseId);
+      if (settlementSourceRequestRef.current !== requestId) return;
+      applySettlementSource(result, {
+        notice: result?.settlement_document
+          ? 'A settlement already attached to this case has been selected and used to prefill the closing statement. Review every value before generating.'
+          : '',
+      });
+    } catch (err) {
+      if (settlementSourceRequestRef.current === requestId) {
+        setError(err.message || 'Could not load the saved settlement for this case. You can upload it below instead.');
+      }
+    } finally {
+      if (settlementSourceRequestRef.current === requestId) setLoadingSavedSettlement(false);
+    }
+  };
+
   const resetComposer = () => {
+    settlementSourceRequestRef.current += 1;
     setSelectedCaseId('');
     setSettlement(null);
     setForm({ ...emptyForm, attorney_id: form.attorney_id || defaultAttorneyId });
     setStatement(null);
     setError('');
     setNotice('');
+    setLoadingSavedSettlement(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -237,6 +280,7 @@ export default function ClosingStatements() {
       signer_email: caseRow?.client?.email || '',
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
+    void loadSavedSettlement(caseId);
   };
 
   const updateField = (field, value) => {
@@ -273,23 +317,17 @@ export default function ClosingStatements() {
   const handleSettlementUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file || !selectedCaseId) return;
+    settlementSourceRequestRef.current += 1;
+    setLoadingSavedSettlement(false);
     setUploading(true);
     setError('');
     setNotice('');
     setStatement(null);
     try {
       const result = await uploadSettlementForClosingStatement(selectedCaseId, file);
-      const suggestions = result.suggestions || {};
-      setSettlement(result.settlement_document);
-      setForm((previous) => ({
-        ...previous,
-        case_number: suggestions.case_number || previous.case_number,
-        adverse_party: suggestions.adverse_party || previous.adverse_party,
-        account_reference: suggestions.account_reference || previous.account_reference,
-        gross_settlement_amount: suggestions.gross_settlement_amount || previous.gross_settlement_amount,
-        non_monetary_terms: suggestions.non_monetary_terms || previous.non_monetary_terms,
-      }));
-      setNotice(result.extraction_note || 'Settlement saved. Review the proposed values before generating the statement.');
+      applySettlementSource(result, {
+        notice: result.extraction_note || 'Settlement saved. Review the proposed values before generating the statement.',
+      });
     } catch (err) {
       setError(err.message || 'Could not upload and read the settlement.');
       event.target.value = '';
@@ -432,12 +470,13 @@ export default function ClosingStatements() {
           <div>
             <p className="text-sm font-medium text-slate-700">Settlement document</p>
             <label className={`mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-2.5 text-sm font-medium transition ${selectedCaseId ? 'border-primary-300 bg-primary-50 text-primary-700 hover:bg-primary-100' : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'}`}>
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              {uploading ? 'Uploading and reading settlement…' : settlement ? `Replace ${settlement.file_name}` : 'Choose PDF, DOCX, or TXT settlement'}
-              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" disabled={!selectedCaseId || uploading} onChange={handleSettlementUpload} className="sr-only" />
+              {uploading || loadingSavedSettlement ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {uploading ? 'Uploading and reading settlement…' : loadingSavedSettlement ? 'Checking this case for a saved settlement…' : settlement ? `Replace ${settlement.file_name}` : 'Choose PDF, DOCX, or TXT settlement'}
+              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" disabled={!selectedCaseId || uploading || loadingSavedSettlement} onChange={handleSettlementUpload} className="sr-only" />
             </label>
           </div>
         </div>
+        {settlement && <div className="border-t border-slate-100 bg-emerald-50 px-5 py-3 text-xs leading-5 text-emerald-900"><span className="font-semibold">Attached settlement:</span> {settlement.file_name || 'Settlement agreement'}. This case-linked document will be used for the closing statement; select it above only if you need to replace it.</div>}
         <div className="border-t border-slate-100 bg-slate-50 p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <label className="block flex-1 text-sm font-medium text-slate-700">
