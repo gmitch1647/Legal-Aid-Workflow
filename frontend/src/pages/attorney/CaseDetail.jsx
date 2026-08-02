@@ -204,6 +204,49 @@ function NotesModal({ title, placeholder, submitLabel, onSubmit, onCancel, loadi
 // Inline Message Thread
 // ---------------------------------------------------------------------------
 
+function CaseTypeSelector({ caseId, currentTypes, onUpdate }) {
+  const types = ['FCRA', 'FDCPA', 'TCPA'];
+  const [selected, setSelected] = useState(() => {
+    if (!currentTypes) return [];
+    if (typeof currentTypes === 'string') return currentTypes.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+    if (Array.isArray(currentTypes)) return currentTypes.map(t => t.toUpperCase());
+    return [];
+  });
+  const [saving, setSaving] = useState(false);
+
+  async function toggle(type) {
+    const next = selected.includes(type)
+      ? selected.filter(t => t !== type)
+      : [...selected, type];
+    setSelected(next);
+    setSaving(true);
+    try {
+      const { supabase } = await import('../../lib/supabase');
+      await supabase.from('cases').update({ case_type: next.join(',') }).eq('id', caseId);
+      if (onUpdate) onUpdate();
+    } catch (err) { console.error('Failed to update case type:', err); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2 items-center">
+      {types.map(type => (
+        <button key={type} onClick={() => toggle(type)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+            selected.includes(type)
+              ? type === 'FCRA' ? 'bg-blue-100 text-blue-700 border-blue-300'
+                : type === 'FDCPA' ? 'bg-purple-100 text-purple-700 border-purple-300'
+                : 'bg-green-100 text-green-700 border-green-300'
+              : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-300'
+          }`}>
+          {type}
+        </button>
+      ))}
+      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+    </div>
+  );
+}
+
 function PiiSection({ caseId, documents, onRefresh }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = React.useRef(null);
@@ -987,6 +1030,12 @@ export default function CaseDetail() {
                     <p className="mt-1 text-sm text-slate-900">{caseData.court || caseData.court_name || 'Not assigned'}</p>
                   )}
                 </div>
+              </div>
+
+              {/* Case Type */}
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Case Type</p>
+                <CaseTypeSelector caseId={id} currentTypes={caseData.case_type} onUpdate={fetchCase} />
               </div>
 
               <div>
