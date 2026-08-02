@@ -60,7 +60,7 @@ app.add_middleware(
     CORSMiddleware,
     # Regex covers any Vercel preview URL + the custom FRONTEND_URL.
     # If you have a custom domain, add it to FRONTEND_URL env var in Railway.
-    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?",
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*legalflow\.me|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?",
     allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
