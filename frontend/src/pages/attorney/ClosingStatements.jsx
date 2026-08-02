@@ -4,16 +4,21 @@ import {
   Calculator,
   CheckCircle2,
   Download,
+  Eye,
   FileSignature,
   FileText,
   Loader2,
+  Plus,
   RefreshCw,
   Send,
   Upload,
+  X,
 } from 'lucide-react';
 import {
+  createAttorney,
   createClosingStatement,
   downloadClosingStatement,
+  getAttorneys,
   getCases,
   getClosingStatements,
   saveDownloadedBlob,
@@ -28,9 +33,21 @@ const emptyForm = {
   gross_settlement_amount: '',
   client_payout_amount: '',
   paralegal_fee_amount: '0.00',
+  court_cost_amount: '0.00',
+  service_of_process_cost_amount: '0.00',
+  attorney_id: '',
   non_monetary_terms: '',
   signer_name: '',
   signer_email: '',
+};
+
+const emptyAttorney = {
+  full_name: '',
+  bar_number: '',
+  firm_name: '',
+  address: '',
+  phone: '',
+  email: '',
 };
 
 function dollarsToCents(value) {
@@ -41,11 +58,10 @@ function dollarsToCents(value) {
 }
 
 function formatMoney(cents) {
-  const amount = (Number(cents || 0) / 100).toLocaleString('en-US', {
+  return (Number(cents || 0) / 100).toLocaleString('en-US', {
     style: 'currency',
     currency: 'USD',
   });
-  return amount;
 }
 
 function statementStatus(status) {
@@ -57,6 +73,7 @@ function statementStatus(status) {
 
 export default function ClosingStatements() {
   const [cases, setCases] = useState([]);
+  const [attorneys, setAttorneys] = useState([]);
   const [statements, setStatements] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [settlement, setSettlement] = useState(null);
@@ -66,36 +83,101 @@ export default function ClosingStatements() {
   const [uploading, setUploading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
+  const [showAddAttorney, setShowAddAttorney] = useState(false);
+  const [newAttorney, setNewAttorney] = useState(emptyAttorney);
+  const [savingAttorney, setSavingAttorney] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const fileInputRef = useRef(null);
+  const previewCanvasRef = useRef(null);
 
-  const selectedCase = useMemo(
-    () => cases.find((item) => item.id === selectedCaseId) || null,
-    [cases, selectedCaseId],
+  const defaultAttorneyId = useMemo(
+    () => attorneys.find((attorney) => attorney.is_default)?.id || '',
+    [attorneys],
+  );
+  const selectedAttorney = useMemo(
+    () => attorneys.find((attorney) => attorney.id === form.attorney_id) || null,
+    [attorneys, form.attorney_id],
   );
   const grossCents = dollarsToCents(form.gross_settlement_amount);
   const clientCents = dollarsToCents(form.client_payout_amount);
   const paralegalCents = dollarsToCents(form.paralegal_fee_amount);
-  const attorneyCents = grossCents - clientCents - paralegalCents;
+  const courtCostCents = dollarsToCents(form.court_cost_amount);
+  const serviceCostCents = dollarsToCents(form.service_of_process_cost_amount);
+  const attorneyCents = grossCents - clientCents - paralegalCents - courtCostCents - serviceCostCents;
   const distributionValid = Boolean(form.gross_settlement_amount && form.client_payout_amount) && attorneyCents >= 0;
 
   const refresh = async () => {
-    const [caseData, statementData] = await Promise.all([getCases(), getClosingStatements()]);
+    const [caseData, statementData, attorneyData] = await Promise.all([
+      getCases(),
+      getClosingStatements(),
+      getAttorneys(),
+    ]);
+    const attorneyList = Array.isArray(attorneyData) ? attorneyData : [];
+    const defaultId = attorneyList.find((attorney) => attorney.is_default)?.id || '';
     setCases(caseData || []);
     setStatements(statementData || []);
+    setAttorneys(attorneyList);
+    if (defaultId) {
+      setForm((previous) => (previous.attorney_id ? previous : { ...previous, attorney_id: defaultId }));
+    }
   };
 
   useEffect(() => {
     refresh()
-      .catch((err) => setError(err.message || 'Could not load cases and closing statements.'))
+      .catch((err) => setError(err.message || 'Could not load cases, attorneys, and closing statements.'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!preview?.bytes || !previewCanvasRef.current) return undefined;
+    let cancelled = false;
+
+    const renderPreview = async () => {
+      try {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+          'pdfjs-dist/build/pdf.worker.mjs',
+          import.meta.url,
+        ).toString();
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(preview.bytes) }).promise;
+        const container = previewCanvasRef.current;
+        if (cancelled || !container) return;
+        container.innerHTML = '';
+
+        for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+          const page = await pdf.getPage(pageNumber);
+          const viewport = page.getViewport({ scale: 1.25 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.width = '100%';
+          canvas.style.maxWidth = `${viewport.width}px`;
+          canvas.style.margin = '0 auto 12px';
+          canvas.style.display = 'block';
+          canvas.style.boxShadow = '0 2px 8px rgba(15, 23, 42, 0.18)';
+          canvas.style.borderRadius = '4px';
+          container.appendChild(canvas);
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        }
+      } catch (err) {
+        if (!cancelled) setPreviewError(err.message || 'LegalFlow could not render this PDF preview.');
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    };
+
+    renderPreview();
+    return () => { cancelled = true; };
+  }, [preview]);
 
   const resetComposer = () => {
     setSelectedCaseId('');
     setSettlement(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, attorney_id: form.attorney_id || defaultAttorneyId });
     setStatement(null);
     setError('');
     setNotice('');
@@ -104,6 +186,10 @@ export default function ClosingStatements() {
 
   const chooseCase = (caseId) => {
     const caseRow = cases.find((item) => item.id === caseId);
+    const linkedAdverseParty = (caseRow?.defendants || [])
+      .map((defendant) => defendant?.name?.trim())
+      .filter(Boolean)
+      .join(', ');
     setSelectedCaseId(caseId);
     setSettlement(null);
     setStatement(null);
@@ -111,7 +197,9 @@ export default function ClosingStatements() {
     setNotice('');
     setForm({
       ...emptyForm,
+      attorney_id: form.attorney_id || defaultAttorneyId,
       case_number: caseRow?.case_number || '',
+      adverse_party: linkedAdverseParty,
       signer_name: caseRow?.client_name || caseRow?.client?.full_name || '',
       signer_email: caseRow?.client?.email || '',
     });
@@ -121,6 +209,32 @@ export default function ClosingStatements() {
   const updateField = (field, value) => {
     setForm((previous) => ({ ...previous, [field]: value }));
     setStatement(null);
+  };
+
+  const handleAddAttorney = async () => {
+    const missing = ['full_name', 'firm_name', 'address', 'phone', 'email']
+      .filter((field) => !newAttorney[field].trim());
+    if (missing.length) {
+      setError('Enter the attorney name, firm name, office address, phone number, and email before saving the letterhead.');
+      return;
+    }
+    setSavingAttorney(true);
+    setError('');
+    try {
+      const created = await createAttorney({
+        ...newAttorney,
+        is_default: attorneys.length === 0,
+      });
+      setAttorneys((previous) => [...previous, created].sort((left, right) => left.full_name.localeCompare(right.full_name)));
+      setForm((previous) => ({ ...previous, attorney_id: created.id }));
+      setNewAttorney(emptyAttorney);
+      setShowAddAttorney(false);
+      setNotice(`${created.full_name} was added and selected for this closing-statement letterhead.`);
+    } catch (err) {
+      setError(err.message || 'Could not save the attorney.');
+    } finally {
+      setSavingAttorney(false);
+    }
   };
 
   const handleSettlementUpload = async (event) => {
@@ -154,10 +268,11 @@ export default function ClosingStatements() {
   const validateBeforeGenerate = () => {
     if (!selectedCaseId) return 'Choose the related case first.';
     if (!settlement?.id) return 'Upload the signed or final settlement first.';
+    if (!form.attorney_id) return 'Choose the attorney whose firm letterhead should appear on the closing statement.';
     if (!form.case_number.trim()) return 'Enter the case number.';
     if (!form.gross_settlement_amount.trim()) return 'Enter the gross settlement amount.';
     if (!form.client_payout_amount.trim()) return 'Enter the amount being paid to the client.';
-    if (!distributionValid) return 'The client payout and paralegal fee cannot exceed the gross settlement amount.';
+    if (!distributionValid) return 'The payout, paralegal fee, court costs, and service-of-process costs cannot exceed the gross settlement amount.';
     if (!form.signer_name.trim() || !form.signer_email.trim()) return 'Enter the client signer name and email address.';
     return '';
   };
@@ -179,7 +294,7 @@ export default function ClosingStatements() {
         ...form,
       });
       setStatement(result.statement);
-      setNotice('Closing statement generated and saved to the related case. Review or download it, then send it for signature.');
+      setNotice('Closing statement generated and saved to the related case. Open the webpage preview to review it, then send it for signature.');
       await refresh();
     } catch (err) {
       setError(err.message || 'Could not generate the closing statement.');
@@ -197,6 +312,26 @@ export default function ClosingStatements() {
     } catch (err) {
       setError(err.message || 'Could not download the closing statement.');
     }
+  };
+
+  const openPreview = async (row, signed = false) => {
+    setPreview({ row, signed, bytes: null });
+    setPreviewLoading(true);
+    setPreviewError('');
+    try {
+      const blob = await downloadClosingStatement(row.id, { signed });
+      const bytes = await blob.arrayBuffer();
+      setPreview({ row, signed, bytes });
+    } catch (err) {
+      setPreviewLoading(false);
+      setPreviewError(err.message || 'Could not load the closing-statement preview.');
+    }
+  };
+
+  const closePreview = () => {
+    setPreview(null);
+    setPreviewLoading(false);
+    setPreviewError('');
   };
 
   const handleSend = async () => {
@@ -230,7 +365,7 @@ export default function ClosingStatements() {
             <span className="text-sm font-semibold">Settlement documents</span>
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Closing Statements</h1>
-          <p className="mt-1 max-w-3xl text-sm text-slate-600">Upload a settlement, confirm the client payout, and generate a case-linked closing statement for secure client signature.</p>
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">Upload a settlement, confirm the complete distribution, select the attorney letterhead, and generate a case-linked closing statement for secure client signature.</p>
         </div>
         <button onClick={resetComposer} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
           <RefreshCw className="h-4 w-4" /> New statement
@@ -242,8 +377,8 @@ export default function ClosingStatements() {
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-5 py-4">
-          <h2 className="font-semibold text-slate-900">1. Upload the settlement</h2>
-          <p className="mt-1 text-sm text-slate-500">LegalFlow saves the settlement to the selected case and suggests only clearly labeled information. You remain in control of every final value.</p>
+          <h2 className="font-semibold text-slate-900">1. Choose the case and letterhead</h2>
+          <p className="mt-1 text-sm text-slate-500">LegalFlow saves the settlement to the selected case and suggests information from the settlement or linked case defendants. You remain in control of every final value.</p>
         </div>
         <div className="grid gap-4 p-5 md:grid-cols-[1fr_1.2fr]">
           <label className="block text-sm font-medium text-slate-700">
@@ -262,12 +397,28 @@ export default function ClosingStatements() {
             </label>
           </div>
         </div>
+        <div className="border-t border-slate-100 bg-slate-50 p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="block flex-1 text-sm font-medium text-slate-700">
+              Attorney and firm letterhead
+              <select value={form.attorney_id} onChange={(event) => updateField('attorney_id', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100">
+                <option value="">Choose an attorney…</option>
+                {attorneys.map((attorney) => <option key={attorney.id} value={attorney.id}>{attorney.full_name}{attorney.firm_name ? ` — ${attorney.firm_name}` : ''}{attorney.is_default ? ' (Default)' : ''}</option>)}
+              </select>
+            </label>
+            <button onClick={() => setShowAddAttorney((visible) => !visible)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100">
+              <Plus className="h-4 w-4" /> Add attorney
+            </button>
+          </div>
+          {selectedAttorney && <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-600"><p className="font-semibold text-slate-800">Header preview: {selectedAttorney.firm_name || selectedAttorney.full_name}</p><p className="mt-1">{selectedAttorney.address || 'Office address needed'}{selectedAttorney.phone || selectedAttorney.email ? '  |  ' : ''}{[selectedAttorney.phone, selectedAttorney.email].filter(Boolean).join('  |  ') || 'Phone and email needed'}</p><p className="mt-1 text-xs text-slate-500">The generated PDF uses this firm, address, phone, and email in the same three-line letterhead position as your reference statement.</p></div>}
+          {showAddAttorney && <div className="mt-3 rounded-xl border border-primary-200 bg-primary-50 p-4"><div className="mb-3 flex items-center justify-between"><div><h3 className="font-semibold text-primary-900">Add attorney letterhead</h3><p className="mt-0.5 text-xs text-primary-800">These details become the firm header on each newly generated closing statement.</p></div><button onClick={() => setShowAddAttorney(false)} className="rounded-md p-1 text-primary-700 hover:bg-primary-100" aria-label="Close add attorney form"><X className="h-4 w-4" /></button></div><div className="grid gap-3 sm:grid-cols-2"><TextField label="Attorney full name" value={newAttorney.full_name} disabled={savingAttorney} onChange={(value) => setNewAttorney((previous) => ({ ...previous, full_name: value }))} placeholder="Attorney name" /><TextField label="Bar number" value={newAttorney.bar_number} disabled={savingAttorney} onChange={(value) => setNewAttorney((previous) => ({ ...previous, bar_number: value }))} placeholder="Optional" /><TextField label="Firm name" value={newAttorney.firm_name} disabled={savingAttorney} onChange={(value) => setNewAttorney((previous) => ({ ...previous, firm_name: value }))} placeholder="Oise Law Group, P.C." /><TextField label="Firm email" type="email" value={newAttorney.email} disabled={savingAttorney} onChange={(value) => setNewAttorney((previous) => ({ ...previous, email: value }))} placeholder="firm@example.com" /><TextField label="Office phone" value={newAttorney.phone} disabled={savingAttorney} onChange={(value) => setNewAttorney((previous) => ({ ...previous, phone: value }))} placeholder="(770) 555-0100" /><TextField label="Office address" value={newAttorney.address} disabled={savingAttorney} onChange={(value) => setNewAttorney((previous) => ({ ...previous, address: value }))} placeholder="123 Main Street, City, ST 00000" /></div><div className="mt-4 flex flex-wrap gap-2"><button onClick={handleAddAttorney} disabled={savingAttorney} className="inline-flex items-center gap-2 rounded-lg bg-primary-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-800 disabled:bg-slate-400">{savingAttorney && <Loader2 className="h-4 w-4 animate-spin" />}{savingAttorney ? 'Saving…' : 'Save and use letterhead'}</button><button onClick={() => setShowAddAttorney(false)} disabled={savingAttorney} className="rounded-lg px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-white">Cancel</button></div></div>}
+        </div>
       </section>
 
       <section className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${!settlement ? 'opacity-60' : ''}`}>
         <div className="border-b border-slate-100 px-5 py-4">
           <h2 className="font-semibold text-slate-900">2. Confirm the statement details</h2>
-          <p className="mt-1 text-sm text-slate-500">Enter the amount paid to the client. LegalFlow calculates the attorney-fee remainder automatically.</p>
+          <p className="mt-1 text-sm text-slate-500">The gross settlement amount is suggested from the uploaded settlement when clearly stated. Enter the client payout and all fee and cost deductions; LegalFlow calculates the attorney-fee remainder automatically.</p>
         </div>
         <div className="grid gap-5 p-5 lg:grid-cols-2">
           <div className="space-y-4">
@@ -288,16 +439,18 @@ export default function ClosingStatements() {
               <MoneyField label="Gross settlement amount" value={form.gross_settlement_amount} disabled={!settlement} onChange={(value) => updateField('gross_settlement_amount', value)} />
               <MoneyField label="Amount paid to the client" value={form.client_payout_amount} disabled={!settlement} onChange={(value) => updateField('client_payout_amount', value)} />
               <MoneyField label="Paralegal fee paid to the firm" value={form.paralegal_fee_amount} disabled={!settlement} onChange={(value) => updateField('paralegal_fee_amount', value)} />
+              <MoneyField label="Court costs paid to the firm" value={form.court_cost_amount} disabled={!settlement} onChange={(value) => updateField('court_cost_amount', value)} />
+              <MoneyField label="Service-of-process costs paid to the firm" value={form.service_of_process_cost_amount} disabled={!settlement} onChange={(value) => updateField('service_of_process_cost_amount', value)} />
               <div className={`mt-2 border-t pt-3 ${attorneyCents < 0 ? 'text-red-700' : 'text-slate-900'}`}>
                 <div className="flex items-center justify-between text-sm font-semibold"><span>Attorney fees paid to the firm</span><span>{formatMoney(attorneyCents)}</span></div>
                 <div className="mt-2 flex items-center justify-between border-t border-slate-300 pt-2 text-base font-bold"><span>TOTAL</span><span>{formatMoney(grossCents)}</span></div>
               </div>
-              {attorneyCents < 0 && <p className="text-xs text-red-700">The payout and paralegal fee are greater than the gross settlement. Adjust the amounts before generating.</p>}
+              {attorneyCents < 0 && <p className="text-xs text-red-700">The payout, paralegal fee, court costs, and service-of-process costs are greater than the gross settlement. Adjust the amounts before generating.</p>}
             </div>
           </div>
         </div>
         <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-slate-500">The generated statement includes the same distribution format, case number, and client signature/date block as your example.</p>
+          <p className="text-xs text-slate-500">The generated statement includes the reference-style firm header, complete distribution, case number, and client signature/date block.</p>
           <button onClick={handleGenerate} disabled={!settlement || generating || !distributionValid} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:cursor-not-allowed disabled:bg-slate-300">
             {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
             {generating ? 'Generating…' : 'Generate closing statement'}
@@ -310,9 +463,10 @@ export default function ClosingStatements() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex items-center gap-2 text-primary-800"><CheckCircle2 className="h-5 w-5" /><h2 className="font-semibold">Closing statement ready for review</h2></div>
-              <p className="mt-1 text-sm text-primary-800">Review the PDF, then send the secure signature request to {statement.signer_email}.</p>
+              <p className="mt-1 text-sm text-primary-800">Open the protected webpage preview, review the PDF, then send the secure signature request to {statement.signer_email}.</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <button onClick={() => openPreview(statement)} className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3.5 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-100"><Eye className="h-4 w-4" /> View preview</button>
               <button onClick={() => download(statement)} className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3.5 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-100"><Download className="h-4 w-4" /> Download PDF</button>
               <button onClick={handleSend} disabled={sending || statement.status === 'awaiting_signature'} className="inline-flex items-center gap-2 rounded-lg bg-primary-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-800 disabled:cursor-not-allowed disabled:bg-slate-400"><Send className="h-4 w-4" />{sending ? 'Sending…' : statement.status === 'awaiting_signature' ? 'Sent for signature' : 'Send for signature'}</button>
             </div>
@@ -322,8 +476,10 @@ export default function ClosingStatements() {
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="font-semibold text-slate-900">Closing statement history</h2><p className="mt-1 text-sm text-slate-500">Draft and signed statements are also filed to their related case and client document views.</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{statements.length}</span></div>
-        {statements.length === 0 ? <div className="p-10 text-center text-sm text-slate-500">No closing statements have been generated yet.</div> : <div className="divide-y divide-slate-100">{statements.map((row) => { const badge = statementStatus(row.status); return <div key={row.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="truncate font-medium text-slate-900">{row.statement_file_name}</p><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badge.className}`}>{badge.label}</span></div><p className="mt-1 text-sm text-slate-500">{row.signer_name} · Case {row.case_number} · Client payout {formatMoney(row.client_payout_cents)}</p></div><div className="flex gap-2"><button onClick={() => download(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Draft</button>{row.status === 'signed' && <button onClick={() => download(row, true)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"><Download className="h-4 w-4" /> Signed</button>}</div></div>; })}</div>}
+        {statements.length === 0 ? <div className="p-10 text-center text-sm text-slate-500">No closing statements have been generated yet.</div> : <div className="divide-y divide-slate-100">{statements.map((row) => { const badge = statementStatus(row.status); return <div key={row.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="truncate font-medium text-slate-900">{row.statement_file_name}</p><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badge.className}`}>{badge.label}</span></div><p className="mt-1 text-sm text-slate-500">{row.signer_name} · Case {row.case_number} · Client payout {formatMoney(row.client_payout_cents)}</p></div><div className="flex flex-wrap gap-2"><button onClick={() => openPreview(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Eye className="h-4 w-4" /> Draft</button><button onClick={() => download(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Download</button>{row.status === 'signed' && <><button onClick={() => openPreview(row, true)} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"><Eye className="h-4 w-4" /> Signed</button><button onClick={() => download(row, true)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"><Download className="h-4 w-4" /> Signed PDF</button></>}</div></div>; })}</div>}
       </section>
+
+      {preview && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Closing statement preview"><div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><h2 className="font-semibold text-slate-900">{preview.signed ? 'Signed closing statement' : 'Closing statement'} preview</h2><p className="mt-0.5 text-sm text-slate-500">{preview.row.statement_file_name}</p></div><div className="flex items-center gap-2"><button onClick={() => download(preview.row, preview.signed)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Download</button><button onClick={closePreview} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label="Close preview"><X className="h-5 w-5" /></button></div></div><div className="min-h-[240px] flex-1 overflow-auto bg-slate-100 p-4"><div ref={previewCanvasRef} className="mx-auto max-w-3xl">{previewLoading && <div className="flex min-h-[240px] items-center justify-center gap-2 text-sm text-slate-600"><Loader2 className="h-5 w-5 animate-spin" /> Loading PDF preview…</div>}{previewError && <div className="m-4 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><p>{previewError}</p></div>}</div></div></div></div>}
     </div>
   );
 }

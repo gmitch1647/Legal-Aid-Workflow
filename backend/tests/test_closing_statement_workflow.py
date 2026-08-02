@@ -32,6 +32,23 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
         self.assertEqual(result["account_reference"], "004-7781")
         self.assertIn("elimination and waiver", result["non_monetary_terms"])
 
+    def test_settlement_consideration_is_suggested_as_gross_amount(self):
+        text = "The total cash consideration for this settlement is $3,500.00."
+        result = _extract_settlement_suggestions(text)
+        self.assertEqual(result["gross_settlement_cents"], 350000)
+        self.assertEqual(result["gross_settlement_amount"], "3,500.00")
+
+    def test_case_caption_suggests_adverse_party_when_no_label_is_present(self):
+        text = """
+        IN THE SUPERIOR COURT OF EXAMPLE COUNTY
+        Taylor Example, Plaintiff, v. Acme Financial Services, LLC, Defendant
+        Case No. 25-CV-1042
+        The settlement amount is $1,250.00.
+        """
+        result = _extract_settlement_suggestions(text)
+        self.assertEqual(result["adverse_party"], "Acme Financial Services, LLC")
+        self.assertEqual(result["adverse_party_source"], "settlement_caption")
+
     def test_money_parses_in_integer_cents(self):
         self.assertEqual(_money_to_cents("$1,234.56", "Settlement"), 123456)
         self.assertEqual(_money_to_cents("0", "Settlement"), 0)
@@ -55,7 +72,9 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
                 gross_settlement_cents=500000,
                 client_payout_cents=300000,
                 paralegal_fee_cents=50000,
-                attorney_fee_cents=150000,
+                court_cost_cents=25000,
+                service_of_process_cost_cents=25000,
+                attorney_fee_cents=100000,
                 non_monetary_terms="The settlement includes a waiver of the asserted balance.",
             )
         )
@@ -63,12 +82,19 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
         reader = PdfReader(io.BytesIO(pdf))
         self.assertEqual(len(reader.pages), 1)
         text = reader.pages[0].extract_text()
+        self.assertIn("Example Law Firm", text)
+        self.assertIn("123 Main Street, Atlanta, GA 30303", text)
+        self.assertIn("(404) 555-0100", text)
+        self.assertIn("attorney@example.com", text)
         self.assertIn("SETTLEMENT CLOSING STATEMENT", text)
         self.assertIn("LF-2026-TEST001", text)
         self.assertIn("Taylor Example, Client", text)
         self.assertIn("$3,000.00", text)
         self.assertIn("$500.00", text)
-        self.assertIn("$1,500.00", text)
+        self.assertIn("$250.00", text)
+        self.assertIn("$1,000.00", text)
+        self.assertIn("Court costs paid to the Firm", text)
+        self.assertIn("Service of process costs paid to the Firm", text)
         self.assertIn("APPROVED AND ACCEPTED", text)
         self.assertIn("Date:", text)
 
@@ -87,6 +113,8 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
                 gross_settlement_cents=500000,
                 client_payout_cents=300000,
                 paralegal_fee_cents=50000,
+                court_cost_cents=0,
+                service_of_process_cost_cents=0,
                 attorney_fee_cents=150000,
                 non_monetary_terms="The settlement includes a waiver of the asserted balance.",
             )
@@ -116,6 +144,8 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
                 gross_settlement_cents=500000,
                 client_payout_cents=300000,
                 paralegal_fee_cents=50000,
+                court_cost_cents=0,
+                service_of_process_cost_cents=0,
                 attorney_fee_cents=150000,
                 non_monetary_terms="The settlement includes a waiver of the asserted balance.",
             )
@@ -153,7 +183,9 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
                     account_reference="",
                     gross_settlement_cents=10000,
                     client_payout_cents=9000,
-                    paralegal_fee_cents=2000,
+                    paralegal_fee_cents=0,
+                    court_cost_cents=1000,
+                    service_of_process_cost_cents=1000,
                     attorney_fee_cents=-1000,
                     non_monetary_terms="",
                 )

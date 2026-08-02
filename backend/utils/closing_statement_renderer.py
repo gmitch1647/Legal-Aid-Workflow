@@ -2,7 +2,7 @@
 
 The layout intentionally mirrors the supplied one-page closing-statement example:
 firm letterhead, a centered title, matter details, a short trust-account
-paragraph, a four-line distribution table, settlement terms, and the client's
+paragraph, a complete distribution table, settlement terms, and the client's
 signature/date block. Monetary calculations use integer cents throughout.
 """
 
@@ -40,6 +40,8 @@ class ClosingStatementData:
     gross_settlement_cents: int
     client_payout_cents: int
     paralegal_fee_cents: int
+    court_cost_cents: int
+    service_of_process_cost_cents: int
     attorney_fee_cents: int
     non_monetary_terms: str
 
@@ -156,15 +158,20 @@ def render_closing_statement(data: ClosingStatementData) -> bytes:
     """Return a one-page closing-statement PDF.
 
     Callers must validate that the stored attorney-fee remainder equals
-    gross settlement minus the client payout and paralegal fee before calling.
+    gross settlement minus the client payout, paralegal fee, court costs, and
+    service-of-process costs before calling.
     """
     expected_attorney_fee = (
         int(data.gross_settlement_cents)
         - int(data.client_payout_cents)
         - int(data.paralegal_fee_cents)
+        - int(data.court_cost_cents)
+        - int(data.service_of_process_cost_cents)
     )
     if expected_attorney_fee < 0:
-        raise ValueError("Client payout and paralegal fee cannot exceed the gross settlement amount.")
+        raise ValueError(
+            "Client payout, paralegal fee, court costs, and service-of-process costs cannot exceed the gross settlement amount."
+        )
     if int(data.attorney_fee_cents) != expected_attorney_fee:
         raise ValueError("Attorney fee must equal the remainder of the settlement distribution.")
 
@@ -240,6 +247,8 @@ def render_closing_statement(data: ClosingStatementData) -> bytes:
     rows = [
         ("Statutory damages paid to client", int(data.client_payout_cents), False),
         ("Paralegal fees paid to the Firm", int(data.paralegal_fee_cents), False),
+        ("Court costs paid to the Firm", int(data.court_cost_cents), False),
+        ("Service of process costs paid to the Firm", int(data.service_of_process_cost_cents), False),
         ("Attorney fees paid to the Firm", int(data.attorney_fee_cents), False),
         ("TOTAL", int(data.gross_settlement_cents), True),
     ]

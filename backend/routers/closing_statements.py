@@ -40,12 +40,24 @@ MONEY_PATTERNS = (
     re.compile(r"(?is)(?:total\s+)?settlement\s+(?:amount|sum|proceeds?)\s*(?:of|is|:)?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)"),
     re.compile(r"(?is)gross\s+settlement\s*(?:amount|sum|proceeds?)?\s*(?:of|is|:)?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)"),
     re.compile(r"(?is)pay(?:ment|able)?\s+(?:of|in\s+the\s+amount\s+of)\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)"),
+    re.compile(r"(?is)(?:total\s+)?(?:cash\s+)?consideration\b[^$]{0,100}\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)"),
+    re.compile(r"(?is)(?:total\s+)?settlement\s+payment\b[^$]{0,100}\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)"),
 )
 LABELED_LINE_PATTERNS = {
     "case_number": re.compile(r"(?im)^\s*(?:case\s*(?:no\.?|number)|matter\s*(?:no\.?|number))\s*[:#\-]?\s*(?P<value>[^\n]{1,120})$"),
-    "adverse_party": re.compile(r"(?im)^\s*(?:adverse\s+party|defendant|released\s+party|respondent)\s*[:\-]?\s*(?P<value>[^\n]{2,180})$"),
+    "adverse_party": re.compile(
+        r"(?im)^\s*(?:adverse\s+part(?:y|ies)|defendant(?:s)?|released\s+part(?:y|ies)|respondent(?:s)?)"
+        r"\s*(?:(?:is|are)\s*)?[:\-]?\s*(?P<value>[^\n]{2,180})$"
+    ),
     "account_reference": re.compile(r"(?im)^\s*(?:re|account(?:\s*(?:no\.?|number))?|reference)\s*[:#\-]?\s*(?P<value>[^\n]{2,220})$"),
 }
+
+# Many settlement agreements do not label the defendant directly but include a
+# conventional case caption such as "Jane Client v. Acme Collections LLC." The
+# right side is useful only as a suggestion and remains editable by the attorney.
+CASE_CAPTION_ADVERSE_PARTY_PATTERN = re.compile(
+    r"(?im)^\s*[^\n]{2,150}?\s+(?:v\.?|vs\.?|versus)\s+(?P<value>[A-Z0-9][^\n]{1,180})$"
+)
 
 
 def _now_iso() -> str:
@@ -101,6 +113,61 @@ def _extract_labeled_value(text: str, key: str) -> Optional[str]:
     return value[:220] or None
 
 
+def _normalize_adverse_party(value: str | None) -> Optional[str]:
+    """Normalize a suggested opposing-party name without interpreting document content."""
+    cleaned = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n.,;:-")
+    # Captions frequently retain a trailing party designation after the entity name.
+    cleaned = re.sub(
+        r"\s*(?:,|\()\s*(?:defendant|defendants|respondent|respondents|released\s+party|released\s+parties)\s*\)?\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip(" \t\r\n.,;:-")
+    return cleaned[:180] or None
+
+
+def _extract_adverse_party(text: str) -> tuple[Optional[str], Optional[str]]:
+    """Return a conservative settlement-derived adverse-party suggestion and source."""
+    labeled = _normalize_adverse_party(_extract_labeled_value(text, "adverse_party"))
+    if labeled:
+        return labeled, "settlement"
+
+    caption_match = CASE_CAPTION_ADVERSE_PARTY_PATTERN.search(text or "")
+    if caption_match:
+        caption_value = _normalize_adverse_party(caption_match.group("value"))
+        if caption_value:
+            return caption_value, "settlement_caption"
+    return None, None
+
+
+def _case_adverse_party(case_id: str) -> Optional[str]:
+    """Build an authoritative fallback from defendants already linked to the selected case."""
+    supabase = get_supabase()
+    linked = (
+        supabase.table("case_defendants")
+        .select("defendant_id")
+        .eq("case_id", case_id)
+        .execute()
+    )
+    names: list[str] = []
+    for row in linked.data or []:
+        defendant_id = row.get("defendant_id")
+        if not defendant_id:
+            continue
+        response = (
+            supabase.table("defendants")
+            .select("name")
+            .eq("id", defendant_id)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            name = _normalize_adverse_party(response.data[0].get("name"))
+            if name and name not in names:
+                names.append(name)
+    return ", ".join(names)[:180] or None
+
+
 def _extract_settlement_suggestions(text: str) -> dict:
     """Return deterministic metadata suggestions without retaining source text."""
     gross_cents: Optional[int] = None
@@ -128,11 +195,13 @@ def _extract_settlement_suggestions(text: str) -> dict:
             "elimination and waiver of obligations as described in the settlement agreement."
         )
 
+    adverse_party, adverse_party_source = _extract_adverse_party(text)
     return {
         "gross_settlement_cents": gross_cents,
         "gross_settlement_amount": _format_dollars(gross_cents),
         "case_number": _extract_labeled_value(text, "case_number"),
-        "adverse_party": _extract_labeled_value(text, "adverse_party"),
+        "adverse_party": adverse_party,
+        "adverse_party_source": adverse_party_source,
         "account_reference": _extract_labeled_value(text, "account_reference"),
         "non_monetary_terms": non_monetary_terms,
     }
@@ -198,6 +267,35 @@ def _owned_statement(statement_id: str, profile: dict) -> dict:
     return response.data[0]
 
 
+def _selected_attorney(attorney_id: str) -> dict:
+    """Return a stored attorney record suitable for a stable document letterhead."""
+    response = (
+        get_supabase().table("attorneys")
+        .select("id,full_name,firm_name,address,phone,email")
+        .eq("id", attorney_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Choose a valid attorney for the closing-statement letterhead.")
+    attorney = response.data[0]
+    required_fields = {
+        "firm name": attorney.get("firm_name"),
+        "office address": attorney.get("address"),
+        "office phone": attorney.get("phone"),
+        "office email": attorney.get("email"),
+    }
+    missing = [label for label, value in required_fields.items() if not str(value or "").strip()]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The selected attorney needs a {' and '.join(missing)} before LegalFlow can create the reference-style letterhead."
+            ),
+        )
+    return attorney
+
+
 class ClosingStatementCreate(BaseModel):
     case_id: str
     settlement_document_id: Optional[str] = None
@@ -208,6 +306,9 @@ class ClosingStatementCreate(BaseModel):
     gross_settlement_amount: str = Field(min_length=1, max_length=32)
     client_payout_amount: str = Field(min_length=1, max_length=32)
     paralegal_fee_amount: str = Field(default="0", max_length=32)
+    court_cost_amount: str = Field(default="0", max_length=32)
+    service_of_process_cost_amount: str = Field(default="0", max_length=32)
+    attorney_id: str = Field(min_length=1, max_length=120)
     non_monetary_terms: Optional[str] = Field(default=None, max_length=2000)
     signer_name: Optional[str] = Field(default=None, max_length=160)
     signer_email: Optional[EmailStr] = None
@@ -280,13 +381,36 @@ async def upload_and_extract_settlement(
 
     suggestions = _extract_settlement_suggestions(text)
     suggestions["case_number"] = suggestions.get("case_number") or _case_number(case)
+    if not suggestions.get("adverse_party"):
+        try:
+            linked_adverse_party = _case_adverse_party(case["id"])
+        except Exception:
+            logger.warning("Could not load linked defendants for closing statement case %s", case_id)
+            linked_adverse_party = None
+        if linked_adverse_party:
+            suggestions["adverse_party"] = linked_adverse_party
+            suggestions["adverse_party_source"] = "case"
+
+    source = suggestions.get("adverse_party_source")
+    if source == "case":
+        extraction_note = (
+            "The adverse party was filled from the defendants already linked to this case. "
+            "Review every suggested value before generating the statement."
+        )
+    elif source in {"settlement", "settlement_caption"}:
+        extraction_note = (
+            "The adverse party was found in the uploaded settlement and has been prefilled. "
+            "Review every suggested value before generating the statement."
+        )
+    else:
+        extraction_note = (
+            "LegalFlow could not identify an adverse party automatically. "
+            "Enter it manually after reviewing the settlement."
+        )
     return {
         "settlement_document": document_response.data[0],
         "suggestions": suggestions,
-        "extraction_note": (
-            "Review all suggested values before generating the statement. "
-            "Only clearly labeled information is prefilled automatically."
-        ),
+        "extraction_note": extraction_note,
     }
 
 
@@ -304,13 +428,21 @@ async def create_closing_statement(
         gross_cents = _money_to_cents(payload.gross_settlement_amount, "Gross settlement amount")
         client_cents = _money_to_cents(payload.client_payout_amount, "Client payout")
         paralegal_cents = _money_to_cents(payload.paralegal_fee_amount, "Paralegal fee")
+        court_cost_cents = _money_to_cents(payload.court_cost_amount, "Court costs")
+        service_of_process_cost_cents = _money_to_cents(
+            payload.service_of_process_cost_amount,
+            "Service-of-process costs",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    attorney_cents = gross_cents - client_cents - paralegal_cents
+    attorney_cents = gross_cents - client_cents - paralegal_cents - court_cost_cents - service_of_process_cost_cents
     if attorney_cents < 0:
         raise HTTPException(
             status_code=400,
-            detail="Client payout and paralegal fee cannot exceed the gross settlement amount.",
+            detail=(
+                "Client payout, paralegal fee, court costs, and service-of-process costs cannot exceed "
+                "the gross settlement amount."
+            ),
         )
 
     if not payload.settlement_document_id:
@@ -327,6 +459,8 @@ async def create_closing_statement(
         raise HTTPException(status_code=400, detail="The selected settlement document is not available for this case.")
     verified_settlement_path = settlement_response.data[0]["storage_path"]
 
+    attorney = _selected_attorney(payload.attorney_id)
+
     signer_name = (payload.signer_name or client.get("full_name") or "Client").strip()
     signer_email = str(payload.signer_email or client.get("email") or "").strip()
     if not signer_email:
@@ -342,10 +476,10 @@ async def create_closing_statement(
     statement_id = str(uuid.uuid4())
     statement_file_name = f"Closing_Statement_{re.sub(r'[^A-Za-z0-9]+', '_', signer_name).strip('_') or 'Client'}.pdf"
     renderer_data = ClosingStatementData(
-        firm_name=str(profile.get("firm_name") or "LEGALFLOW"),
-        firm_address=str(profile.get("address") or ""),
-        firm_phone=str(profile.get("phone") or ""),
-        firm_email=str(profile.get("email") or ""),
+        firm_name=str(attorney.get("firm_name") or "LEGALFLOW"),
+        firm_address=str(attorney.get("address") or ""),
+        firm_phone=str(attorney.get("phone") or ""),
+        firm_email=str(attorney.get("email") or ""),
         statement_date=datetime.now(timezone.utc).strftime("%B %d, %Y"),
         client_name=signer_name,
         case_number=statement_case_number,
@@ -354,6 +488,8 @@ async def create_closing_statement(
         gross_settlement_cents=gross_cents,
         client_payout_cents=client_cents,
         paralegal_fee_cents=paralegal_cents,
+        court_cost_cents=court_cost_cents,
+        service_of_process_cost_cents=service_of_process_cost_cents,
         attorney_fee_cents=attorney_cents,
         non_monetary_terms=str(payload.non_monetary_terms or ""),
     )
@@ -396,7 +532,14 @@ async def create_closing_statement(
             "gross_settlement_cents": gross_cents,
             "client_payout_cents": client_cents,
             "paralegal_fee_cents": paralegal_cents,
+            "court_cost_cents": court_cost_cents,
+            "service_of_process_cost_cents": service_of_process_cost_cents,
             "attorney_fee_cents": attorney_cents,
+            "attorney_id": attorney["id"],
+            "letterhead_firm_name": attorney.get("firm_name"),
+            "letterhead_address": attorney.get("address"),
+            "letterhead_phone": attorney.get("phone"),
+            "letterhead_email": attorney.get("email"),
             "non_monetary_terms": payload.non_monetary_terms,
             "signer_name": signer_name,
             "signer_email": signer_email,
@@ -424,7 +567,7 @@ async def list_closing_statements(authorization: str = Header(...)):
     _require_attorney(profile)
     response = (
         get_supabase().table("closing_statements")
-        .select("id,case_id,client_id,statement_file_name,case_number,adverse_party,gross_settlement_cents,client_payout_cents,paralegal_fee_cents,attorney_fee_cents,signer_name,signer_email,status,signature_session_id,created_at,updated_at,signed_storage_path")
+        .select("id,case_id,client_id,statement_file_name,case_number,adverse_party,gross_settlement_cents,client_payout_cents,paralegal_fee_cents,court_cost_cents,service_of_process_cost_cents,attorney_fee_cents,attorney_id,letterhead_firm_name,signer_name,signer_email,status,signature_session_id,created_at,updated_at,signed_storage_path")
         .eq("created_by", profile["id"])
         .order("created_at", desc=True)
         .limit(200)
