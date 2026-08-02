@@ -1094,7 +1094,7 @@ export async function getGroupedSignatureDashboard(caseId = null, clientId = nul
   if (caseId) params.append('case_id', caseId);
   if (clientId) params.append('client_id', clientId);
   const qs = params.toString();
-  return request(`/esign/requests/dashboard${qs ? `?${qs}` : ''}`);
+  return request(`/esign/dashboard${qs ? `?${qs}` : ''}`);
 }
 
 export async function getSignatureRequest(id) {

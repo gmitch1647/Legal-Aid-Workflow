@@ -725,10 +725,13 @@ async def list_signature_requests(
 
 
 # ---------------------------------------------------------------------------
-# GET /requests/dashboard — grouped attorney document history
+# GET /dashboard — grouped attorney document history
 # ---------------------------------------------------------------------------
 
-@router.get("/requests/dashboard")
+# Keep this endpoint outside `/requests/{request_id}`. Some deployed route
+# registrations preserve an older dynamic request route ahead of new static
+# request children, which would otherwise treat `dashboard` as a request ID.
+@router.get("/dashboard")
 async def grouped_signature_dashboard(
     case_id: Optional[str] = None,
     client_id: Optional[str] = None,
