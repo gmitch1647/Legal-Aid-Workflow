@@ -20,6 +20,7 @@ import {
   PenLine,
   FileKey,
   DollarSign,
+  FileSignature,
 } from 'lucide-react';
 import {
   supabase,
