@@ -39,6 +39,18 @@ router = APIRouter()
 STORAGE_BUCKET = "documents"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+VIEW_ONLY_DOCUMENT_TYPES = {"credit_disclosure"}
+
+
+def _is_view_only_document(document_type: str | None) -> bool:
+    # Direct route tests may use FastAPI's Form default instead of a submitted
+    # string. Treat every non-string value as a normal signature document.
+    return isinstance(document_type, str) and document_type.strip().lower() in VIEW_ONLY_DOCUMENT_TYPES
+
+
+def _form_text(value: object, fallback: str) -> str:
+    """Return submitted form text, falling back safely for FastAPI defaults."""
+    return value.strip() if isinstance(value, str) and value.strip() else fallback
 
 
 async def _get_current_user(authorization: str) -> dict:
@@ -424,6 +436,12 @@ async def create_signing_session(
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
+    document_type = _form_text(document_type, "general")
+    title = _form_text(title, "Document for Signature")
+    message = _form_text(message, "Please review and sign the attached document.")
+    is_view_only = _is_view_only_document(document_type)
+    session_status = "awaiting_review" if is_view_only else "awaiting_signature"
+
     uploaded_content = await file.read()
     if not uploaded_content:
         raise HTTPException(status_code=400, detail="Please choose a PDF or DOCX file to upload.")
@@ -471,7 +489,7 @@ async def create_signing_session(
         "sent_by": profile["id"],
         "attorney_name": profile.get("full_name", ""),
         "message": message,
-        "status": "awaiting_signature",
+        "status": session_status,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -496,33 +514,51 @@ async def create_signing_session(
             "case_id": case_id if case_id else None,
             "client_id": client_id if client_id else None,
             "sent_by": profile["id"],
-            "status": "awaiting_signature",
+            "status": session_status,
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
     except Exception as e:
         logger.warning("Could not insert into signature_requests: %s", e)
 
-    # Email the signing link to the client
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+    # Email a secure document link to the client. Credit disclosures are
+    # intentionally view-only: they never request or accept a signature.
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
     signing_url = f"{frontend_url}/sign/{token}"
+    if is_view_only:
+        email_subject = "Your Credit Disclosure Is Ready for Review"
+        email_heading = "Your Credit Disclosure"
+        email_message = (
+            "This is your credit disclosure. Please review it carefully and make sure "
+            "everything is reporting properly. If you notice anything that appears "
+            "incorrect or have questions, please contact your attorney."
+        )
+        email_button = "Review Credit Disclosure"
+        delivery_kind = "review link"
+    else:
+        email_subject = f"Signature Required: {title}"
+        email_heading = "Signature Required"
+        email_message = message
+        email_button = "Review &amp; Sign Document"
+        delivery_kind = "signing link"
 
     try:
+        from html import escape
         from utils.email_service import send_email
         await send_email(
             to=signer_email,
-            subject=f"Signature Required: {title}",
+            subject=email_subject,
             body=f"""
             <div style="font-family:sans-serif;font-size:14px;line-height:1.6;max-width:500px;">
-                <h2 style="color:#1e40af;">Signature Required</h2>
-                <p>Hello {signer_name},</p>
-                <p>{message}</p>
-                <p><strong>Document:</strong> {title}</p>
-                <p><strong>From:</strong> {profile.get('full_name', 'Your Attorney')}</p>
+                <h2 style="color:#1e40af;">{email_heading}</h2>
+                <p>Hello {escape(signer_name)},</p>
+                <p>{escape(email_message)}</p>
+                <p><strong>Document:</strong> {escape(title)}</p>
+                <p><strong>From:</strong> {escape(profile.get('full_name', 'Your Attorney'))}</p>
                 <div style="margin:24px 0;">
                     <a href="{signing_url}"
                        style="background:#2563eb;color:white;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">
-                        Review &amp; Sign Document
+                        {email_button}
                     </a>
                 </div>
                 <p style="color:#64748b;font-size:12px;">
@@ -531,15 +567,16 @@ async def create_signing_session(
             </div>
             """,
         )
-        logger.info("Signing link emailed to %s", signer_email)
+        logger.info("%s emailed to %s", delivery_kind.capitalize(), signer_email)
     except Exception as e:
-        logger.error("Failed to email signing link to %s: %s", signer_email, e)
+        logger.error("Failed to email %s to %s: %s", delivery_kind, signer_email, e)
 
     return {
         "session_id": session_id,
         "token": token,
         "signing_url": signing_url,
-        "status": "awaiting_signature",
+        "status": session_status,
+        "review_only": is_view_only,
     }
 
 
@@ -560,6 +597,24 @@ async def get_signing_session(token: str):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="This document has already been signed.")
 
+    # Opening a credit disclosure is the only acknowledgement required. Keep
+    # the attorney-facing Settlement Center in sync without collecting a
+    # signature or client response.
+    if _is_view_only_document(session.get("document_type")) and session.get("status") == "awaiting_review":
+        viewed_at = datetime.now(timezone.utc).isoformat()
+        try:
+            supabase.table("signing_sessions").update({
+                "status": "viewed",
+                "updated_at": viewed_at,
+            }).eq("id", session["id"]).execute()
+            supabase.table("signature_requests").update({
+                "status": "viewed",
+                "updated_at": viewed_at,
+            }).eq("id", session["id"]).execute()
+            session["status"] = "viewed"
+        except Exception:
+            logger.warning("Could not record credit disclosure review for %s", session["id"])
+
     return {
         "session_id": session["id"],
         "title": session["title"],
@@ -569,6 +624,7 @@ async def get_signing_session(token: str):
         "attorney_name": session.get("attorney_name", ""),
         "message": session.get("message", ""),
         "status": session["status"],
+        "review_only": _is_view_only_document(session.get("document_type")),
     }
 
 
@@ -614,13 +670,6 @@ async def get_signing_pdf(token: str):
 
 @router.post("/{token}/complete")
 async def complete_signing(token: str, request: Request):
-    body = await request.json()
-    signature_data = body.get("signature")
-    typed_name = body.get("typed_name", "")
-
-    if not signature_data:
-        raise HTTPException(status_code=400, detail="Signature is required.")
-
     supabase = get_supabase()
 
     resp = supabase.table("signing_sessions").select("*").eq("token", token).limit(1).execute()
@@ -628,8 +677,20 @@ async def complete_signing(token: str, request: Request):
         raise HTTPException(status_code=404, detail="Signing session not found.")
 
     session = resp.data[0]
+    if _is_view_only_document(session.get("document_type")):
+        raise HTTPException(
+            status_code=400,
+            detail="This credit disclosure is view-only and does not require a signature.",
+        )
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="Already signed.")
+
+    body = await request.json()
+    signature_data = body.get("signature")
+    typed_name = body.get("typed_name", "")
+
+    if not signature_data:
+        raise HTTPException(status_code=400, detail="Signature is required.")
 
     # Normalize legacy DOCX sessions before loading the document for signing.
     try:

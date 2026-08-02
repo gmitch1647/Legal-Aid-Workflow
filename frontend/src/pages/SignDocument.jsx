@@ -14,6 +14,7 @@ export default function SignDocument() {
   const [submitting, setSubmitting] = useState(false);
   const [typedName, setTypedName] = useState('');
   const [sigMode, setSigMode] = useState('draw');
+  const isReviewOnly = Boolean(session?.review_only);
 
   const canvasRef = useRef(null);
   const sigPadRef = useRef(null);
@@ -202,11 +203,11 @@ export default function SignDocument() {
             </div>
             <div>
               <div className="text-sm font-bold text-slate-900">LegalFlow</div>
-              <div className="text-xs text-slate-500">Secure Document Signing</div>
+              <div className="text-xs text-slate-500">{isReviewOnly ? 'Secure Document Review' : 'Secure Document Signing'}</div>
             </div>
           </div>
           <div className="text-xs text-slate-400">
-            Signing as: <span className="font-medium text-slate-700">{session?.signer_name}</span>
+            {isReviewOnly ? 'Viewing as:' : 'Signing as:'} <span className="font-medium text-slate-700">{session?.signer_name}</span>
           </div>
         </div>
       </div>
@@ -228,12 +229,21 @@ export default function SignDocument() {
         {/* PDF Preview */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <h2 className="text-sm font-semibold text-slate-700 mb-3">Document Preview</h2>
-          <div ref={pdfCanvasRef} className="overflow-auto max-h-[60vh] bg-slate-50 rounded-lg p-3 flex flex-col items-center">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-300 my-8" />
-          </div>
+          <div ref={pdfCanvasRef} className="overflow-auto max-h-[60vh] bg-slate-50 rounded-lg p-3 flex flex-col items-center" />
         </div>
 
-        {/* Signature area */}
+        {isReviewOnly ? (
+          <div className="bg-blue-50 rounded-xl shadow-sm border border-blue-200 p-5">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-blue-700" />
+              <div>
+                <h2 className="text-sm font-bold text-blue-950">Your credit disclosure is ready for review</h2>
+                <p className="mt-2 text-sm leading-6 text-blue-900">This is your credit disclosure. Please review it carefully and make sure everything is reporting properly. If you notice anything that appears incorrect or have questions, please contact your attorney.</p>
+                <p className="mt-2 text-xs leading-5 text-blue-800">No signature or response is required for this document.</p>
+              </div>
+            </div>
+          </div>
+        ) : (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <h2 className="text-sm font-semibold text-slate-700 mb-3">Your Signature</h2>
 
@@ -323,6 +333,7 @@ export default function SignDocument() {
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

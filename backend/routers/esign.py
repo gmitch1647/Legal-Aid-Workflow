@@ -80,15 +80,25 @@ def _get_in_app_session(supabase, request_id: str) -> Optional[dict]:
 
 
 def _in_app_request_detail(session: dict) -> dict:
-    """Normalize a LegalFlow signing session to the shared e-sign detail shape."""
+    """Normalize a LegalFlow session to the shared attorney-dashboard shape."""
     session_status = session.get("status", "awaiting_signature")
-    is_complete = session_status in ("signed", "complete")
+    is_view_only = session.get("document_type") == "credit_disclosure"
+    is_complete = session_status in ("signed", "complete") or (
+        is_view_only and session_status in ("viewed", "reviewed")
+    )
+    recipient_status = (
+        "reviewed" if is_view_only and is_complete
+        else ("signed" if is_complete else session_status)
+    )
     return {
         "id": session["id"],
         "provider": "legalflow",
         "title": session.get("title", "Document for Signature"),
         "is_complete": is_complete,
+        "review_only": is_view_only,
         "has_error": False,
+        # The legacy field name is retained for frontend compatibility; for a
+        # credit disclosure it is a secure review URL, not a signing URL.
         "signing_url": (
             f"{os.environ.get('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/sign/{session['token']}"
             if not is_complete and session_status != "cancelled"
@@ -99,18 +109,18 @@ def _in_app_request_detail(session: dict) -> dict:
             {
                 "signer_name": session.get("signer_name", ""),
                 "signer_email": session.get("signer_email", ""),
-                "status": "signed" if is_complete else session_status,
+                "status": recipient_status,
                 "signed_at": session.get("signed_at"),
-                "last_viewed_at": None,
+                "last_viewed_at": session.get("updated_at") if is_view_only and is_complete else None,
             }
         ],
         "created_at": session.get("created_at"),
         "signed_at": session.get("signed_at"),
-        "has_signed_document": bool(session.get("signed_path")),
+        "has_signed_document": bool(session.get("signed_path")) and not is_view_only,
         "has_source_attachment": bool(session.get("original_path")),
         # This route is attorney-authenticated. Keep the IP/audit data inside
         # LegalFlow's authorized dashboard rather than embedding it in the PDF.
-        "signing_audit": session.get("audit_trail") if is_complete else None,
+        "signing_audit": session.get("audit_trail") if is_complete and not is_view_only else None,
         "source_file_name": Path(session.get("original_path", "document")).name
             .removeprefix("source_")
             .removeprefix("original_"),
@@ -118,20 +128,37 @@ def _in_app_request_detail(session: dict) -> dict:
 
 
 async def _send_in_app_reminder(session: dict) -> None:
-    """Email a fresh LegalFlow signing link for an active in-app session."""
+    """Email a fresh review or signing link for an active LegalFlow session."""
+    from html import escape
     from utils.email_service import send_email
 
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
     signing_url = f"{frontend_url}/sign/{session['token']}"
+    is_view_only = session.get("document_type") == "credit_disclosure"
+    if is_view_only:
+        subject = "Reminder: Please Review Your Credit Disclosure"
+        heading = "Credit Disclosure Review Reminder"
+        body_copy = (
+            "This is your credit disclosure. Please review it carefully and make sure "
+            "everything is reporting properly. If you notice anything that appears "
+            "incorrect or have questions, please contact your attorney."
+        )
+        button_label = "Review Credit Disclosure"
+    else:
+        subject = f"Reminder: Signature Required — {session.get('title', 'Document')}"
+        heading = "Signature Reminder"
+        body_copy = f"Please review and sign {session.get('title', 'your document')}."
+        button_label = "Review &amp; Sign Document"
+
     await send_email(
         to=session["signer_email"],
-        subject=f"Reminder: Signature Required — {session.get('title', 'Document')}",
+        subject=subject,
         body=f"""
         <div style="font-family:sans-serif;font-size:14px;line-height:1.6;max-width:500px;">
-            <h2 style="color:#1e40af;">Signature Reminder</h2>
-            <p>Hello {session.get('signer_name', '')},</p>
-            <p>Please review and sign <strong>{session.get('title', 'your document')}</strong>.</p>
-            <p><a href="{signing_url}" style="background:#2563eb;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">Review &amp; Sign Document</a></p>
+            <h2 style="color:#1e40af;">{heading}</h2>
+            <p>Hello {escape(session.get('signer_name', ''))},</p>
+            <p>{escape(body_copy)}</p>
+            <p><a href="{signing_url}" style="background:#2563eb;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">{button_label}</a></p>
             <p style="color:#64748b;font-size:12px;">Or copy this link: {signing_url}</p>
         </div>
         """,
@@ -564,14 +591,19 @@ async def remind_signer(
     supabase = get_supabase()
     in_app_session = _get_in_app_session(supabase, request_id)
     if in_app_session:
-        if in_app_session.get("status") not in ("awaiting_signature", "viewed"):
+        is_view_only = in_app_session.get("document_type") == "credit_disclosure"
+        allowed_statuses = ("awaiting_review",) if is_view_only else ("awaiting_signature", "viewed")
+        if in_app_session.get("status") not in allowed_statuses:
             raise HTTPException(status_code=400, detail="Only pending in-app requests can be reminded.")
         try:
             await _send_in_app_reminder(in_app_session)
         except Exception as exc:
-            logger.exception("Could not send in-app signing reminder for %s", request_id)
-            raise HTTPException(status_code=500, detail="Could not send signing reminder.") from exc
-        return {"status": "reminder_sent", "email": in_app_session["signer_email"]}
+            logger.exception("Could not send in-app document reminder for %s", request_id)
+            raise HTTPException(status_code=500, detail="Could not send document reminder.") from exc
+        return {
+            "status": "review_reminder_sent" if is_view_only else "reminder_sent",
+            "email": in_app_session["signer_email"],
+        }
 
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")

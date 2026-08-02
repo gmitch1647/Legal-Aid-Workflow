@@ -40,8 +40,9 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
   const documentLabel = isCreditDisclosure ? 'Credit Disclosure' : 'Settlement Agreement';
   const documentLabelLower = documentLabel.toLowerCase();
   const defaultMessage = isCreditDisclosure
-    ? 'Please review and sign the attached credit disclosure at your earliest convenience.'
+    ? 'This is your credit disclosure. Please review it carefully and make sure everything is reporting properly. If you notice anything that appears incorrect or have questions, please contact your attorney.'
     : 'Please review and sign the attached settlement agreement at your earliest convenience.';
+  const contactLabel = isCreditDisclosure ? 'Client' : 'Signer';
   const [caseData, setCaseData] = useState(null);
   const [signerName, setSignerName] = useState('');
   const [signerEmail, setSignerEmail] = useState('');
@@ -117,11 +118,11 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
       return;
     }
     if (!signerName.trim() || !signerEmail.trim()) {
-      setError('A signer name and email address are required.');
+      setError(`A ${contactLabel.toLowerCase()} name and email address are required.`);
       return;
     }
     if (!file) {
-      setError(`Upload the final ${documentLabelLower} before sending it for signature.`);
+      setError(`Upload the final ${documentLabelLower} before sending it${isCreditDisclosure ? ' for review' : ' for signature'}.`);
       return;
     }
 
@@ -149,7 +150,7 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
       }
       await onSent({ documentType: isCreditDisclosure ? 'credit_disclosure' : 'settlement', signingSession, settlementSource, attachmentError });
     } catch (err) {
-      setError(err.message || `Unable to send the ${documentLabelLower} for signature.`);
+      setError(err.message || `Unable to send the ${documentLabelLower}${isCreditDisclosure ? ' for review' : ' for signature'}.`);
     } finally {
       setSending(false);
     }
@@ -163,8 +164,8 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-6 py-5">
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-primary-700">Settlement Center · Step 1</p>
-            <h2 id="settlement-agreement-title" className="mt-1 text-xl font-bold text-slate-900">Send {documentLabelLower}</h2>
-            <p className="mt-1 text-sm text-slate-600">{isCreditDisclosure ? 'Use this optional Step 1 document only when the selected case requires it.' : 'The agreement remains linked to this case and will be reused automatically for the closing statement.'}</p>
+            <h2 id="settlement-agreement-title" className="mt-1 text-xl font-bold text-slate-900">{isCreditDisclosure ? 'Share credit disclosure' : `Send ${documentLabelLower}`}</h2>
+            <p className="mt-1 text-sm text-slate-600">{isCreditDisclosure ? 'Use this optional Step 1 document only when the selected case requires it. It is sent for client review only and does not require a signature.' : 'The agreement remains linked to this case and will be reused automatically for the closing statement.'}</p>
           </div>
           <button onClick={onClose} disabled={sending} aria-label={`Close ${documentLabelLower}`} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"><X className="h-5 w-5" /></button>
         </div>
@@ -179,7 +180,7 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
                   <FileText className="mt-0.5 h-5 w-5 shrink-0 text-primary-700" />
                   <div>
                     <p className="text-sm font-bold text-primary-950">{caseData?.client_name || caseData?.client?.full_name || caseData?.plaintiff_name || 'Client'} · {caseLabel}</p>
-                    <p className="mt-1 text-xs leading-5 text-primary-900/80">The client and case are already linked. You only need to upload the final agreement and confirm the signing contact.</p>
+                    <p className="mt-1 text-xs leading-5 text-primary-900/80">The client and case are already linked. You only need to upload the final {documentLabelLower} and confirm the {isCreditDisclosure ? 'review delivery' : 'signing'} contact.</p>
                   </div>
                 </div>
               </section>
@@ -208,11 +209,11 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Signer name <span className="text-red-600">*</span></label>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">{contactLabel} name <span className="text-red-600">*</span></label>
                   <input value={signerName} onChange={(event) => setSignerName(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Signer email <span className="text-red-600">*</span></label>
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">{contactLabel} email <span className="text-red-600">*</span></label>
                   <div className="relative"><Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input type="email" value={signerEmail} onChange={(event) => setSignerEmail(event.target.value)} className="w-full rounded-lg border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" /></div>
                 </div>
               </div>
@@ -232,10 +233,10 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
               <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-end">
                 <button onClick={onClose} disabled={sending} className="rounded-lg px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-50">Cancel</button>
                 <button onClick={sendAgreement} disabled={loadingCase || sending || !file || !signerName.trim() || !signerEmail.trim()} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-primary-800 disabled:cursor-not-allowed disabled:opacity-50">
-                  {sending ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending {documentLabelLower}…</> : <><Send className="h-4 w-4" /> Send {documentLabelLower} for signature</>}
+                  {sending ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending {documentLabelLower}…</> : <><Send className="h-4 w-4" /> {isCreditDisclosure ? 'Send credit disclosure for review' : `Send ${documentLabelLower} for signature`}</>}
                 </button>
               </div>
-              <p className="flex items-start gap-1.5 text-xs leading-5 text-slate-500"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" /> {isCreditDisclosure ? 'The client receives a separate secure signing link for this optional disclosure. Settlement Center will keep its status with the rest of Step 1.' : 'The client receives a secure signing link. The same agreement will be attached to this case and selected automatically when you prepare the closing statement.'}</p>
+              <p className="flex items-start gap-1.5 text-xs leading-5 text-slate-500"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" /> {isCreditDisclosure ? 'The client receives a separate secure review link. The notice asks them to review the disclosure and make sure everything is reporting properly; no signature is collected.' : 'The client receives a secure signing link. The same agreement will be attached to this case and selected automatically when you prepare the closing statement.'}</p>
             </>
           )}
         </div>
@@ -282,8 +283,12 @@ export function SettlementAgreementStatusModal({ agreement, onClose, onRefresh }
     loadDetails();
   }, [agreement.id]);
 
-  const isComplete = details?.is_complete || ['signed', 'complete', 'completed', 'completed_by_all'].includes(agreement.status);
-  const statusLabel = isComplete ? 'Signed' : (details?.signatures?.[0]?.status || agreement.status || 'Awaiting signature').replace(/_/g, ' ');
+  const isComplete = isCreditDisclosure
+    ? (details?.is_complete || ['viewed', 'reviewed'].includes(agreement.status))
+    : (details?.is_complete || ['signed', 'complete', 'completed', 'completed_by_all'].includes(agreement.status));
+  const statusLabel = isComplete
+    ? (isCreditDisclosure ? 'reviewed' : 'signed')
+    : (details?.signatures?.[0]?.status || agreement.status || (isCreditDisclosure ? 'awaiting review' : 'awaiting signature')).replace(/_/g, ' ');
   const signer = details?.signatures?.[0] || {};
 
   async function refreshAgreement() {
@@ -296,7 +301,7 @@ export function SettlementAgreementStatusModal({ agreement, onClose, onRefresh }
     setMessage('');
     try {
       await remindSigner(agreement.id);
-      setMessage(`A reminder was sent for the ${documentLabel}.`);
+      setMessage(`A ${isCreditDisclosure ? 'review reminder' : 'signature reminder'} was sent for the ${documentLabel}.`);
     } catch (err) {
       setError(err.message || `Unable to send the ${documentLabel} reminder.`);
     } finally {
@@ -331,7 +336,7 @@ export function SettlementAgreementStatusModal({ agreement, onClose, onRefresh }
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-primary-700">Settlement Center · Step 1</p>
             <h2 id="agreement-status-title" className="mt-1 text-xl font-bold text-slate-900">{documentLabelTitle}</h2>
-            <p className="mt-1 text-sm text-slate-600">Review the signature status without leaving this settlement workflow.</p>
+            <p className="mt-1 text-sm text-slate-600">{isCreditDisclosure ? 'Review delivery and viewing status without leaving this settlement workflow.' : 'Review the signature status without leaving this settlement workflow.'}</p>
           </div>
           <button onClick={onClose} aria-label={`Close ${documentLabel} status`} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X className="h-5 w-5" /></button>
         </div>
@@ -345,14 +350,14 @@ export function SettlementAgreementStatusModal({ agreement, onClose, onRefresh }
                 <div className="flex items-start gap-3">
                   {isComplete ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" /> : <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />}
                   <div>
-                    <p className={`text-sm font-bold ${isComplete ? 'text-emerald-950' : 'text-amber-950'}`}>{isComplete ? `${documentLabelTitle} signed` : 'Awaiting client signature'}</p>
+                    <p className={`text-sm font-bold ${isComplete ? 'text-emerald-950' : 'text-amber-950'}`}>{isComplete ? (isCreditDisclosure ? 'Credit disclosure reviewed' : `${documentLabelTitle} signed`) : (isCreditDisclosure ? 'Sent for client review' : 'Awaiting client signature')}</p>
                     <p className={`mt-1 text-xs leading-5 ${isComplete ? 'text-emerald-800' : 'text-amber-800'}`}>{agreement.title || documentLabelTitle} · {statusLabel}</p>
                   </div>
                 </div>
               </section>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Client signer</p>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{isCreditDisclosure ? 'Client reviewer' : 'Client signer'}</p>
                 <p className="mt-1 text-sm font-semibold text-slate-900">{signer.signer_name || agreement.signer_name || 'Client'}</p>
                 <p className="mt-0.5 text-sm text-slate-600">{signer.signer_email || agreement.signer_email || 'No email available'}</p>
               </div>
@@ -362,9 +367,9 @@ export function SettlementAgreementStatusModal({ agreement, onClose, onRefresh }
 
               <div className="grid gap-2 sm:grid-cols-2">
                 <button onClick={refreshAgreement} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"><Clock3 className="h-4 w-4" /> Refresh status</button>
-                {!isComplete && <button onClick={handleRemind} disabled={reminding} className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3.5 py-2.5 text-sm font-semibold text-primary-800 transition hover:bg-primary-100 disabled:opacity-50">{reminding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}{reminding ? 'Sending reminder…' : 'Send reminder'}</button>}
+                {!isComplete && <button onClick={handleRemind} disabled={reminding} className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-3.5 py-2.5 text-sm font-semibold text-primary-800 transition hover:bg-primary-100 disabled:opacity-50">{reminding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}{reminding ? 'Sending reminder…' : (isCreditDisclosure ? 'Send review reminder' : 'Send reminder')}</button>}
                 {details?.has_source_attachment && <button onClick={handleOriginalDownload} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"><Download className="h-4 w-4" /> Original {documentLabel}</button>}
-                {isComplete && <button onClick={handleSignedDownload} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-800"><Download className="h-4 w-4" /> Signed {documentLabel}</button>}
+                {isComplete && !isCreditDisclosure && <button onClick={handleSignedDownload} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-800"><Download className="h-4 w-4" /> Signed {documentLabel}</button>}
               </div>
             </>
           )}

@@ -484,6 +484,7 @@ export default function CaseDetail() {
   const [referralPartners, setReferralPartners] = useState([]);
   const [selectedPartnerId, setSelectedPartnerId] = useState('');
   const [savingPartner, setSavingPartner] = useState(false);
+  const [showReferralPicker, setShowReferralPicker] = useState(false);
 
   // Timeline expanded
   const [timelineExpanded, setTimelineExpanded] = useState(true);
@@ -535,6 +536,20 @@ export default function CaseDetail() {
     getStaffAttorneys().then(data => setStaffAttorneys(data || [])).catch(() => {});
     getReferralPartners().then(data => setReferralPartners(data || [])).catch(() => {});
   }, [fetchCase, fetchPipeline, fetchDocuments]);
+
+  const handleAssignReferral = async (partnerId) => {
+    setSelectedPartnerId(partnerId);
+    setSavingPartner(true);
+    try {
+      await assignReferral({ partner_id: partnerId, case_id: id });
+      await fetchCase();
+      setShowReferralPicker(false);
+    } catch (err) {
+      console.error('Failed to assign referral partner:', err);
+    } finally {
+      setSavingPartner(false);
+    }
+  };
 
   // Poll pipeline when agents are processing
   useEffect(() => {
@@ -852,7 +867,7 @@ export default function CaseDetail() {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={handleOpenAssignClient}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
@@ -895,6 +910,35 @@ export default function CaseDetail() {
                   </select>
                 </div>
               )}
+          </div>
+          <div className="relative">
+            <button
+              onClick={() => setShowReferralPicker((visible) => !visible)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+              aria-expanded={showReferralPicker}
+            >
+              <User className="h-4 w-4" />
+              Referral
+            </button>
+            {showReferralPicker && (
+              <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+                <label className="mb-2 block text-xs font-bold text-slate-600">Referred by</label>
+                <select
+                  value={selectedPartnerId}
+                  onChange={(event) => handleAssignReferral(event.target.value)}
+                  disabled={savingPartner}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60"
+                >
+                  <option value="">— No referral partner —</option>
+                  {referralPartners.map((partner) => (
+                    <option key={partner.id} value={partner.id}>
+                      {partner.full_name}{partner.company ? ` (${partner.company})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {savingPartner && <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving referral…</p>}
+              </div>
+            )}
           </div>
           <button
             onClick={() => navigate(`/attorney/settlements?case_id=${encodeURIComponent(id)}`)}
@@ -1070,17 +1114,9 @@ export default function CaseDetail() {
                 <div className="mt-1 flex items-center gap-2">
                   <select
                     value={selectedPartnerId}
-                    onChange={async (e) => {
-                      const pid = e.target.value;
-                      setSelectedPartnerId(pid);
-                      setSavingPartner(true);
-                      try {
-                        await assignReferral({ partner_id: pid, case_id: id });
-                        fetchCase();
-                      } catch (err) { console.error('Failed to assign partner:', err); }
-                      finally { setSavingPartner(false); }
-                    }}
-                    className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    onChange={(event) => handleAssignReferral(event.target.value)}
+                    disabled={savingPartner}
+                    className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-60"
                   >
                     <option value="">-- No referral partner --</option>
                     {referralPartners.map(p => (

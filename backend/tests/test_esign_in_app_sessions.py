@@ -3,6 +3,8 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
+
+from fastapi import HTTPException
 from unittest.mock import patch
 
 from routers import esign
@@ -115,6 +117,39 @@ class InAppEsignRouteTests(unittest.TestCase):
         self.assertEqual(detail["created_at"], self.session["created_at"])
         self.assertEqual(detail["signing_audit"]["ip_address"], "198.51.100.18")
         self.assertEqual(detail["signing_audit"]["ip_source"], "x-forwarded-for")
+
+    def test_credit_disclosure_detail_is_review_only_and_complete_after_view(self):
+        disclosure = {
+            **self.session,
+            "document_type": "credit_disclosure",
+            "status": "awaiting_review",
+            "signed_path": None,
+        }
+        pending_detail = esign._in_app_request_detail(disclosure)
+        self.assertTrue(pending_detail["review_only"])
+        self.assertFalse(pending_detail["is_complete"])
+        self.assertEqual(pending_detail["signatures"][0]["status"], "awaiting_review")
+
+        reviewed_detail = esign._in_app_request_detail({**disclosure, "status": "viewed"})
+        self.assertTrue(reviewed_detail["review_only"])
+        self.assertTrue(reviewed_detail["is_complete"])
+        self.assertEqual(reviewed_detail["signatures"][0]["status"], "reviewed")
+        self.assertFalse(reviewed_detail["has_signed_document"])
+
+    def test_credit_disclosure_cannot_be_completed_as_signature(self):
+        from routers import signing
+
+        disclosure = {
+            **self.session,
+            "document_type": "credit_disclosure",
+            "status": "awaiting_review",
+        }
+        supabase = _FakeSupabase(disclosure)
+        with patch.object(signing, "get_supabase", return_value=supabase):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(signing.complete_signing("token-123", None))
+
+        self.assertIn("view-only", raised.exception.detail)
 
     def test_shared_detail_route_uses_in_app_session_before_provider_lookup(self):
         supabase = _FakeSupabase(self.session)

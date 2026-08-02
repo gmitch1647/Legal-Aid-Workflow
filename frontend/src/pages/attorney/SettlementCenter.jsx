@@ -64,8 +64,10 @@ function statusDescriptor(kind) {
 
 function requestStatus(row) {
   if (!row) return 'not_started';
+  const isCreditDisclosure = row.document_type === 'credit_disclosure';
+  if (isCreditDisclosure && ['viewed', 'reviewed'].includes(row.status)) return 'complete';
   if (['signed', 'complete', 'completed', 'completed_by_all'].includes(row.status)) return 'complete';
-  if (['sent', 'awaiting_signature', 'viewed', 'awaiting_submission'].includes(row.status)) return 'pending';
+  if (['sent', 'awaiting_signature', 'awaiting_review', 'awaiting_submission'].includes(row.status)) return 'pending';
   return 'not_started';
 }
 
@@ -236,7 +238,7 @@ export default function SettlementCenter() {
     setAgreementPanel(null);
     await loadWorkflow(selectedCaseId);
     if (documentType === 'credit_disclosure') {
-      setNotice('Credit disclosure sent. Its signature status is now tracked with this settlement case.');
+      setNotice('Credit disclosure sent for client review. The client received a secure link asking them to review it and make sure everything is reporting properly; no signature is required.');
       return;
     }
     if (attachmentError) {
@@ -329,7 +331,7 @@ export default function SettlementCenter() {
                 <StepCard
                   number="1"
                   title="Settlement agreement"
-                  description="Upload the final agreement and send it for the client’s signature. A signed agreement remains attached to this case."
+                  description="Upload the final agreement and send it for the client’s signature. The agreement remains attached to this case, and the optional credit disclosure can be sent for client review."
                   icon={Send}
                   kind={agreementKind}
                   detail={agreement ? `${agreement.title || 'Settlement agreement'}${displayDate(agreement.sent_at || agreement.created_at) ? ` · ${agreementKind === 'complete' ? 'completed' : 'sent'} ${displayDate(agreement.submitted_at || agreement.sent_at || agreement.created_at)}` : ''}` : 'No settlement-agreement signature request is attached to this case yet.'}
@@ -360,7 +362,7 @@ export default function SettlementCenter() {
                 />
               </section>
 
-              <p className="px-1 text-xs leading-5 text-slate-500">The optional credit disclosure can be sent from Step 1 only when that case requires it. The W-9 can be sent while the agreement is awaiting signature. The final settlement agreement is automatically attached to the closing-statement step, where you still review and approve the distribution.</p>
+              <p className="px-1 text-xs leading-5 text-slate-500">The optional credit disclosure can be sent from Step 1 only when that case requires it. It is delivered for client review only—no signature is collected. The W-9 can be sent while the agreement is awaiting signature. The final settlement agreement is automatically attached to the closing-statement step, where you still review and approve the distribution.</p>
             </>
           )}
         </>
