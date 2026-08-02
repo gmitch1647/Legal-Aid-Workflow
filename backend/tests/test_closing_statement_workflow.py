@@ -15,6 +15,7 @@ from routers.closing_statements import (
     _attach_settlement_signing_source,
     _extract_settlement_suggestions,
     _money_to_cents,
+    _next_closing_statement_version,
 )
 from routers.signing import _embed_signature, _execution_block_placement
 from utils.closing_statement_renderer import ClosingStatementData, money_in_words, render_closing_statement
@@ -126,6 +127,62 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
         self.assertEqual(document["storage_path"], "signing/session-1/source_final-settlement.pdf")
         self.assertEqual(document["document_category"], "settlement")
         self.assertEqual(document["uploaded_by"], "attorney-1")
+
+    def test_next_statement_version_increments_from_existing_report(self):
+        class Response:
+            def __init__(self, data):
+                self.data = data
+
+        class Query:
+            def select(self, *_args):
+                return self
+
+            def eq(self, *_args):
+                return self
+
+            def order(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, *_args):
+                return self
+
+            def execute(self):
+                return Response([{"version": 3}])
+
+        class Supabase:
+            def table(self, table_name):
+                self.table_name = table_name
+                return Query()
+
+        with patch("routers.closing_statements.get_supabase", return_value=Supabase()):
+            self.assertEqual(_next_closing_statement_version("case-1"), 4)
+
+    def test_next_statement_version_starts_at_one_for_first_report(self):
+        class Response:
+            data = []
+
+        class Query:
+            def select(self, *_args):
+                return self
+
+            def eq(self, *_args):
+                return self
+
+            def order(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, *_args):
+                return self
+
+            def execute(self):
+                return Response()
+
+        class Supabase:
+            def table(self, _table_name):
+                return Query()
+
+        with patch("routers.closing_statements.get_supabase", return_value=Supabase()):
+            self.assertEqual(_next_closing_statement_version("case-1"), 1)
 
     def test_money_parses_in_integer_cents(self):
         self.assertEqual(_money_to_cents("$1,234.56", "Settlement"), 123456)

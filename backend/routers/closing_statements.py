@@ -301,7 +301,7 @@ def _owned_statement(statement_id: str, profile: dict) -> dict:
 
 
 def _selected_attorney(attorney_id: str) -> dict:
-    """Return a stored attorney record suitable for a stable document letterhead."""
+    """Return a saved or system-synchronized attorney letterhead."""
     response = (
         get_supabase().table("attorneys")
         .select("id,full_name,firm_name,address,phone,email")
@@ -327,6 +327,24 @@ def _selected_attorney(attorney_id: str) -> dict:
             ),
         )
     return attorney
+
+
+def _next_closing_statement_version(case_id: str) -> int:
+    """Return the next durable report version for one case."""
+    response = (
+        get_supabase().table("closing_statements")
+        .select("version")
+        .eq("case_id", case_id)
+        .order("version", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        return 1
+    try:
+        return max(1, int(response.data[0].get("version") or 0) + 1)
+    except (TypeError, ValueError):
+        return 1
 
 
 def _settlement_document_result(case: dict, document: dict) -> dict:
@@ -636,7 +654,9 @@ async def create_closing_statement(
             logger.warning("Could not persist case number for %s", case["id"])
 
     statement_id = str(uuid.uuid4())
-    statement_file_name = f"Closing_Statement_{re.sub(r'[^A-Za-z0-9]+', '_', signer_name).strip('_') or 'Client'}.pdf"
+    statement_version = _next_closing_statement_version(case["id"])
+    client_filename = re.sub(r"[^A-Za-z0-9]+", "_", signer_name).strip("_") or "Client"
+    statement_file_name = f"Closing_Statement_{client_filename}_v{statement_version}.pdf"
     renderer_data = ClosingStatementData(
         firm_name=str(attorney.get("firm_name") or "LEGALFLOW"),
         firm_address=str(attorney.get("address") or ""),
@@ -688,6 +708,7 @@ async def create_closing_statement(
             "settlement_storage_path": verified_settlement_path,
             "draft_storage_path": storage_path,
             "statement_file_name": statement_file_name,
+            "version": statement_version,
             "case_number": statement_case_number,
             "adverse_party": payload.adverse_party,
             "account_reference": payload.account_reference,
@@ -729,7 +750,7 @@ async def list_closing_statements(authorization: str = Header(...)):
     _require_attorney(profile)
     response = (
         get_supabase().table("closing_statements")
-        .select("id,case_id,client_id,statement_file_name,case_number,adverse_party,gross_settlement_cents,client_payout_cents,paralegal_fee_cents,court_cost_cents,service_of_process_cost_cents,attorney_fee_cents,attorney_id,letterhead_firm_name,signer_name,signer_email,status,signature_session_id,created_at,updated_at,signed_storage_path")
+        .select("id,case_id,client_id,version,statement_file_name,case_number,adverse_party,gross_settlement_cents,client_payout_cents,paralegal_fee_cents,court_cost_cents,service_of_process_cost_cents,attorney_fee_cents,attorney_id,letterhead_firm_name,signer_name,signer_email,status,signature_session_id,created_at,updated_at,signed_storage_path")
         .eq("created_by", profile["id"])
         .order("created_at", desc=True)
         .limit(200)
