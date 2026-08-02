@@ -226,7 +226,7 @@ export async function deleteDefendant(id) {
 export async function uploadDocument(caseId, file, category) {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('category', category);
+  formData.append('document_category', category);
 
   return request(`/cases/${caseId}/documents`, {
     method: 'POST',

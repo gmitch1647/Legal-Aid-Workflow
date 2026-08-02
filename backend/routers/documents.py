@@ -174,7 +174,19 @@ async def list_documents(case_id: str, authorization: str = Header(...)):
         .execute()
     )
 
-    return resp.data or []
+    docs = resp.data or []
+
+    for doc in docs:
+        if doc.get("storage_path"):
+            try:
+                url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
+                    doc["storage_path"], 3600
+                )
+                doc["url"] = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
+            except Exception:
+                doc["url"] = ""
+
+    return docs
 
 
 # ---------------------------------------------------------------------------
