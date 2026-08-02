@@ -98,7 +98,6 @@ export default function ClosingStatements() {
   const [previewError, setPreviewError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
   const fileInputRef = useRef(null);
   const previewCanvasRef = useRef(null);
   const previewRequestRef = useRef(0);
@@ -143,12 +142,11 @@ export default function ClosingStatements() {
   }, []);
 
   useEffect(() => {
-    if (!settlementCaseId || openedFromSettlement || cases.length === 0) return;
+    if (!settlementCaseId || selectedCaseId || cases.length === 0) return;
     const matchingCase = cases.find((item) => String(item.id) === String(settlementCaseId));
     if (!matchingCase) return;
-    setOpenedFromSettlement(true);
     chooseCase(String(matchingCase.id));
-  }, [settlementCaseId, openedFromSettlement, cases, defaultAttorneyId]);
+  }, [settlementCaseId, selectedCaseId, cases, defaultAttorneyId]);
 
   useEffect(() => {
     if (!preview?.bytes || !previewCanvasRef.current) return undefined;
@@ -258,6 +256,39 @@ export default function ClosingStatements() {
     setNotice('');
     setLoadingSavedSettlement(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const restartStatement = () => {
+    const caseToReuse = selectedCaseId || settlementCaseId;
+    if (caseToReuse && cases.some((item) => String(item.id) === String(caseToReuse))) {
+      chooseCase(String(caseToReuse));
+      setNotice('A fresh closing-statement draft is ready. The selected case and its saved settlement have been reloaded; update the details and generate a new version when ready.');
+      return;
+    }
+    resetComposer();
+    setNotice('A fresh closing-statement draft is ready. Choose a case to continue.');
+  };
+
+  const reloadCurrentCase = async () => {
+    setError('');
+    setNotice('');
+    try {
+      await refresh();
+      if (selectedCaseId) {
+        await loadSavedSettlement(selectedCaseId);
+        setNotice('The current case, attorney list, and saved settlement were refreshed. You can continue editing or start a new statement.');
+      } else {
+        setNotice('The case list and attorney letterheads were refreshed.');
+      }
+    } catch (err) {
+      setError(err.message || 'Could not refresh the closing-statement workspace.');
+    }
+  };
+
+  const editGeneratedStatement = () => {
+    setStatement(null);
+    setError('');
+    setNotice('The generated draft remains in the history below. You can now revise this statement’s details and generate a new version.');
   };
 
   const chooseCase = (caseId) => {
@@ -445,8 +476,14 @@ export default function ClosingStatements() {
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           {returnTo && <button onClick={() => navigate(returnTo)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">Return to Settlement Center</button>}
-          <button onClick={resetComposer} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
-            <RefreshCw className="h-4 w-4" /> New statement
+          <button onClick={() => setShowAddAttorney(true)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary-200 bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-800 shadow-sm hover:bg-primary-100">
+            <Plus className="h-4 w-4" /> Add attorney letterhead
+          </button>
+          <button onClick={reloadCurrentCase} disabled={loadingSavedSettlement || uploading || generating} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </button>
+          <button onClick={restartStatement} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+            <FileText className="h-4 w-4" /> Start new statement
           </button>
         </div>
       </div>
@@ -457,7 +494,7 @@ export default function ClosingStatements() {
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-5 py-4">
           <h2 className="font-semibold text-slate-900">1. Choose the case and letterhead</h2>
-          <p className="mt-1 text-sm text-slate-500">LegalFlow saves the settlement to the selected case and suggests information from the settlement or linked case defendants. You remain in control of every final value.</p>
+            <p className="mt-1 text-sm text-slate-500">Choose the case, then select the attorney whose firm letterhead will appear on the statement. Use <span className="font-semibold text-slate-700">Add attorney letterhead</span> above if the attorney is not listed.</p>
         </div>
         <div className="grid gap-4 p-5 md:grid-cols-[1fr_1.2fr]">
           <label className="block text-sm font-medium text-slate-700">
@@ -478,16 +515,23 @@ export default function ClosingStatements() {
         </div>
         {settlement && <div className="border-t border-slate-100 bg-emerald-50 px-5 py-3 text-xs leading-5 text-emerald-900"><span className="font-semibold">Attached settlement:</span> {settlement.file_name || 'Settlement agreement'}. This case-linked document will be used for the closing statement; select it above only if you need to replace it.</div>}
         <div className="border-t border-slate-100 bg-slate-50 p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Attorney letterhead</h3>
+              <p className="mt-0.5 text-xs text-slate-500">Required before generating the statement. Select an existing attorney or add a new firm header.</p>
+            </div>
+            <button onClick={() => setShowAddAttorney(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-800"><Plus className="h-4 w-4" /> Add attorney</button>
+          </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
             <label className="block flex-1 text-sm font-medium text-slate-700">
-              Attorney and firm letterhead
+              Select attorney and firm letterhead
               <select value={form.attorney_id} onChange={(event) => updateField('attorney_id', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100">
                 <option value="">Choose an attorney…</option>
                 {attorneys.map((attorney) => <option key={attorney.id} value={attorney.id}>{attorney.full_name}{attorney.firm_name ? ` — ${attorney.firm_name}` : ''}{attorney.is_default ? ' (Default)' : ''}</option>)}
               </select>
             </label>
-            <button onClick={() => setShowAddAttorney((visible) => !visible)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100">
-              <Plus className="h-4 w-4" /> Add attorney
+            <button onClick={reloadCurrentCase} disabled={loadingSavedSettlement || uploading || generating} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">
+              <RefreshCw className="h-4 w-4" /> Refresh list
             </button>
           </div>
           {selectedAttorney && <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-600"><p className="font-semibold text-slate-800">Header preview: {selectedAttorney.firm_name || selectedAttorney.full_name}</p><p className="mt-1">{selectedAttorney.address || 'Office address needed'}{selectedAttorney.phone || selectedAttorney.email ? '  |  ' : ''}{[selectedAttorney.phone, selectedAttorney.email].filter(Boolean).join('  |  ') || 'Phone and email needed'}</p><p className="mt-1 text-xs text-slate-500">The generated PDF uses this firm, address, phone, and email in the same three-line letterhead position as your reference statement.</p></div>}
@@ -546,6 +590,8 @@ export default function ClosingStatements() {
               <p className="mt-1 text-sm text-primary-800">Open the protected webpage preview, review the PDF, then send the secure signature request to {statement.signer_email}.</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <button onClick={editGeneratedStatement} className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3.5 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-100"><FileText className="h-4 w-4" /> Edit details</button>
+              <button onClick={restartStatement} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className="h-4 w-4" /> New version</button>
               <button onClick={() => openPreview(statement)} className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3.5 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-100"><Eye className="h-4 w-4" /> View preview</button>
               <button onClick={() => download(statement)} className="inline-flex items-center gap-2 rounded-lg border border-primary-200 bg-white px-3.5 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-100"><Download className="h-4 w-4" /> Download PDF</button>
               <button onClick={handleSend} disabled={sending || statement.status === 'awaiting_signature'} className="inline-flex items-center gap-2 rounded-lg bg-primary-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-800 disabled:cursor-not-allowed disabled:bg-slate-400"><Send className="h-4 w-4" />{sending ? 'Sending…' : statement.status === 'awaiting_signature' ? 'Sent for signature' : 'Send for signature'}</button>
