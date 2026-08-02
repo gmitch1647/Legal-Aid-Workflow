@@ -1188,3 +1188,64 @@ export function publicW9TemplateUrl(token) {
 export function publicW9CompletedCopyUrl(token) {
   return `${BASE_URL}/w9/${token}/completed-copy`;
 }
+
+
+// ---------------------------------------------------------------------------
+// Closing statements
+// ---------------------------------------------------------------------------
+
+export async function uploadSettlementForClosingStatement(caseId, file) {
+  const formData = new FormData();
+  formData.append('case_id', caseId);
+  formData.append('file', file);
+  return request('/closing-statements/extract-settlement', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export async function createClosingStatement(data) {
+  return request('/closing-statements', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getClosingStatements() {
+  return request('/closing-statements');
+}
+
+export async function sendClosingStatementForSignature(statementId) {
+  return request(`/closing-statements/${statementId}/send`, {
+    method: 'POST',
+  });
+}
+
+export async function downloadClosingStatement(statementId, { signed = false } = {}) {
+  const token = await getAccessToken();
+  const response = await fetch(
+    `${BASE_URL}/closing-statements/${statementId}/download${signed ? '?signed=true' : ''}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (!response.ok) {
+    let errorBody;
+    try {
+      errorBody = await response.json();
+    } catch {
+      errorBody = { detail: response.statusText };
+    }
+    throw new Error(apiErrorMessage(errorBody, `Could not download statement (${response.status}).`));
+  }
+  return response.blob();
+}
+
+export function saveDownloadedBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

@@ -54,6 +54,7 @@ const FormsPage = React.lazy(() => import('./pages/attorney/Forms'));
 const DisputeLetters = React.lazy(() => import('./pages/attorney/DisputeLetters'));
 const ESignatures = React.lazy(() => import('./pages/attorney/ESignatures'));
 const W9Requests = React.lazy(() => import('./pages/attorney/W9Requests'));
+const ClosingStatements = React.lazy(() => import('./pages/attorney/ClosingStatements'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -449,6 +450,7 @@ const allAttorneyLinks = [
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/w9', label: 'W-9 Forms', icon: FileKey, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/closing-statements', label: 'Closing Statements', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
@@ -539,6 +541,7 @@ export default function App() {
             <Route path="disputes" element={<DisputeLetters />} />
             <Route path="esign" element={<ESignatures />} />
             <Route path="w9" element={<W9Requests />} />
+            <Route path="closing-statements" element={<ClosingStatements />} />
             <Route path="pipeline" element={<CasePipeline />} />
             <Route path="cases/:id" element={<CaseDetail />} />
             <Route path="agents" element={<AgentChat />} />
