@@ -101,10 +101,12 @@ function AuthProvider({ children }) {
 
     async function init() {
       try {
-        const authUser = await getCurrentUser();
-        if (mounted) {
-          await loadProfile(authUser);
-        }
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Auth timeout')), 8000));
+        const auth = async () => {
+          const authUser = await getCurrentUser();
+          if (mounted) await loadProfile(authUser);
+        };
+        await Promise.race([auth(), timeout]);
       } catch (err) {
         console.error('Auth init error:', err);
       } finally {
@@ -190,10 +192,11 @@ function RootRedirect() {
 // ---------------------------------------------------------------------------
 function LoadingScreen() {
   return (
-    <div className="flex h-screen items-center justify-center bg-slate-50">
+    <div className="flex h-screen items-center justify-center bg-blue-600">
       <div className="text-center">
-        <Scale className="mx-auto h-12 w-12 animate-pulse text-primary-600" />
-        <p className="mt-4 text-sm text-slate-500">Loading...</p>
+        <Scale className="mx-auto h-12 w-12 animate-pulse text-white" />
+        <p className="mt-4 text-lg font-bold text-white">LegalFlow</p>
+        <p className="mt-1 text-sm text-blue-200">Loading...</p>
       </div>
     </div>
   );
