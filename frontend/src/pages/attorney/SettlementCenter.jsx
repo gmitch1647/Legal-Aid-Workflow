@@ -20,6 +20,7 @@ import {
   getSignatureRequests,
   listW9Requests,
 } from '../../lib/api';
+import SettlementAgreementModal, { SettlementAgreementStatusModal } from './SettlementAgreementModal';
 
 function asRows(value, fallbackKeys = []) {
   if (Array.isArray(value)) return value;
@@ -133,6 +134,8 @@ export default function SettlementCenter() {
   const [closingStatements, setClosingStatements] = useState([]);
   const [loadingCases, setLoadingCases] = useState(true);
   const [loadingWorkflow, setLoadingWorkflow] = useState(false);
+  const [agreementPanel, setAgreementPanel] = useState(null);
+  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
   const selectedCase = useMemo(
@@ -212,15 +215,28 @@ export default function SettlementCenter() {
     navigate(`${path}?${params.toString()}`);
   };
 
+  const agreementNeedsReplacement = !agreement || agreementKind === 'not_started';
+
+  const openAgreementPanel = () => {
+    setNotice('');
+    setAgreementPanel(agreementNeedsReplacement ? 'send' : 'status');
+  };
+
+  const handleAgreementSent = async () => {
+    setAgreementPanel(null);
+    await loadWorkflow(selectedCaseId);
+    setNotice('Settlement agreement sent. The client has received a secure signing link, and the W-9 step is now ready.');
+  };
+
   const nextStep = useMemo(() => {
-    if (!agreement) return { label: 'Send settlement agreement', action: () => openStep('/attorney/esign') };
-    if (agreementKind === 'pending') return { label: 'View settlement agreement', action: () => openStep('/attorney/esign') };
+    if (agreementNeedsReplacement) return { label: agreement ? 'Send replacement settlement agreement' : 'Send settlement agreement', action: openAgreementPanel };
+    if (agreementKind === 'pending') return { label: 'Review settlement agreement', action: openAgreementPanel };
     if (!w9) return { label: 'Request Form W-9', action: () => openStep('/attorney/w9') };
     if (w9Kind === 'pending') return { label: 'View Form W-9 request', action: () => openStep('/attorney/w9') };
     if (!closingStatement) return { label: 'Prepare closing statement', action: () => openStep('/attorney/closing-statements') };
     if (closingKind !== 'complete') return { label: 'Review closing statement', action: () => openStep('/attorney/closing-statements') };
     return null;
-  }, [agreement, agreementKind, w9, w9Kind, closingStatement, closingKind]);
+  }, [agreement, agreementKind, agreementNeedsReplacement, w9, w9Kind, closingStatement, closingKind]);
 
   if (loadingCases) {
     return <div className="flex min-h-[360px] items-center justify-center text-slate-500"><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading settlement workspace…</div>;
@@ -238,7 +254,7 @@ export default function SettlementCenter() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary-200">Case-centered settlement workflow</p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight">Settlement Center</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-200">Keep the settlement agreement, secure W-9, and closing statement connected to one client and one case. Each action opens with the correct case already selected.</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-200">Keep the settlement agreement, secure W-9, and closing statement connected to one client and one case. Send and monitor the settlement agreement here without leaving the guided workflow.</p>
           </div>
           <button onClick={() => loadWorkflow(selectedCaseId)} disabled={!selectedCaseId || loadingWorkflow} className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3.5 py-2 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50">
             <RefreshCw className={`h-4 w-4 ${loadingWorkflow ? 'animate-spin' : ''}`} /> Refresh status
@@ -247,6 +263,7 @@ export default function SettlementCenter() {
       </header>
 
       {error && <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><p>{error}</p></div>}
+      {notice && <div className="flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" /><p>{notice}</p></div>}
 
       {cases.length === 0 ? (
         <section className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
@@ -297,8 +314,8 @@ export default function SettlementCenter() {
                   icon={Send}
                   kind={agreementKind}
                   detail={agreement ? `${agreement.title || 'Settlement agreement'}${displayDate(agreement.sent_at || agreement.created_at) ? ` · ${agreementKind === 'complete' ? 'completed' : 'sent'} ${displayDate(agreement.submitted_at || agreement.sent_at || agreement.created_at)}` : ''}` : 'No settlement-agreement signature request is attached to this case yet.'}
-                  actionLabel={agreement ? 'Open agreement' : 'Send agreement'}
-                  onAction={() => openStep('/attorney/esign')}
+                  actionLabel={agreementNeedsReplacement ? (agreement ? 'Send replacement' : 'Send agreement') : 'Review agreement'}
+                  onAction={openAgreementPanel}
                   secondaryLabel={agreementKind === 'pending' ? 'Request W-9 now' : null}
                   onSecondary={agreementKind === 'pending' ? () => openStep('/attorney/w9') : null}
                 />
@@ -328,6 +345,22 @@ export default function SettlementCenter() {
             </>
           )}
         </>
+      )}
+      {agreementPanel === 'send' && selectedCaseId && (
+        <SettlementAgreementModal
+          key={`send-${selectedCaseId}`}
+          caseId={selectedCaseId}
+          onClose={() => setAgreementPanel(null)}
+          onSent={handleAgreementSent}
+        />
+      )}
+      {agreementPanel === 'status' && agreement && (
+        <SettlementAgreementStatusModal
+          key={`status-${agreement.id}`}
+          agreement={agreement}
+          onClose={() => setAgreementPanel(null)}
+          onRefresh={() => loadWorkflow(selectedCaseId)}
+        />
       )}
     </div>
   );

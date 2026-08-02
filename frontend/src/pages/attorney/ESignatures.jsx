@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   PenLine, Send, Download, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
@@ -10,7 +9,7 @@ import {
   sendDocumentForSignature, createSigningSession, testSigningStorage,
   deleteSigningSession,
   getSignatureRequests, getSignatureRequest, remindSigner,
-  cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCase, getCases,
+  cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -24,10 +23,6 @@ const STATUS_MAP = {
 };
 
 export default function ESignatures() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const settlementCaseId = searchParams.get('case_id') || '';
-  const returnTo = searchParams.get('return_to') || '';
   const [configured, setConfigured] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -40,18 +35,10 @@ export default function ESignatures() {
   const [searchTerm, setSearchTerm] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
-  const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
 
   useEffect(() => {
     loadData();
   }, []);
-
-  useEffect(() => {
-    if (!settlementCaseId || openedFromSettlement || loading) return;
-    setOpenedFromSettlement(true);
-    setShowSendModal(true);
-    if (configured) loadTemplates();
-  }, [settlementCaseId, openedFromSettlement, loading, configured]);
 
   async function loadData() {
     setLoading(true);
@@ -160,7 +147,6 @@ export default function ESignatures() {
           <p className="text-sm text-slate-500 mt-1">Send documents for client signatures</p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
-          {returnTo && <button onClick={() => navigate(returnTo)} className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50">Return to Settlement Center</button>}
           <button onClick={loadData}
             className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
@@ -295,7 +281,6 @@ export default function ESignatures() {
         <SendSignatureModal
           templates={templates}
           loadingTemplates={loadingTemplates}
-          initialCaseId={settlementCaseId}
           onClose={() => setShowSendModal(false)}
           onSent={() => { setShowSendModal(false); loadData(); }}
         />
@@ -356,7 +341,7 @@ function ReminderBtn({ id }) {
 // Send Signature Modal
 // ---------------------------------------------------------------------------
 
-function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', onClose, onSent }) {
+function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
   const [mode, setMode] = useState('upload');
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [uploadedFile, setUploadedFile] = useState(null);
@@ -367,8 +352,7 @@ function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', o
   const [signerEmail, setSignerEmail] = useState('');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [docType, setDocType] = useState('settlement');
-  const [caseId, setCaseId] = useState(initialCaseId);
-  const [prefillingSettlement, setPrefillingSettlement] = useState(Boolean(initialCaseId));
+  const [caseId, setCaseId] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
@@ -380,34 +364,6 @@ function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', o
   useEffect(() => {
     loadClients();
   }, []);
-
-  useEffect(() => {
-    if (!initialCaseId) return;
-    let active = true;
-    async function prefillSettlementCase() {
-      setPrefillingSettlement(true);
-      try {
-        const caseData = await getCase(initialCaseId);
-        if (!active) return;
-        const client = caseData?.client || {};
-        const clientId = caseData?.client_id || client?.id || '';
-        const signer = client?.full_name || caseData?.client_name || caseData?.plaintiff_name || '';
-        const email = client?.email || caseData?.client_email || '';
-        setCaseId(String(caseData?.id || initialCaseId));
-        setSelectedClientId(clientId);
-        setSignerName(signer);
-        setSignerEmail(email);
-        setTitle((current) => current || (signer ? `Settlement Agreement — ${signer}` : 'Settlement Agreement'));
-        setCases([{ id: String(caseData?.id || initialCaseId), plaintiff_name: caseData?.plaintiff_name || signer, status: caseData?.status || '' }]);
-      } catch (err) {
-        if (active) setError(err.message || 'The settlement case could not be prefilled. You can still select the client manually.');
-      } finally {
-        if (active) setPrefillingSettlement(false);
-      }
-    }
-    prefillSettlementCase();
-    return () => { active = false; };
-  }, [initialCaseId]);
 
   async function loadClients() {
     try {
@@ -525,7 +481,6 @@ function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', o
         </div>
 
         <div className="p-5 space-y-4">
-          {initialCaseId && <div className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">{prefillingSettlement ? 'Loading the selected settlement case…' : 'This settlement agreement is linked to the case selected in Settlement Center.'}</div>}
           {/* Mode toggle */}
           <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
             <button onClick={() => setMode('upload')}
