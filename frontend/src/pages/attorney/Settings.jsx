@@ -2064,6 +2064,18 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
   const [inviteEmail, setInviteEmail] = useState(p.email || '');
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState(null);
+  const [partnerCases, setPartnerCases] = useState([]);
+  const [loadingCases, setLoadingCases] = useState(false);
+
+  useEffect(() => {
+    if (expanded && partnerCases.length === 0) {
+      setLoadingCases(true);
+      supabase.from('cases').select('id, plaintiff_name, status, created_at')
+        .eq('referral_partner_id', p.id).order('created_at', { ascending: false })
+        .then(({ data }) => { setPartnerCases(data || []); setLoadingCases(false); })
+        .catch(() => setLoadingCases(false));
+    }
+  }, [expanded]);
 
   async function handleInvitePortal() {
     if (!inviteEmail) return;
@@ -2158,6 +2170,25 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
                 <div className={`w-4 h-4 rounded-full bg-white shadow transition transform ${p.can_access_disputer ? 'translate-x-5' : 'translate-x-0.5'}`} />
               </button>
             </label>
+          </div>
+
+          {/* Referred Cases */}
+          <div className="pt-2 border-t border-slate-200">
+            <div className="text-xs font-bold text-slate-700 mb-1">Referred Cases ({partnerCases.length})</div>
+            {loadingCases ? (
+              <div className="text-xs text-slate-400 py-1">Loading...</div>
+            ) : partnerCases.length > 0 ? (
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {partnerCases.map(c => (
+                  <div key={c.id} className="flex items-center justify-between bg-white rounded border border-slate-100 px-2 py-1.5 text-xs">
+                    <span className="text-slate-800 font-medium truncate">{c.plaintiff_name || 'Untitled'}</span>
+                    <span className="text-slate-400 shrink-0 ml-2">{c.status}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400">No cases referred</div>
+            )}
           </div>
 
           <button onClick={onDelete}
@@ -2307,6 +2338,8 @@ function TeamTab() {
 function StaffAttorneyCard({ attorney: a, onUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [assignedCases, setAssignedCases] = useState([]);
+  const [loadingCases, setLoadingCases] = useState(false);
   const [form, setForm] = useState({
     full_name: a.full_name || '',
     email: a.email || '',
@@ -2318,6 +2351,20 @@ function StaffAttorneyCard({ attorney: a, onUpdate }) {
   const [saving, setSaving] = useState(false);
   const [resending, setResending] = useState(false);
   const [resendResult, setResendResult] = useState(null);
+
+  useEffect(() => {
+    if (expanded && assignedCases.length === 0) {
+      setLoadingCases(true);
+      supabase.from('profiles').select('id, full_name').eq('assigned_attorney_id', a.id)
+        .then(({ data: clients }) => {
+          if (!clients?.length) { setLoadingCases(false); return; }
+          const clientIds = clients.map(c => c.id);
+          supabase.from('cases').select('id, plaintiff_name, status, created_at').in('client_id', clientIds).order('created_at', { ascending: false })
+            .then(({ data: cases }) => { setAssignedCases(cases || []); setLoadingCases(false); });
+        })
+        .catch(() => setLoadingCases(false));
+    }
+  }, [expanded]);
 
   async function handleResendInvite() {
     setResending(true);
@@ -2425,6 +2472,25 @@ function StaffAttorneyCard({ attorney: a, onUpdate }) {
                 <div><span className="text-slate-500">Firm:</span> <span className="text-slate-800">{a.firm_name || '—'}</span></div>
                 <div><span className="text-slate-500">Joined:</span> <span className="text-slate-800">{a.created_at ? new Date(a.created_at).toLocaleDateString() : '—'}</span></div>
               </div>
+              {/* Assigned Cases */}
+              <div className="pt-2 border-t border-slate-200">
+                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Assigned Cases ({assignedCases.length})</div>
+                {loadingCases ? (
+                  <div className="text-xs text-slate-400 py-1">Loading...</div>
+                ) : assignedCases.length > 0 ? (
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {assignedCases.map(c => (
+                      <div key={c.id} className="flex items-center justify-between bg-white rounded border border-slate-100 px-2 py-1.5 text-xs">
+                        <span className="text-slate-800 font-medium truncate">{c.plaintiff_name || 'Untitled'}</span>
+                        <span className="text-slate-400 shrink-0 ml-2">{c.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400">No cases assigned</div>
+                )}
+              </div>
+
               <div className="flex gap-2 pt-1 flex-wrap">
                 <button onClick={() => setEditing(true)}
                   className="px-3 py-1.5 border border-slate-200 rounded text-xs text-slate-700 hover:bg-slate-100">
