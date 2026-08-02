@@ -27,6 +27,8 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
+  Upload,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../../App';
 import {
@@ -46,6 +48,8 @@ import {
   assignAttorneyToClient,
   getReferralPartners,
   assignReferral,
+  uploadDocument,
+  deleteDocument,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
 
@@ -199,6 +203,82 @@ function NotesModal({ title, placeholder, submitLabel, onSubmit, onCancel, loadi
 // ---------------------------------------------------------------------------
 // Inline Message Thread
 // ---------------------------------------------------------------------------
+
+function PiiSection({ caseId, documents, onRefresh }) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  const piiDocs = documents.filter(d =>
+    (d.document_category || d.category || '').toLowerCase() === 'pii' ||
+    (d.file_name || '').toLowerCase().includes('pii') ||
+    (d.file_name || '').toLowerCase().includes('social security') ||
+    (d.file_name || '').toLowerCase().includes('drivers license') ||
+    (d.file_name || '').toLowerCase().includes("driver's license") ||
+    (d.file_name || '').toLowerCase().includes('id card')
+  );
+
+  async function handleUpload(files) {
+    if (!files?.length) return;
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      try {
+        await uploadDocument(caseId, file, 'pii');
+      } catch (err) { console.error('PII upload failed:', err); }
+    }
+    setUploading(false);
+    if (onRefresh) onRefresh();
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleDelete(doc) {
+    if (!confirm(`Delete "${doc.file_name}"?`)) return;
+    try {
+      await deleteDocument(caseId, doc.id);
+      if (onRefresh) onRefresh();
+    } catch (err) { alert('Delete failed: ' + err.message); }
+  }
+
+  return (
+    <div className="card border-amber-200 bg-amber-50/30">
+      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+        <Shield className="h-5 w-5 text-amber-500" />
+        PII (Personally Identifiable Information)
+      </h3>
+      <p className="text-xs text-slate-500 mt-1">Upload sensitive documents: SSN cards, driver's licenses, ID cards, etc.</p>
+
+      <div className="mt-4 space-y-2">
+        {piiDocs.length > 0 ? (
+          piiDocs.map(doc => (
+            <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-amber-200 bg-white p-3">
+              <Shield className="h-4 w-4 shrink-0 text-amber-500" />
+              <a href={doc.url || doc.file_url || '#'} target="_blank" rel="noopener noreferrer"
+                className="flex-1 min-w-0">
+                <p className="truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</p>
+                <p className="text-xs text-slate-400">{formatDate(doc.created_at || doc.uploaded_at)}</p>
+              </a>
+              <button onClick={() => handleDelete(doc)}
+                className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-slate-400">No PII documents uploaded.</p>
+        )}
+      </div>
+
+      <div className="mt-3">
+        <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+          className="inline-flex items-center gap-1.5 px-3 py-2 border border-amber-300 rounded-lg text-xs font-medium text-amber-700 bg-white hover:bg-amber-50 disabled:opacity-50">
+          <Upload className="w-3.5 h-3.5" />
+          {uploading ? 'Uploading...' : 'Upload PII Document'}
+        </button>
+        <input ref={fileInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.docx" className="hidden"
+          onChange={(e) => handleUpload(e.target.files)} />
+      </div>
+    </div>
+  );
+}
 
 function MessageThread({ caseId }) {
   const { profile } = useAuth();
@@ -1379,6 +1459,9 @@ export default function CaseDetail() {
               </div>
             </div>
           </div>
+
+          {/* PII Section */}
+          <PiiSection caseId={id} documents={documents} onRefresh={fetchDocuments} />
 
           {/* Documents */}
           <div className="card">
