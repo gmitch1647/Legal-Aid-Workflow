@@ -1135,8 +1135,11 @@ export async function inspectW9Prefill(caseId) {
   return request(`/w9/attorney/prefill?case_id=${encodeURIComponent(caseId)}`);
 }
 
-export async function listW9Requests() {
-  return request('/w9/attorney/requests');
+export async function listW9Requests(caseId = null) {
+  const params = new URLSearchParams();
+  if (caseId) params.append('case_id', caseId);
+  const query = params.toString();
+  return request(`/w9/attorney/requests${query ? `?${query}` : ''}`);
 }
 
 export async function getW9Request(id) {

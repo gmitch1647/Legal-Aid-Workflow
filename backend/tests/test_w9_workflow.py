@@ -29,6 +29,10 @@ class _FakeOwnedW9Query:
     def limit(self, _count):
         return self
 
+    def order(self, _field, desc=False):
+        self.order_by = (_field, desc)
+        return self
+
     def execute(self):
         return SimpleNamespace(data=self.data)
 
@@ -324,6 +328,19 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertEqual(row["id"], "request-1")
         self.assertIn(("id", "request-1"), supabase.query.filters)
         self.assertIn(("sent_by", "attorney-1"), supabase.query.filters)
+
+    def test_attorney_w9_list_can_be_scoped_to_a_single_case(self):
+        supabase = _FakeOwnedW9Supabase([{"id": "request-1", "case_id": "case-1"}])
+        profile = {"id": "attorney-1", "role": "attorney"}
+
+        with patch.object(w9, "get_supabase", return_value=supabase):
+            with patch.object(w9, "_get_current_user", new=AsyncMock(return_value=profile)):
+                rows = asyncio.run(w9.list_w9_requests(case_id="case-1"))
+
+        self.assertEqual(rows, [{"id": "request-1", "case_id": "case-1"}])
+        self.assertIn(("sent_by", "attorney-1"), supabase.query.filters)
+        self.assertIn(("case_id", "case-1"), supabase.query.filters)
+        self.assertEqual(supabase.query.order_by, ("created_at", True))
 
     def test_service_role_w9_lookup_hides_other_attorney_record(self):
         supabase = _FakeOwnedW9Supabase([])

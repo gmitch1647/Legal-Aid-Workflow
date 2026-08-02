@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   Calculator,
@@ -72,6 +73,10 @@ function statementStatus(status) {
 }
 
 export default function ClosingStatements() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const settlementCaseId = searchParams.get('case_id') || '';
+  const returnTo = searchParams.get('return_to') || '';
   const [cases, setCases] = useState([]);
   const [attorneys, setAttorneys] = useState([]);
   const [statements, setStatements] = useState([]);
@@ -91,6 +96,7 @@ export default function ClosingStatements() {
   const [previewError, setPreviewError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
   const fileInputRef = useRef(null);
   const previewCanvasRef = useRef(null);
 
@@ -131,6 +137,14 @@ export default function ClosingStatements() {
       .catch((err) => setError(err.message || 'Could not load cases, attorneys, and closing statements.'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!settlementCaseId || openedFromSettlement || cases.length === 0) return;
+    const matchingCase = cases.find((item) => String(item.id) === String(settlementCaseId));
+    if (!matchingCase) return;
+    setOpenedFromSettlement(true);
+    chooseCase(String(matchingCase.id));
+  }, [settlementCaseId, openedFromSettlement, cases, defaultAttorneyId]);
 
   useEffect(() => {
     if (!preview?.bytes || !previewCanvasRef.current) return undefined;
@@ -367,9 +381,12 @@ export default function ClosingStatements() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Closing Statements</h1>
           <p className="mt-1 max-w-3xl text-sm text-slate-600">Upload a settlement, confirm the complete distribution, select the attorney letterhead, and generate a case-linked closing statement for secure client signature.</p>
         </div>
-        <button onClick={resetComposer} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
-          <RefreshCw className="h-4 w-4" /> New statement
-        </button>
+        <div className="flex flex-wrap justify-end gap-2">
+          {returnTo && <button onClick={() => navigate(returnTo)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">Return to Settlement Center</button>}
+          <button onClick={resetComposer} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+            <RefreshCw className="h-4 w-4" /> New statement
+          </button>
+        </div>
       </div>
 
       {error && <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><p>{error}</p></div>}

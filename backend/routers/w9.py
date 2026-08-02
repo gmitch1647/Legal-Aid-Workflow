@@ -1040,17 +1040,21 @@ async def complete_w9_request(token: str, payload: W9PublicSubmission, request: 
 
 
 @router.get("/attorney/requests")
-async def list_w9_requests(authorization: str = Header(default=None)):
+async def list_w9_requests(
+    case_id: Optional[str] = None,
+    authorization: str = Header(default=None),
+):
+    """List the current attorney's W-9 requests, optionally scoped to one case."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
-    response = (
+    query = (
         get_supabase().table("w9_requests")
         .select("id,title,signer_name,signer_email,case_id,client_id,status,expires_at,submitted_at,created_at")
         .eq("sent_by", profile["id"])
-        .order("created_at", desc=True)
-        .limit(200)
-        .execute()
     )
+    if case_id:
+        query = query.eq("case_id", case_id)
+    response = query.order("created_at", desc=True).limit(200).execute()
     return response.data or []
 
 

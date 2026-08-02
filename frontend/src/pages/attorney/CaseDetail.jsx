@@ -9,6 +9,7 @@ import {
   Calendar,
   Clock,
   FileText,
+  FileSignature,
   Download,
   Edit3,
   Save,
@@ -895,6 +896,13 @@ export default function CaseDetail() {
                 </div>
               )}
           </div>
+          <button
+            onClick={() => navigate(`/attorney/settlements?case_id=${encodeURIComponent(id)}`)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-800"
+          >
+            <FileSignature className="h-4 w-4" />
+            Settlement Workspace
+          </button>
           <button
             onClick={() => navigate('/attorney/draft')}
             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700"

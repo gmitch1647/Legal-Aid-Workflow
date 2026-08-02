@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   CheckCircle2,
@@ -83,6 +84,10 @@ function downloadBlob(blob, filename) {
 }
 
 export default function W9Requests() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const settlementCaseId = searchParams.get('case_id') || '';
+  const returnTo = searchParams.get('return_to') || '';
   const [requests, setRequests] = useState([]);
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -95,6 +100,7 @@ export default function W9Requests() {
   const [detectedPrefill, setDetectedPrefill] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
 
   const requestCounts = useMemo(() => ({
     pending: requests.filter((request) => request.status === 'awaiting_submission').length,
@@ -116,6 +122,15 @@ export default function W9Requests() {
   }
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!settlementCaseId || openedFromSettlement || cases.length === 0) return;
+    const matchingCase = cases.find((item) => String(item.id) === String(settlementCaseId));
+    if (!matchingCase) return;
+    setOpenedFromSettlement(true);
+    setShowComposer(true);
+    chooseCase(String(matchingCase.id));
+  }, [settlementCaseId, openedFromSettlement, cases]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -240,7 +255,10 @@ export default function W9Requests() {
           <h1 className="mt-1 text-3xl font-bold text-slate-950">Form W-9 Requests</h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-600">Collect taxpayer information and certification through encrypted, attorney-only LegalFlow records.</p>
         </div>
-        <button onClick={openComposer} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800"><Plus className="w-4 h-4" />Send Form W-9</button>
+        <div className="flex flex-wrap items-center gap-2">
+          {returnTo && <button onClick={() => navigate(returnTo)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Return to Settlement Center</button>}
+          <button onClick={openComposer} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800"><Plus className="w-4 h-4" />Send Form W-9</button>
+        </div>
       </header>
 
       <div className="grid sm:grid-cols-3 gap-4">
