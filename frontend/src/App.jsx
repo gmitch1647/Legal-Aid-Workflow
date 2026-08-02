@@ -37,6 +37,9 @@ import { getNotifications, markNotificationRead } from './lib/api';
 const Login = React.lazy(() => import('./pages/Login'));
 const IntakeForm = React.lazy(() => import('./pages/IntakeForm'));
 const SignDocument = React.lazy(() => import('./pages/SignDocument'));
+const Privacy = React.lazy(() => import('./pages/Privacy'));
+const Terms = React.lazy(() => import('./pages/Terms'));
+const QuickBooksCallback = React.lazy(() => import('./pages/QuickBooksCallback'));
 const W9Form = React.lazy(() => import('./pages/W9Form'));
 
 // Attorney pages
@@ -524,6 +527,9 @@ export default function App() {
           <Route path="/intake" element={<IntakeForm />} />
           <Route path="/intake/:slug" element={<IntakeForm />} />
           <Route path="/sign/:token" element={<SignDocument />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/quickbooks/callback" element={<QuickBooksCallback />} />
           <Route path="/w9/:token" element={<W9Form />} />
 
           {/* Attorney portal */}
