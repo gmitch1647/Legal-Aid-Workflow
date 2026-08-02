@@ -172,6 +172,38 @@ export default function ClientProfile() {
       const filtered = allCases.filter(
         (c) => c.client_id === id || c.plaintiff_id === id || c.user_id === id
       );
+
+      // Enrich cases with assigned attorney and referral partner names
+      const partnerIds = [...new Set(filtered.map(c => c.referral_partner_id).filter(Boolean))];
+      const attorneyClientIds = [...new Set(filtered.map(c => c.client_id).filter(Boolean))];
+
+      let partnerMap = {};
+      if (partnerIds.length > 0) {
+        const { data: partners } = await supabase.from('referral_partners').select('id, full_name, company').in('id', partnerIds);
+        partnerMap = Object.fromEntries((partners || []).map(p => [p.id, p]));
+      }
+
+      let attorneyMap = {};
+      if (attorneyClientIds.length > 0) {
+        const { data: clientProfiles } = await supabase.from('profiles').select('id, assigned_attorney_id').in('id', attorneyClientIds);
+        const attyIds = [...new Set((clientProfiles || []).map(p => p.assigned_attorney_id).filter(Boolean))];
+        if (attyIds.length > 0) {
+          const { data: attorneys } = await supabase.from('profiles').select('id, full_name').in('id', attyIds);
+          const attyNameMap = Object.fromEntries((attorneys || []).map(a => [a.id, a.full_name]));
+          for (const cp of (clientProfiles || [])) {
+            if (cp.assigned_attorney_id) {
+              attorneyMap[cp.id] = attyNameMap[cp.assigned_attorney_id] || null;
+            }
+          }
+        }
+      }
+
+      for (const c of filtered) {
+        const partner = partnerMap[c.referral_partner_id];
+        c._referral_name = partner ? (partner.full_name + (partner.company ? ` (${partner.company})` : '')) : null;
+        c._attorney_name = attorneyMap[c.client_id] || null;
+      }
+
       setClientCases(filtered);
 
       // If no profile data, derive from cases
@@ -445,6 +477,20 @@ export default function ClientProfile() {
                             <Calendar className="h-3 w-3" />
                             {formatDate(c.created_at)}
                           </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+                          {c._attorney_name && (
+                            <span className="flex items-center gap-1">
+                              <User className="h-3 w-3 text-blue-400" />
+                              Attorney: <span className="font-medium text-slate-700">{c._attorney_name}</span>
+                            </span>
+                          )}
+                          {c._referral_name && (
+                            <span className="flex items-center gap-1">
+                              <User className="h-3 w-3 text-purple-400" />
+                              Referral: <span className="font-medium text-slate-700">{c._referral_name}</span>
+                            </span>
+                          )}
                         </div>
                       </div>
                       <ChevronRight className="h-5 w-5 shrink-0 text-slate-300" />
