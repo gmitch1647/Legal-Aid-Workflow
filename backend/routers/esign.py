@@ -127,6 +127,207 @@ def _in_app_request_detail(session: dict) -> dict:
     }
 
 
+DOCUMENT_TYPE_LABELS = {
+    "settlement": "Settlement Agreement",
+    "settlement_agreement": "Settlement Agreement",
+    "closing_statement": "Closing Statement",
+    "w9": "Form W-9",
+    "credit_disclosure": "Credit Disclosure",
+    "general": "Document for Signature",
+}
+
+
+def _document_type_label(document_type: str | None) -> str:
+    """Return a clear human label while preserving unfamiliar provider types."""
+    normalized = (document_type or "general").strip().lower()
+    return DOCUMENT_TYPE_LABELS.get(normalized, normalized.replace("_", " ").title())
+
+
+def _in_app_dashboard_document(session: dict) -> dict:
+    """Normalize a LegalFlow signing session for the grouped attorney dashboard.
+
+    ``signing_sessions`` is the authoritative record for files signed through
+    LegalFlow.  The older ``signature_requests`` mirror remains useful for
+    external-provider requests, but must not be the only dashboard source.
+    """
+    session_status = session.get("status") or "awaiting_signature"
+    review_only = session.get("document_type") == "credit_disclosure"
+    return {
+        "id": session["id"],
+        "provider": "legalflow",
+        "title": session.get("title", "Document for Signature"),
+        "document_type": session.get("document_type") or "general",
+        "document_label": _document_type_label(session.get("document_type")),
+        "status": session_status,
+        "signer_name": session.get("signer_name", ""),
+        "signer_email": session.get("signer_email", ""),
+        "case_id": session.get("case_id"),
+        "client_id": session.get("client_id"),
+        "created_at": session.get("created_at"),
+        "sent_at": session.get("created_at"),
+        "signed_at": session.get("signed_at"),
+        "has_signed_document": bool(session.get("signed_path")) and not review_only,
+        "has_source_attachment": bool(session.get("original_path")),
+        "review_only": review_only,
+        "secure_only": False,
+        "source_file_name": Path(session.get("original_path", "document")).name
+            .removeprefix("source_")
+            .removeprefix("original_"),
+    }
+
+
+def _external_dashboard_document(request: dict) -> dict:
+    """Normalize a non-LegalFlow provider record for the common dashboard."""
+    document_type = request.get("document_type") or "general"
+    return {
+        "id": request["id"],
+        "provider": "external",
+        "title": request.get("title", "Document for Signature"),
+        "document_type": document_type,
+        "document_label": _document_type_label(document_type),
+        "status": request.get("status") or "awaiting_signature",
+        "signer_name": request.get("signer_name", ""),
+        "signer_email": request.get("signer_email", ""),
+        "case_id": request.get("case_id"),
+        "client_id": request.get("client_id"),
+        "created_at": request.get("created_at"),
+        "sent_at": request.get("sent_at") or request.get("created_at"),
+        "signed_at": request.get("signed_at") or request.get("completed_at"),
+        # The authenticated detail/download routes determine external-provider
+        # availability at use time; do not infer a file path here.
+        "has_signed_document": request.get("status") in ("signed", "complete"),
+        "has_source_attachment": False,
+        "review_only": False,
+        "secure_only": False,
+        "source_file_name": None,
+    }
+
+
+def _w9_dashboard_document(request: dict) -> dict:
+    """Expose W-9 workflow status without leaking protected tax-document data."""
+    return {
+        "id": str(request["id"]),
+        "provider": "legalflow_w9",
+        "title": request.get("title") or "Form W-9 — Taxpayer Information and Certification",
+        "document_type": "w9",
+        "document_label": "Form W-9",
+        "status": request.get("status") or "awaiting_submission",
+        "signer_name": request.get("signer_name", ""),
+        "signer_email": request.get("signer_email", ""),
+        "case_id": request.get("case_id"),
+        "client_id": request.get("client_id"),
+        "created_at": request.get("created_at"),
+        "sent_at": request.get("created_at"),
+        "signed_at": request.get("submitted_at"),
+        # A completed W-9 exists, but is intentionally opened only from the
+        # protected W-9 records area because it can contain a taxpayer ID.
+        "has_signed_document": request.get("status") == "complete",
+        "has_source_attachment": False,
+        "review_only": False,
+        "secure_only": True,
+        "source_file_name": None,
+    }
+
+
+def _load_dashboard_rows(query, case_id: Optional[str], client_id: Optional[str]) -> list[dict]:
+    """Apply common filters and return a bounded, newest-first query result."""
+    if case_id:
+        query = query.eq("case_id", case_id)
+    if client_id:
+        query = query.eq("client_id", client_id)
+    response = query.order("created_at", desc=True).limit(250).execute()
+    return response.data or []
+
+
+def _dashboard_group_context(supabase, documents: list[dict]) -> tuple[dict, dict]:
+    """Load only the client and case labels needed to render document groups."""
+    case_ids = sorted({str(doc["case_id"]) for doc in documents if doc.get("case_id")})
+    client_ids = sorted({str(doc["client_id"]) for doc in documents if doc.get("client_id")})
+
+    case_map: dict[str, dict] = {}
+    if case_ids:
+        cases = (
+            supabase.table("cases")
+            .select("id,client_id,case_number")
+            .in_("id", case_ids)
+            .limit(len(case_ids))
+            .execute()
+        )
+        case_map = {str(row["id"]): row for row in (cases.data or [])}
+        client_ids = sorted({
+            *client_ids,
+            *(str(case["client_id"]) for case in case_map.values() if case.get("client_id")),
+        })
+
+    client_map: dict[str, dict] = {}
+    if client_ids:
+        clients = (
+            supabase.table("profiles")
+            .select("id,full_name,email")
+            .in_("id", client_ids)
+            .limit(len(client_ids))
+            .execute()
+        )
+        client_map = {str(row["id"]): row for row in (clients.data or [])}
+    return case_map, client_map
+
+
+def _group_dashboard_documents(supabase, documents: list[dict]) -> list[dict]:
+    """Group related documents under one client and case with safe fallbacks."""
+    case_map, client_map = _dashboard_group_context(supabase, documents)
+    groups: dict[str, dict] = {}
+
+    for document in documents:
+        case = case_map.get(str(document.get("case_id"))) if document.get("case_id") else None
+        client_id = str(document.get("client_id") or (case or {}).get("client_id") or "")
+        client = client_map.get(client_id) if client_id else None
+        case_id = str(document.get("case_id") or "")
+
+        if client_id and case_id:
+            group_key = f"client:{client_id}:case:{case_id}"
+        elif client_id:
+            group_key = f"client:{client_id}:case:unassigned"
+        else:
+            group_key = "unassigned"
+
+        client_name = (client or {}).get("full_name") or document.get("signer_name") or "Unassigned client"
+        case_number = (case or {}).get("case_number")
+        case_label = (
+            f"{case_number} — {client_name}" if case_number and case
+            else case_number or client_name if case else "Unassigned case"
+        )
+
+        if group_key not in groups:
+            groups[group_key] = {
+                "id": group_key,
+                "client": {"id": client_id or None, "name": client_name, "email": (client or {}).get("email") or document.get("signer_email") or None},
+                "case": {"id": case_id or None, "label": case_label, "case_number": case_number},
+                "documents": [],
+                "latest_activity_at": document.get("signed_at") or document.get("created_at"),
+            }
+        groups[group_key]["documents"].append(document)
+        activity = document.get("signed_at") or document.get("created_at")
+        if activity and (not groups[group_key].get("latest_activity_at") or activity > groups[group_key]["latest_activity_at"]):
+            groups[group_key]["latest_activity_at"] = activity
+
+    for group in groups.values():
+        group["documents"].sort(
+            key=lambda doc: doc.get("signed_at") or doc.get("created_at") or "",
+            reverse=True,
+        )
+        group["document_counts"] = {
+            "total": len(group["documents"]),
+            "complete": sum(doc.get("status") in ("signed", "complete") for doc in group["documents"]),
+            "pending": sum(doc.get("status") in ("awaiting_signature", "viewed", "awaiting_submission", "awaiting_review") for doc in group["documents"]),
+        }
+
+    return sorted(
+        groups.values(),
+        key=lambda group: group.get("latest_activity_at") or "",
+        reverse=True,
+    )
+
+
 async def _send_in_app_reminder(session: dict) -> None:
     """Email a fresh review or signing link for an active LegalFlow session."""
     from html import escape
@@ -521,6 +722,73 @@ async def list_signature_requests(
 
     resp = query.limit(100).execute()
     return resp.data or []
+
+
+# ---------------------------------------------------------------------------
+# GET /requests/dashboard — grouped attorney document history
+# ---------------------------------------------------------------------------
+
+@router.get("/requests/dashboard")
+async def grouped_signature_dashboard(
+    case_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    authorization: str = Header(default=None),
+):
+    """Return all settlement workflow documents grouped by client and case.
+
+    LegalFlow-managed signing sessions are read directly so a completed document
+    remains visible even when the legacy ``signature_requests`` mirror was not
+    written or was delayed. Completed W-9 records appear as protected status
+    rows; their tax PDFs continue to be accessible only through the dedicated
+    W-9 records workflow.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+
+    in_app_query = (
+        supabase.table("signing_sessions")
+        .select(IN_APP_SESSION_FIELDS)
+        .eq("sent_by", profile["id"])
+    )
+    in_app_sessions = _load_dashboard_rows(in_app_query, case_id, client_id)
+    in_app_documents = [_in_app_dashboard_document(session) for session in in_app_sessions]
+    in_app_ids = {str(session["id"]) for session in in_app_sessions}
+
+    provider_query = (
+        supabase.table("signature_requests")
+        .select("id,title,document_type,signer_name,signer_email,case_id,client_id,status,sent_at,signed_at,completed_at,created_at")
+        .eq("sent_by", profile["id"])
+    )
+    provider_rows = _load_dashboard_rows(provider_query, case_id, client_id)
+    external_documents = [
+        _external_dashboard_document(request)
+        for request in provider_rows
+        if str(request["id"]) not in in_app_ids
+    ]
+
+    w9_query = (
+        supabase.table("w9_requests")
+        .select("id,title,signer_name,signer_email,case_id,client_id,status,submitted_at,created_at")
+        .eq("sent_by", profile["id"])
+    )
+    w9_rows = _load_dashboard_rows(w9_query, case_id, client_id)
+    w9_documents = [_w9_dashboard_document(request) for request in w9_rows]
+
+    documents = in_app_documents + external_documents + w9_documents
+    groups = _group_dashboard_documents(supabase, documents)
+    return {
+        "groups": groups,
+        "summary": {
+            "documents": len(documents),
+            "groups": len(groups),
+            "pending": sum(
+                document.get("status") in ("awaiting_signature", "viewed", "awaiting_submission", "awaiting_review")
+                for document in documents
+            ),
+            "complete": sum(document.get("status") in ("signed", "complete") for document in documents),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

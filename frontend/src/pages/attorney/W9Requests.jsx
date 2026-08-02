@@ -87,6 +87,7 @@ export default function W9Requests() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const settlementCaseId = searchParams.get('case_id') || '';
+  const requestedRecordId = searchParams.get('request_id') || '';
   const returnTo = searchParams.get('return_to') || '';
   const [requests, setRequests] = useState([]);
   const [cases, setCases] = useState([]);
@@ -101,6 +102,7 @@ export default function W9Requests() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
+  const [openedRequestedRecord, setOpenedRequestedRecord] = useState(false);
 
   const requestCounts = useMemo(() => ({
     pending: requests.filter((request) => request.status === 'awaiting_submission').length,
@@ -131,6 +133,14 @@ export default function W9Requests() {
     setShowComposer(true);
     chooseCase(String(matchingCase.id));
   }, [settlementCaseId, openedFromSettlement, cases]);
+
+  useEffect(() => {
+    if (!requestedRecordId || openedRequestedRecord || loading) return;
+    setOpenedRequestedRecord(true);
+    if (requests.some((request) => String(request.id) === String(requestedRecordId))) {
+      openDetail(requestedRecordId);
+    }
+  }, [requestedRecordId, openedRequestedRecord, loading, requests]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));

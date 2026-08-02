@@ -205,5 +205,173 @@ class InAppEsignRouteTests(unittest.TestCase):
         self.assertEqual(payload["document_category"], "other")
 
 
+class _DashboardQuery:
+    def __init__(self, rows):
+        self.rows = [dict(row) for row in rows]
+        self.filters = []
+        self.in_filters = []
+
+    def select(self, _fields):
+        return self
+
+    def eq(self, column, value):
+        self.filters.append((column, value))
+        return self
+
+    def in_(self, column, values):
+        self.in_filters.append((column, {str(value) for value in values}))
+        return self
+
+    def order(self, _column, desc=False):
+        return self
+
+    def limit(self, _value):
+        return self
+
+    def execute(self):
+        rows = self.rows
+        for column, value in self.filters:
+            rows = [row for row in rows if str(row.get(column)) == str(value)]
+        for column, values in self.in_filters:
+            rows = [row for row in rows if str(row.get(column)) in values]
+        return SimpleNamespace(data=rows)
+
+
+class _DashboardSupabase:
+    def __init__(self, tables):
+        self.tables = tables
+
+    def table(self, table_name):
+        return _DashboardQuery(self.tables.get(table_name, []))
+
+
+class GroupedEsignDashboardTests(unittest.TestCase):
+    def setUp(self):
+        self.attorney = {"id": "attorney-1", "role": "attorney"}
+        self.settlement = {
+            "id": "settlement-session",
+            "token": "settlement-token",
+            "title": "Settlement Agreement — Client Example",
+            "document_type": "settlement",
+            "signer_name": "Client Example",
+            "signer_email": "client@example.test",
+            "status": "signed",
+            "original_path": "signing/settlement/source_agreement.pdf",
+            "signed_path": "signing/settlement/signed_agreement.pdf",
+            "signed_at": "2026-08-02T14:01:45+00:00",
+            "audit_trail": {},
+            "case_id": "case-123",
+            "client_id": "client-123",
+            "sent_by": "attorney-1",
+            "created_at": "2026-08-02T11:54:55+00:00",
+            "updated_at": "2026-08-02T14:01:45+00:00",
+        }
+
+    def _supabase(self, *, include_legacy=False):
+        sessions = [self.settlement]
+        if include_legacy:
+            sessions.append({
+                **self.settlement,
+                "id": "legacy-session",
+                "title": "Legacy Agreement",
+                "case_id": None,
+                "client_id": None,
+                "signed_at": "2026-08-01T10:00:00+00:00",
+            })
+        return _DashboardSupabase({
+            "signing_sessions": sessions,
+            # This row mirrors the in-app settlement session and must not create
+            # a duplicate dashboard item. The external request must be retained.
+            "signature_requests": [
+                {
+                    "id": "settlement-session",
+                    "title": "Stale mirrored settlement",
+                    "document_type": "settlement",
+                    "signer_name": "Client Example",
+                    "signer_email": "client@example.test",
+                    "case_id": "case-123",
+                    "client_id": "client-123",
+                    "sent_by": "attorney-1",
+                    "status": "complete",
+                    "sent_at": "2026-08-02T11:54:55+00:00",
+                    "completed_at": "2026-08-02T14:01:45+00:00",
+                    "created_at": "2026-08-02T11:54:55+00:00",
+                },
+                {
+                    "id": "closing-provider-request",
+                    "title": "Settlement Closing Statement",
+                    "document_type": "closing_statement",
+                    "signer_name": "Client Example",
+                    "signer_email": "client@example.test",
+                    "case_id": "case-123",
+                    "client_id": "client-123",
+                    "sent_by": "attorney-1",
+                    "status": "awaiting_signature",
+                    "sent_at": "2026-08-02T15:00:00+00:00",
+                    "created_at": "2026-08-02T15:00:00+00:00",
+                },
+            ],
+            "w9_requests": [
+                {
+                    "id": "w9-request",
+                    "title": "Form W-9 — Client Example",
+                    "signer_name": "Client Example",
+                    "signer_email": "client@example.test",
+                    "case_id": "case-123",
+                    "client_id": "client-123",
+                    "sent_by": "attorney-1",
+                    "status": "complete",
+                    "submitted_at": "2026-08-02T13:00:00+00:00",
+                    "created_at": "2026-08-02T12:00:00+00:00",
+                },
+            ],
+            "cases": [{
+                "id": "case-123",
+                "client_id": "client-123",
+                "case_number": "LF-42",
+            }],
+            "profiles": [{
+                "id": "client-123",
+                "full_name": "Client Example",
+                "email": "client@example.test",
+            }],
+        })
+
+    def test_grouped_dashboard_uses_signed_session_and_groups_workflow_documents(self):
+        supabase = self._supabase()
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", _attorney_user
+        ):
+            dashboard = asyncio.run(esign.grouped_signature_dashboard(authorization="Bearer token"))
+
+        self.assertEqual(dashboard["summary"]["documents"], 3)
+        self.assertEqual(dashboard["summary"]["groups"], 1)
+        self.assertEqual(dashboard["summary"]["complete"], 2)
+        self.assertEqual(dashboard["summary"]["pending"], 1)
+
+        group = dashboard["groups"][0]
+        self.assertEqual(group["client"]["name"], "Client Example")
+        self.assertEqual(group["case"]["label"], "LF-42 — Client Example")
+        self.assertEqual(len(group["documents"]), 3)
+
+        by_id = {document["id"]: document for document in group["documents"]}
+        self.assertEqual(by_id["settlement-session"]["status"], "signed")
+        self.assertTrue(by_id["settlement-session"]["has_signed_document"])
+        self.assertEqual(by_id["closing-provider-request"]["document_label"], "Closing Statement")
+        self.assertTrue(by_id["w9-request"]["secure_only"])
+        self.assertTrue(by_id["w9-request"]["has_signed_document"])
+
+    def test_grouped_dashboard_keeps_legacy_unlinked_documents_visible(self):
+        supabase = self._supabase(include_legacy=True)
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", _attorney_user
+        ):
+            dashboard = asyncio.run(esign.grouped_signature_dashboard(authorization="Bearer token"))
+
+        unassigned = next(group for group in dashboard["groups"] if group["id"] == "unassigned")
+        self.assertEqual(unassigned["case"]["label"], "Unassigned case")
+        self.assertEqual(unassigned["documents"][0]["id"], "legacy-session")
+
+
 if __name__ == "__main__":
     unittest.main()

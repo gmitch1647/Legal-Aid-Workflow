@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   PenLine, Send, Download, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
-  ChevronDown, X, Search, User, Upload, Trash2,
+  ChevronDown, ChevronRight, X, Search, User, Upload, Trash2,
+  FolderOpen, LockKeyhole, ExternalLink,
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
   sendDocumentForSignature, createSigningSession, testSigningStorage,
   deleteSigningSession,
-  getSignatureRequests, getSignatureRequest, remindSigner,
+  getGroupedSignatureDashboard, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -22,15 +24,42 @@ const STATUS_MAP = {
   cancelled: { label: 'Cancelled', color: 'text-slate-500 bg-slate-50 border-slate-200', icon: XCircle },
 };
 
+const PENDING_STATUSES = new Set([
+  'awaiting_signature', 'viewed', 'awaiting_submission', 'awaiting_review',
+]);
+const COMPLETE_STATUSES = new Set(['signed', 'complete']);
+
+function documentStatus(status) {
+  return STATUS_MAP[status] || STATUS_MAP.awaiting_signature;
+}
+
+function documentMatchesFilter(document, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'pending') return PENDING_STATUSES.has(document.status);
+  if (filter === 'complete') return COMPLETE_STATUSES.has(document.status);
+  return true;
+}
+
+function formattedDate(value) {
+  if (!value) return null;
+  const date = new Date(typeof value === 'number' ? value * 1000 : value);
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString();
+}
+
 export default function ESignatures() {
+  const navigate = useNavigate();
   const [configured, setConfigured] = useState(null);
   const [templates, setTemplates] = useState([]);
-  const [requests, setRequests] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [summary, setSummary] = useState({ documents: 0, groups: 0, pending: 0, complete: 0 });
+  const [expandedGroupIds, setExpandedGroupIds] = useState(() => new Set());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(null);
   const [detailData, setDetailData] = useState(null);
+  const [preview, setPreview] = useState(null);
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [testResult, setTestResult] = useState(null);
@@ -40,24 +69,38 @@ export default function ESignatures() {
     loadData();
   }, []);
 
+  useEffect(() => () => {
+    if (preview?.url) URL.revokeObjectURL(preview.url);
+  }, [preview]);
+
   async function loadData() {
     setLoading(true);
+    setLoadError('');
     try {
-      const configResp = await getEsignConfig();
-      setConfigured(configResp.configured);
+      const [configResp, dashboardResp] = await Promise.all([
+        getEsignConfig().catch((err) => {
+          console.error('E-sign config check failed:', err);
+          return { configured: false };
+        }),
+        getGroupedSignatureDashboard(),
+      ]);
+      const nextGroups = Array.isArray(dashboardResp?.groups) ? dashboardResp.groups : [];
+      setConfigured(Boolean(configResp?.configured));
+      setGroups(nextGroups);
+      setSummary(dashboardResp?.summary || { documents: 0, groups: 0, pending: 0, complete: 0 });
+      setExpandedGroupIds((current) => {
+        const next = new Set(current);
+        nextGroups.forEach((group) => next.add(group.id));
+        return next;
+      });
     } catch (err) {
-      console.error('E-sign config check failed:', err);
-      // If the endpoint errors, try checking if it's just an auth issue
-      setConfigured(false);
+      console.error('Failed to load grouped e-sign documents:', err);
+      setGroups([]);
+      setSummary({ documents: 0, groups: 0, pending: 0, complete: 0 });
+      setLoadError(err.message || 'Unable to load your signed documents. Please refresh and try again.');
+    } finally {
+      setLoading(false);
     }
-    try {
-      const reqsResp = await getSignatureRequests();
-      setRequests(reqsResp);
-    } catch (err) {
-      console.error('Failed to load e-sign requests:', err);
-      setRequests([]);
-    }
-    setLoading(false);
   }
 
   async function loadTemplates() {
@@ -80,17 +123,18 @@ export default function ESignatures() {
       setDetailData(data);
     } catch (err) {
       console.error(err);
+      setDetailData({ error: err.message || 'Unable to load signature details.' });
     }
   }
 
   function saveDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     URL.revokeObjectURL(url);
   }
 
@@ -112,171 +156,193 @@ export default function ESignatures() {
     }
   }
 
-  const filteredRequests = requests.filter(r => {
-    if (filter !== 'all' && r.status !== filter) return false;
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      return (
-        (r.signer_name || '').toLowerCase().includes(term) ||
-        (r.title || '').toLowerCase().includes(term) ||
-        (r.signer_email || '').toLowerCase().includes(term)
-      );
+  async function openSignedDocument(document) {
+    if (document.secure_only || document.provider === 'legalflow_w9') {
+      navigate(`/attorney/w9?request_id=${encodeURIComponent(document.id)}`);
+      return;
     }
-    return true;
-  });
+    if (!document.has_signed_document) {
+      viewDetail(document.id);
+      return;
+    }
+    try {
+      const blob = await downloadSignedDocument(document.id);
+      const url = URL.createObjectURL(blob);
+      setPreview({ url, title: document.title || document.document_label || 'Signed document' });
+    } catch (err) {
+      alert('Could not open the signed document: ' + err.message);
+    }
+  }
 
-  const counts = {
-    all: requests.length,
-    awaiting_signature: requests.filter(r => r.status === 'awaiting_signature' || r.status === 'viewed').length,
-    signed: requests.filter(r => r.status === 'signed' || r.status === 'complete').length,
-  };
+  function closePreview() {
+    setPreview(null);
+  }
+
+  function toggleGroup(groupId) {
+    setExpandedGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }
+
+  const allDocuments = useMemo(
+    () => groups.flatMap((group) => group.documents || []),
+    [groups],
+  );
+
+  const filteredGroups = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return groups.map((group) => {
+      const groupText = [group.client?.name, group.client?.email, group.case?.label, group.case?.case_number]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const groupMatches = Boolean(term) && groupText.includes(term);
+      const documents = (group.documents || []).filter((document) => {
+        if (!documentMatchesFilter(document, filter)) return false;
+        if (!term || groupMatches) return true;
+        return [document.title, document.document_label, document.signer_name, document.signer_email, document.status]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(term);
+      });
+      return { ...group, documents };
+    }).filter((group) => group.documents.length > 0);
+  }, [groups, filter, searchTerm]);
+
+  const counts = useMemo(() => ({
+    all: allDocuments.length,
+    pending: allDocuments.filter((document) => PENDING_STATUSES.has(document.status)).length,
+    complete: allDocuments.filter((document) => COMPLETE_STATUSES.has(document.status)).length,
+  }), [allDocuments]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
       </div>
     );
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="mx-auto max-w-5xl">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-medium text-slate-900">E-Signatures</h1>
-          <p className="text-sm text-slate-500 mt-1">Send documents for client signatures</p>
+          <p className="mt-1 text-sm text-slate-500">Each client and case keeps its settlement documents together, including agreements, secure W-9 status, and closing statements.</p>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap gap-2 sm:justify-end">
           <button onClick={loadData}
-            className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50">
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
           <button onClick={() => { setShowSendModal(true); if (configured) loadTemplates(); }}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-            <Send className="w-4 h-4" /> Send for Signature
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+            <Send className="h-4 w-4" /> Send for Signature
           </button>
         </div>
       </div>
 
       {!configured && (
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <AlertCircle className="w-4 h-4 inline mr-2" />
-          <strong>Dropbox Sign templates are not configured.</strong> LegalFlow’s built-in upload signer is still available; add <code className="bg-amber-100 px-1 rounded">DROPBOX_SIGN_API_KEY</code> only if you want to use external Dropbox Sign templates.
+        <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <AlertCircle className="mr-2 inline h-4 w-4" />
+          <strong>Dropbox Sign templates are not configured.</strong> LegalFlow’s built-in upload signer remains available for agreements and closing statements.
         </div>
       )}
 
-      {/* Diagnostic test */}
+      {loadError && (
+        <div className="mb-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <AlertCircle className="mr-2 inline h-4 w-4" /> {loadError}
+        </div>
+      )}
+
       <div className="mb-4 flex items-center gap-3">
         <button onClick={async () => {
           setTesting(true); setTestResult(null);
-          try { const r = await testSigningStorage(); setTestResult(r); }
-          catch (e) { setTestResult({ error: e.message }); }
+          try { const result = await testSigningStorage(); setTestResult(result); }
+          catch (error) { setTestResult({ error: error.message }); }
           finally { setTesting(false); }
         }} disabled={testing}
-          className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 disabled:opacity-50">
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50">
           {testing ? 'Testing...' : 'Test Storage Connection'}
         </button>
         {testResult && (
-          <pre className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 max-w-xl overflow-auto">
+          <pre className="max-w-xl overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs">
             {JSON.stringify(testResult, null, 2)}
           </pre>
         )}
       </div>
 
-      {/* Filter tabs + search */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex w-fit gap-1 rounded-lg bg-slate-100 p-1">
           {[
-            { key: 'all', label: 'All' },
-            { key: 'awaiting_signature', label: 'Pending' },
-            { key: 'signed', label: 'Signed' },
-          ].map(f => (
-            <button key={f.key} onClick={() => setFilter(f.key)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
-                filter === f.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            { key: 'all', label: 'All', count: counts.all },
+            { key: 'pending', label: 'Pending', count: counts.pending },
+            { key: 'complete', label: 'Complete', count: counts.complete },
+          ].map((item) => (
+            <button key={item.key} onClick={() => setFilter(item.key)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                filter === item.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
               }`}>
-              {f.label} ({counts[f.key] || 0})
+              {item.label} ({item.count})
             </button>
           ))}
         </div>
-        <div className="flex-1 relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search by name, title, or email..."
-            className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search a client, case, document, or signer..."
+            className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
       </div>
 
-      {/* Request list */}
-      {filteredRequests.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-xl border border-slate-200">
-          <PenLine className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-slate-500 text-sm">
-            {requests.length === 0 ? 'No signature requests yet' : 'No matching requests'}
+      {filteredGroups.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white py-16 text-center">
+          <PenLine className="mx-auto mb-3 h-10 w-10 text-slate-300" />
+          <p className="text-sm text-slate-500">
+            {allDocuments.length === 0 ? 'No settlement workflow documents yet' : 'No documents match the current filter'}
           </p>
-          {requests.length === 0 && configured && (
-            <button onClick={() => { setShowSendModal(true); loadTemplates(); }}
-              className="mt-3 text-sm text-blue-600 font-medium hover:text-blue-700">
+          {allDocuments.length === 0 && (
+            <button onClick={() => { setShowSendModal(true); if (configured) loadTemplates(); }}
+              className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
               Send your first document →
             </button>
           )}
         </div>
       ) : (
-        <div className="space-y-2">
-          {filteredRequests.map(req => {
-            const st = STATUS_MAP[req.status] || STATUS_MAP.awaiting_signature;
-            const Icon = st.icon;
-            return (
-              <div key={req.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm hover:border-slate-300 transition">
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-lg border ${st.color}`}>
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-slate-900 truncate">{req.title}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${st.color}`}>{st.label}</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                      <span className="flex items-center gap-1"><User className="w-3 h-3" />{req.signer_name}</span>
-                      <span>{req.signer_email}</span>
-                      <span>{req.document_type}</span>
-                      {req.sent_at && <span>{new Date(req.sent_at).toLocaleDateString()}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button onClick={() => viewDetail(req.id)}
-                      className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg" title="View details">
-                      <Eye className="w-4 h-4" />
-                    </button>
-                    {(req.status === 'awaiting_signature' || req.status === 'viewed') && (
-                      <ReminderBtn id={req.id} />
-                    )}
-                    {(req.status === 'signed' || req.status === 'complete') && (
-                      <button onClick={() => handleDownload(req.id)}
-                        className="p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg" title="Download signed PDF">
-                        <Download className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button onClick={async () => {
-                      if (!confirm(`Delete "${req.title}"? This cannot be undone.`)) return;
-                      try {
-                        await deleteSigningSession(req.id);
-                        loadData();
-                      } catch (err) { alert('Delete failed: ' + err.message); }
-                    }}
-                      className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Delete">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <div className="space-y-3">
+          {filteredGroups.map((group) => (
+            <ClientCaseGroup
+              key={group.id}
+              group={group}
+              expanded={expandedGroupIds.has(group.id)}
+              onToggle={() => toggleGroup(group.id)}
+              onOpen={openSignedDocument}
+              onView={(document) => {
+                if (document.secure_only || document.provider === 'legalflow_w9') {
+                  navigate(`/attorney/w9?request_id=${encodeURIComponent(document.id)}`);
+                } else {
+                  viewDetail(document.id);
+                }
+              }}
+              onDownload={(document) => handleDownload(document.id)}
+              onDelete={async (document) => {
+                if (!window.confirm(`Delete "${document.title}"? This cannot be undone.`)) return;
+                try {
+                  await deleteSigningSession(document.id);
+                  loadData();
+                } catch (err) {
+                  alert('Delete failed: ' + err.message);
+                }
+              }}
+            />
+          ))}
         </div>
       )}
 
-      {/* Send Modal */}
       {showSendModal && (
         <SendSignatureModal
           templates={templates}
@@ -286,7 +352,6 @@ export default function ESignatures() {
         />
       )}
 
-      {/* Detail Modal */}
       {showDetailModal && (
         <DetailModal
           requestId={showDetailModal}
@@ -301,8 +366,126 @@ export default function ESignatures() {
           }}
           onDownloadOriginal={() => handleDownloadOriginal(showDetailModal, detailData?.source_file_name)}
           onDownload={() => handleDownload(showDetailModal)}
+          onOpenSigned={() => openSignedDocument({
+            id: showDetailModal,
+            title: detailData?.title,
+            has_signed_document: Boolean(detailData?.has_signed_document),
+            provider: detailData?.provider,
+            secure_only: false,
+          })}
         />
       )}
+
+      {preview && <PdfPreviewModal title={preview.title} url={preview.url} onClose={closePreview} onDownload={() => handleDownload(showDetailModal || '')} />}
+    </div>
+  );
+}
+
+function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onDelete }) {
+  const counts = group.document_counts || {};
+  const clientName = group.client?.name || 'Unassigned client';
+  const caseLabel = group.case?.label || 'Unassigned case';
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <button type="button" onClick={onToggle} aria-expanded={expanded}
+        className="flex w-full items-center gap-3 p-4 text-left transition hover:bg-slate-50">
+        <div className="rounded-lg bg-blue-50 p-2 text-blue-700"><FolderOpen className="h-5 w-5" /></div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="truncate text-sm font-semibold text-slate-900">{clientName}</span>
+            {group.case?.id ? <span className="text-xs text-slate-500">{caseLabel}</span> : <span className="text-xs text-amber-700">{caseLabel}</span>}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            {counts.total || group.documents?.length || 0} document{(counts.total || group.documents?.length || 0) === 1 ? '' : 's'}
+            {counts.complete ? ` · ${counts.complete} complete` : ''}
+            {counts.pending ? ` · ${counts.pending} pending` : ''}
+          </p>
+        </div>
+        {expanded ? <ChevronDown className="h-5 w-5 text-slate-400" /> : <ChevronRight className="h-5 w-5 text-slate-400" />}
+      </button>
+
+      {expanded && (
+        <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 p-3">
+          {group.documents.map((document) => (
+            <SignatureDocumentRow
+              key={`${document.provider}-${document.id}`}
+              document={document}
+              onOpen={onOpen}
+              onView={onView}
+              onDownload={onDownload}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SignatureDocumentRow({ document, onOpen, onView, onDownload, onDelete }) {
+  const status = documentStatus(document.status);
+  const StatusIcon = status.icon;
+  const isPending = PENDING_STATUSES.has(document.status);
+  const isW9 = document.secure_only || document.provider === 'legalflow_w9';
+  const date = formattedDate(document.signed_at || document.sent_at || document.created_at);
+
+  function openFromKeyboard(event) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onOpen(document);
+    }
+  }
+
+  return (
+    <article role="button" tabIndex={0} onClick={() => onOpen(document)} onKeyDown={openFromKeyboard}
+      className="group flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-blue-300 hover:shadow">
+      <div className={`rounded-lg border p-2 ${status.color}`}><StatusIcon className="h-4 w-4" /></div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-sm font-semibold text-slate-900">{document.title}</span>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${status.color}`}>{status.label}</span>
+          {isW9 && <span className="inline-flex items-center gap-1 text-[10px] font-medium text-indigo-700"><LockKeyhole className="h-3 w-3" /> Protected record</span>}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+          <span className="font-medium text-slate-600">{document.document_label || document.document_type || 'Document'}</span>
+          {document.signer_name && <span className="flex items-center gap-1"><User className="h-3 w-3" />{document.signer_name}</span>}
+          {date && <span>{date}</span>}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
+        <button type="button" onClick={() => onView(document)}
+          className="rounded-lg p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700" title={isW9 ? 'Open secure W-9 record' : 'View document details'}>
+          {isW9 ? <LockKeyhole className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+        {isPending && !isW9 && <ReminderBtn id={document.id} />}
+        {document.has_signed_document && !isW9 && (
+          <button type="button" onClick={() => onDownload(document)}
+            className="rounded-lg p-2 text-blue-500 hover:bg-blue-50 hover:text-blue-700" title="Download signed PDF">
+            <Download className="h-4 w-4" />
+          </button>
+        )}
+        {document.provider === 'legalflow' && (
+          <button type="button" onClick={() => onDelete(document)}
+            className="rounded-lg p-2 text-slate-300 hover:bg-red-50 hover:text-red-500" title="Delete document">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function PdfPreviewModal({ title, url, onClose }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Signed document preview">
+      <div className="flex h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          <div className="min-w-0"><p className="truncate text-sm font-bold text-slate-900">{title}</p><p className="mt-0.5 text-xs text-slate-500">Signed document preview</p></div>
+          <button onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close document preview"><X className="h-5 w-5" /></button>
+        </div>
+        <iframe title={title} src={url} className="min-h-0 flex-1 bg-slate-100" />
+      </div>
     </div>
   );
 }
