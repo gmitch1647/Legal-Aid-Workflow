@@ -99,6 +99,7 @@ export default function ClosingStatements() {
   const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
   const fileInputRef = useRef(null);
   const previewCanvasRef = useRef(null);
+  const previewRequestRef = useRef(0);
 
   const defaultAttorneyId = useMemo(
     () => attorneys.find((attorney) => attorney.is_default)?.id || '',
@@ -148,7 +149,15 @@ export default function ClosingStatements() {
 
   useEffect(() => {
     if (!preview?.bytes || !previewCanvasRef.current) return undefined;
+
     let cancelled = false;
+    let loadingTask = null;
+    let pdfDocument = null;
+    const renderTasks = [];
+    const container = previewCanvasRef.current;
+    // This container is intentionally rendered without React children. PDF.js owns
+    // only the canvases inside it, so clearing it cannot remove a React-managed node.
+    container.replaceChildren();
 
     const renderPreview = async () => {
       try {
@@ -157,13 +166,13 @@ export default function ClosingStatements() {
           'pdfjs-dist/build/pdf.worker.mjs',
           import.meta.url,
         ).toString();
-        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(preview.bytes) }).promise;
-        const container = previewCanvasRef.current;
-        if (cancelled || !container) return;
-        container.innerHTML = '';
+        loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(preview.bytes) });
+        pdfDocument = await loadingTask.promise;
+        if (cancelled || container !== previewCanvasRef.current) return;
 
-        for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-          const page = await pdf.getPage(pageNumber);
+        for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+          if (cancelled || container !== previewCanvasRef.current) return;
+          const page = await pdfDocument.getPage(pageNumber);
           const viewport = page.getViewport({ scale: 1.25 });
           const canvas = document.createElement('canvas');
           canvas.width = viewport.width;
@@ -175,18 +184,28 @@ export default function ClosingStatements() {
           canvas.style.boxShadow = '0 2px 8px rgba(15, 23, 42, 0.18)';
           canvas.style.borderRadius = '4px';
           container.appendChild(canvas);
-          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+          const renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport });
+          renderTasks.push(renderTask);
+          await renderTask.promise;
         }
       } catch (err) {
-        if (!cancelled) setPreviewError(err.message || 'LegalFlow could not render this PDF preview.');
+        if (!cancelled && err?.name !== 'RenderingCancelledException') {
+          setPreviewError(err.message || 'LegalFlow could not render this PDF preview.');
+        }
       } finally {
         if (!cancelled) setPreviewLoading(false);
       }
     };
 
     renderPreview();
-    return () => { cancelled = true; };
-  }, [preview]);
+    return () => {
+      cancelled = true;
+      renderTasks.forEach((task) => task.cancel?.());
+      loadingTask?.destroy?.();
+      pdfDocument?.destroy?.();
+      container.replaceChildren();
+    };
+  }, [preview?.bytes]);
 
   const resetComposer = () => {
     setSelectedCaseId('');
@@ -329,20 +348,25 @@ export default function ClosingStatements() {
   };
 
   const openPreview = async (row, signed = false) => {
+    const requestId = previewRequestRef.current + 1;
+    previewRequestRef.current = requestId;
     setPreview({ row, signed, bytes: null });
     setPreviewLoading(true);
     setPreviewError('');
     try {
       const blob = await downloadClosingStatement(row.id, { signed });
       const bytes = await blob.arrayBuffer();
+      if (previewRequestRef.current !== requestId) return;
       setPreview({ row, signed, bytes });
     } catch (err) {
+      if (previewRequestRef.current !== requestId) return;
       setPreviewLoading(false);
       setPreviewError(err.message || 'Could not load the closing-statement preview.');
     }
   };
 
   const closePreview = () => {
+    previewRequestRef.current += 1;
     setPreview(null);
     setPreviewLoading(false);
     setPreviewError('');
@@ -496,7 +520,7 @@ export default function ClosingStatements() {
         {statements.length === 0 ? <div className="p-10 text-center text-sm text-slate-500">No closing statements have been generated yet.</div> : <div className="divide-y divide-slate-100">{statements.map((row) => { const badge = statementStatus(row.status); return <div key={row.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="truncate font-medium text-slate-900">{row.statement_file_name}</p><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badge.className}`}>{badge.label}</span></div><p className="mt-1 text-sm text-slate-500">{row.signer_name} · Case {row.case_number} · Client payout {formatMoney(row.client_payout_cents)}</p></div><div className="flex flex-wrap gap-2"><button onClick={() => openPreview(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Eye className="h-4 w-4" /> Draft</button><button onClick={() => download(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Download</button>{row.status === 'signed' && <><button onClick={() => openPreview(row, true)} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"><Eye className="h-4 w-4" /> Signed</button><button onClick={() => download(row, true)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"><Download className="h-4 w-4" /> Signed PDF</button></>}</div></div>; })}</div>}
       </section>
 
-      {preview && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Closing statement preview"><div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><h2 className="font-semibold text-slate-900">{preview.signed ? 'Signed closing statement' : 'Closing statement'} preview</h2><p className="mt-0.5 text-sm text-slate-500">{preview.row.statement_file_name}</p></div><div className="flex items-center gap-2"><button onClick={() => download(preview.row, preview.signed)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Download</button><button onClick={closePreview} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label="Close preview"><X className="h-5 w-5" /></button></div></div><div className="min-h-[240px] flex-1 overflow-auto bg-slate-100 p-4"><div ref={previewCanvasRef} className="mx-auto max-w-3xl">{previewLoading && <div className="flex min-h-[240px] items-center justify-center gap-2 text-sm text-slate-600"><Loader2 className="h-5 w-5 animate-spin" /> Loading PDF preview…</div>}{previewError && <div className="m-4 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><p>{previewError}</p></div>}</div></div></div></div>}
+      {preview && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Closing statement preview"><div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><h2 className="font-semibold text-slate-900">{preview.signed ? 'Signed closing statement' : 'Closing statement'} preview</h2><p className="mt-0.5 text-sm text-slate-500">{preview.row.statement_file_name}</p></div><div className="flex items-center gap-2"><button onClick={() => download(preview.row, preview.signed)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Download</button><button onClick={closePreview} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label="Close preview"><X className="h-5 w-5" /></button></div></div><div className="min-h-[240px] flex-1 overflow-auto bg-slate-100 p-4"><div className="mx-auto max-w-3xl">{previewLoading && <div className="flex min-h-[240px] items-center justify-center gap-2 text-sm text-slate-600"><Loader2 className="h-5 w-5 animate-spin" /> Loading PDF preview…</div>}{previewError && <div className="my-4 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><p>{previewError}</p></div>}<div ref={previewCanvasRef} aria-live="polite" /></div></div></div></div>}
     </div>
   );
 }
