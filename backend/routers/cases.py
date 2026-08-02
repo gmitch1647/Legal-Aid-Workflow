@@ -277,9 +277,11 @@ async def list_cases(
                 return []
         else:
             return []
-    else:
-        if client_id:
-            query = query.eq("client_id", client_id)
+    # Apply an optional client filter after the role-based access scope above.
+    # For staff attorneys and affiliates this narrows an already-authorized client set;
+    # for clients it remains safely constrained by their own client_id filter.
+    if client_id:
+        query = query.eq("client_id", client_id)
 
     if status_filter:
         query = query.eq("status", status_filter)

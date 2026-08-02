@@ -10,7 +10,7 @@ import {
   sendDocumentForSignature, createSigningSession, testSigningStorage,
   deleteSigningSession,
   getSignatureRequests, getSignatureRequest, remindSigner,
-  cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCase,
+  cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCase, getCases,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -375,6 +375,7 @@ function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', o
   const [clients, setClients] = useState([]);
   const [clientSearch, setClientSearch] = useState('');
   const [cases, setCases] = useState([]);
+  const [loadingCases, setLoadingCases] = useState(false);
 
   useEffect(() => {
     loadClients();
@@ -420,11 +421,21 @@ function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', o
     setSignerEmail(client.email || '');
     setSelectedClientId(client.id);
     setClientSearch('');
+    setCaseId('');
+    setCases([]);
+    setLoadingCases(true);
+    setError('');
     try {
-      const { data } = await supabase.from('cases').select('id, plaintiff_name, status, created_at').eq('client_id', client.id).order('created_at', { ascending: false });
-      setCases(data || []);
-      if (data?.length === 1) setCaseId(data[0].id);
-    } catch (err) { console.error(err); }
+      const result = await getCases({ client_id: client.id });
+      const caseRows = Array.isArray(result) ? result : (result?.cases || result?.data || []);
+      setCases(caseRows);
+      if (caseRows.length === 1) setCaseId(String(caseRows[0].id));
+    } catch (err) {
+      setCases([]);
+      setError(err.message || 'Could not load the cases for this client.');
+    } finally {
+      setLoadingCases(false);
+    }
   }
 
   function handleFileDrop(e) {
@@ -611,13 +622,15 @@ function SendSignatureModal({ templates, loadingTemplates, initialCaseId = '', o
           {selectedClientId && (
             <div>
               <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Link to Case *</label>
-              {cases.length > 0 ? (
+              {loadingCases ? (
+                <p className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading this client’s cases…</p>
+              ) : cases.length > 0 ? (
                 <select value={caseId} onChange={(e) => setCaseId(e.target.value)}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                   <option value="">-- Select a case --</option>
                   {cases.map(c => (
                     <option key={c.id} value={c.id}>
-                      {c.plaintiff_name || 'Untitled'} — {c.status} ({new Date(c.created_at).toLocaleDateString()})
+                      {c.plaintiff_name || c.client_name || 'Untitled'} — {c.status || 'Case'} ({c.created_at ? new Date(c.created_at).toLocaleDateString() : 'No date'})
                     </option>
                   ))}
                 </select>
