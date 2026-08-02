@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import {
   PenLine, Send, Download, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
-  ChevronDown, X, Search, User, Upload,
+  ChevronDown, X, Search, User, Upload, Trash2,
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
   sendDocumentForSignature, createSigningSession, testSigningStorage,
+  deleteSigningSession,
   getSignatureRequests, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument,
 } from '../../lib/api';
@@ -257,6 +258,16 @@ export default function ESignatures() {
                         <Download className="w-4 h-4" />
                       </button>
                     )}
+                    <button onClick={async () => {
+                      if (!confirm(`Delete "${req.title}"? This cannot be undone.`)) return;
+                      try {
+                        await deleteSigningSession(req.id);
+                        loadData();
+                      } catch (err) { alert('Delete failed: ' + err.message); }
+                    }}
+                      className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Delete">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               </div>

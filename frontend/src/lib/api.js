@@ -1049,6 +1049,10 @@ export async function testSigningStorage() {
   return request('/signing/test');
 }
 
+export async function deleteSigningSession(id) {
+  return request(`/signing/${id}`, { method: 'DELETE' });
+}
+
 export async function createSigningSession(formData) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/signing/create`, {

@@ -658,6 +658,44 @@ async def download_signed_pdf(token: str, authorization: str = Header(default=No
 
 
 # ---------------------------------------------------------------------------
+# DELETE /{session_id} — delete a signing session
+# ---------------------------------------------------------------------------
+
+@router.delete("/{session_id}")
+async def delete_signing_session(session_id: str, authorization: str = Header(default=None)):
+    """Delete a signing session and its stored files."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    supabase = get_supabase()
+
+    resp = supabase.table("signing_sessions").select("id, original_path, signed_path").eq("id", session_id).limit(1).execute()
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    session = resp.data[0]
+
+    # Delete storage files
+    paths_to_remove = [p for p in [session.get("original_path"), session.get("signed_path")] if p]
+    if paths_to_remove:
+        try:
+            supabase.storage.from_(STORAGE_BUCKET).remove(paths_to_remove)
+        except Exception as e:
+            logger.warning("Could not delete signing files: %s", e)
+
+    # Delete signing session record
+    supabase.table("signing_sessions").delete().eq("id", session_id).execute()
+
+    # Delete from unified signature_requests table too
+    try:
+        supabase.table("signature_requests").delete().eq("id", session_id).execute()
+    except Exception:
+        pass
+
+    return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
 # Helper — embed signature image into PDF using PyMuPDF (fitz)
 # ---------------------------------------------------------------------------
 
