@@ -11,7 +11,30 @@
     <title>LegalFlow - Legal Case Management</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="preload" style="display:flex;align-items:center;justify-content:center;height:100vh;background:#2563eb;font-family:sans-serif;color:white;text-align:center">
+        <div>
+          <div style="font-size:24px;font-weight:bold;margin-bottom:8px">LegalFlow</div>
+          <div style="font-size:14px;opacity:0.8">Loading...</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // If React hasn't loaded after 10 seconds, show debug info
+      setTimeout(function() {
+        var root = document.getElementById('root');
+        var preload = document.getElementById('preload');
+        if (preload && root.children.length <= 1) {
+          preload.innerHTML = '<div style="padding:40px;text-align:left;max-width:600px">' +
+            '<h1 style="font-size:20px;margin-bottom:16px">LegalFlow failed to load</h1>' +
+            '<p style="font-size:14px;opacity:0.8;margin-bottom:16px">The app did not start. Check browser console (F12) for errors.</p>' +
+            '<p style="font-size:12px;opacity:0.6">URL: ' + window.location.href + '</p>' +
+            '<p style="font-size:12px;opacity:0.6">UserAgent: ' + navigator.userAgent + '</p>' +
+            '<button onclick="location.reload()" style="margin-top:16px;padding:10px 24px;background:white;color:#2563eb;border:none;border-radius:8px;cursor:pointer;font-weight:bold">Reload</button>' +
+            '</div>';
+        }
+      }, 10000);
+    </script>
   </body>
 </html>
