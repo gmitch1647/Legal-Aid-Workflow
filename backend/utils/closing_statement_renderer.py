@@ -154,6 +154,53 @@ def _trim_to_width(value: str, font: str, size: float, width: float) -> str:
     return value.rstrip() + ellipsis
 
 
+def _firm_distribution_cents(data: ClosingStatementData) -> int:
+    """Return the aggregate fees, litigation costs, and expenses paid to the firm."""
+    return (
+        int(data.attorney_fee_cents)
+        + int(data.court_cost_cents)
+        + int(data.service_of_process_cost_cents)
+        + int(data.paralegal_fee_cents)
+    )
+
+
+def _reconciliation_narrative(data: ClosingStatementData) -> str:
+    """Describe the complete, balanced distribution using the saved settlement facts."""
+    return (
+        "The figures above reconcile in full: the total attorney’s fees, litigation costs and "
+        f"expenses, and paralegal fees of {_format_money(_firm_distribution_cents(data))}, together with "
+        f"the net proceeds of {_format_money(data.client_payout_cents)} paid to the Client, equal "
+        f"the gross settlement recovery of {_format_money(data.gross_settlement_cents)}. No portion of "
+        "the settlement remains undisbursed."
+    )
+
+
+def _settlement_terms_narrative(data: ClosingStatementData) -> str:
+    """State the standard settlement acknowledgment and preserve supplied settlement terms."""
+    adverse_party = _clean(data.adverse_party, "the adverse party")
+    narrative = (
+        "The Client acknowledges that this settlement is a compromise of disputed claims and does not "
+        f"constitute an admission of liability by {adverse_party}. The Client further acknowledges that "
+        "the terms of the settlement are confidential in accordance with the Settlement Agreement and Release."
+    )
+    additional_terms = _clean(data.non_monetary_terms)
+    if additional_terms:
+        narrative += f" Additional settlement terms: {additional_terms}"
+    return narrative
+
+
+def _client_acknowledgment_narrative(data: ClosingStatementData) -> str:
+    """Create the signature acknowledgment from the current client, firm, and payout figures."""
+    client_name = _clean(data.client_name, "Client")
+    firm_name = _clean(data.firm_name, "the Firm")
+    return (
+        f"I, {client_name}, have reviewed this Settlement Disbursement & Closing Statement. I understand "
+        "and approve the distribution of the settlement proceeds set forth above, and I authorize "
+        f"{firm_name} to disburse the funds accordingly. I acknowledge receipt of the net settlement "
+        f"proceeds of {_format_money(data.client_payout_cents)}."
+    )
+
+
 def render_closing_statement(data: ClosingStatementData) -> bytes:
     """Return a one-page closing-statement PDF.
 
@@ -245,7 +292,7 @@ def render_closing_statement(data: ClosingStatementData) -> bytes:
     # taken directly from the uploaded reference layout.
     row_height = 17
     rows = [
-        ("Statutory damages paid to client", int(data.client_payout_cents), False),
+        ("Net proceeds paid to Client", int(data.client_payout_cents), False),
         ("Paralegal fees paid to the Firm", int(data.paralegal_fee_cents), False),
         ("Court costs paid to the Firm", int(data.court_cost_cents), False),
         ("Service of process costs paid to the Firm", int(data.service_of_process_cost_cents), False),
@@ -266,17 +313,14 @@ def render_closing_statement(data: ClosingStatementData) -> bytes:
         pdf.drawRightString(reference_table_right, row_y, _format_money(value))
     y = table_top - (len(rows) * row_height) - 10
 
-    terms = _clean(data.non_monetary_terms)
-    if not terms:
-        terms = (
-            "In addition to the monetary consideration above, the settlement provides for the "
-            "elimination and waiver of any and all obligations related to the Debt."
-        )
-    acknowledgment = (
-        f"{terms} The Client acknowledges and approves the disbursement of the settlement "
-        "funds as set forth above."
-    )
-    y = _draw_wrapped(pdf, acknowledgment, LEFT, y, TEXT_WIDTH, size=10, leading=12)
+    y = _draw_wrapped(pdf, _reconciliation_narrative(data), LEFT, y, TEXT_WIDTH, size=10, leading=12)
+    y -= 6
+    y = _draw_wrapped(pdf, _settlement_terms_narrative(data), LEFT, y, TEXT_WIDTH, size=10, leading=12)
+    y -= 10
+    pdf.setFont("Times-Bold", 10)
+    pdf.drawString(LEFT, y, "CLIENT ACKNOWLEDGMENT")
+    y -= 16
+    y = _draw_wrapped(pdf, _client_acknowledgment_narrative(data), LEFT, y, TEXT_WIDTH, size=10, leading=12)
     y -= 15
     # Keep the execution block in the same lower-page position as the supplied
     # form when terms are short, while allowing longer terms to expand safely.

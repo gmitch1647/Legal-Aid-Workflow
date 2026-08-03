@@ -233,6 +233,54 @@ class ClosingStatementWorkflowTests(unittest.TestCase):
         self.assertIn("APPROVED AND ACCEPTED", text)
         self.assertIn("Date:", text)
 
+    def test_renderer_uses_fact_based_reconciliation_terms_and_client_acknowledgment(self):
+        pdf = render_closing_statement(
+            ClosingStatementData(
+                firm_name="Oise Law Group PC",
+                firm_address="123 Main Street, Atlanta, GA 30303",
+                firm_phone="(404) 555-0100",
+                firm_email="attorney@example.com",
+                statement_date="August 3, 2026",
+                client_name="Keshaun Wiggins",
+                case_number="LF-2026-TEST002",
+                adverse_party="Edfinancial Services, LLC",
+                account_reference="Account 7782",
+                gross_settlement_cents=1_400_000,
+                client_payout_cents=100_000,
+                paralegal_fee_cents=200_000,
+                court_cost_cents=100_000,
+                service_of_process_cost_cents=200_000,
+                attorney_fee_cents=800_000,
+                non_monetary_terms="",
+            )
+        )
+        text = PdfReader(io.BytesIO(pdf)).pages[0].extract_text()
+        normalized = " ".join(text.split())
+
+        self.assertIn(
+            "The figures above reconcile in full: the total attorney’s fees, litigation costs and "
+            "expenses, and paralegal fees of $13,000.00, together with the net proceeds of $1,000.00 "
+            "paid to the Client, equal the gross settlement recovery of $14,000.00. No portion of the "
+            "settlement remains undisbursed.",
+            normalized,
+        )
+        self.assertIn(
+            "The Client acknowledges that this settlement is a compromise of disputed claims and does "
+            "not constitute an admission of liability by Edfinancial Services, LLC. The Client further "
+            "acknowledges that the terms of the settlement are confidential in accordance with the "
+            "Settlement Agreement and Release.",
+            normalized,
+        )
+        self.assertIn("CLIENT ACKNOWLEDGMENT", normalized)
+        self.assertIn(
+            "I, Keshaun Wiggins, have reviewed this Settlement Disbursement & Closing Statement. I "
+            "understand and approve the distribution of the settlement proceeds set forth above, and I "
+            "authorize Oise Law Group PC to disburse the funds accordingly. I acknowledge receipt of the "
+            "net settlement proceeds of $1,000.00.",
+            normalized,
+        )
+        self.assertIn("Net proceeds paid to Client", normalized)
+
     def test_reference_style_execution_block_is_detected_for_client_signature(self):
         pdf = render_closing_statement(
             ClosingStatementData(
