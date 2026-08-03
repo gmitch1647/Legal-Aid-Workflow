@@ -205,6 +205,145 @@ function NotesModal({ title, placeholder, submitLabel, onSubmit, onCancel, loadi
 // Inline Message Thread
 // ---------------------------------------------------------------------------
 
+function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, editingComplaint, setEditingComplaint, documents, onRefresh, onDownload }) {
+  const [uploading, setUploading] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  const complaintDocs = documents.filter(d =>
+    (d.document_category || d.category || '').toLowerCase() === 'complaint' ||
+    (d.file_name || '').toLowerCase().includes('complaint')
+  );
+
+  const hasText = !!(caseData?.complaint_text || caseData?.complaint_draft);
+  const status = caseData?.status;
+  const isApproved = status === 'approved' || status === 'filed' || status === 'closed';
+
+  async function handleUpload(files) {
+    if (!files?.length) return;
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      try {
+        await uploadDocument(caseId, file, 'complaint');
+      } catch (err) { console.error('Complaint upload failed:', err); }
+    }
+    setUploading(false);
+    if (onRefresh) onRefresh();
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleSaveDraft() {
+    setSavingDraft(true);
+    try {
+      const { supabase } = await import('../../lib/supabase');
+      await supabase.from('cases').update({ complaint_text: complaintText }).eq('id', caseId);
+      setEditingComplaint(false);
+      if (onRefresh) onRefresh();
+    } catch (err) { console.error('Save draft failed:', err); }
+    finally { setSavingDraft(false); }
+  }
+
+  async function handleDeleteDoc(doc) {
+    if (!confirm(`Delete "${doc.file_name}"?`)) return;
+    try {
+      await deleteDocument(caseId, doc.id);
+      if (onRefresh) onRefresh();
+    } catch (err) { alert('Delete failed: ' + err.message); }
+  }
+
+  return (
+    <div className="card border-blue-200 bg-blue-50/20">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+          <FileText className="h-5 w-5 text-blue-500" />
+          Complaint
+          {isApproved && (
+            <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700 border border-green-200">
+              Approved
+            </span>
+          )}
+        </h2>
+        <div className="flex gap-2">
+          {hasText && !editingComplaint && (
+            <button onClick={() => setEditingComplaint(true)} className="btn-secondary gap-1.5 text-xs">
+              <Edit3 className="h-3.5 w-3.5" /> Edit Draft
+            </button>
+          )}
+          {editingComplaint && (
+            <>
+              <button onClick={() => { setEditingComplaint(false); setComplaintText(caseData.complaint_text || caseData.complaint_draft || ''); }}
+                className="btn-secondary gap-1.5 text-xs">
+                <X className="h-3.5 w-3.5" /> Cancel
+              </button>
+              <button onClick={handleSaveDraft} disabled={savingDraft} className="btn-primary gap-1.5 text-xs">
+                {savingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Save
+              </button>
+            </>
+          )}
+          {isApproved && onDownload && (
+            <button onClick={onDownload} className="btn-secondary gap-1.5 text-xs">
+              <Download className="h-3.5 w-3.5" /> Download DOCX
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Draft text */}
+      {hasText && (
+        <div className="mt-4">
+          {editingComplaint ? (
+            <textarea value={complaintText} onChange={(e) => setComplaintText(e.target.value)}
+              rows={20} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
+          ) : (
+            <div className="max-h-[500px] overflow-y-auto rounded-lg border border-slate-200 bg-white p-6">
+              <div className="prose prose-sm prose-slate max-w-none whitespace-pre-wrap font-serif text-sm leading-relaxed">
+                {complaintText}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Uploaded complaint documents */}
+      {complaintDocs.length > 0 && (
+        <div className="mt-4">
+          <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Uploaded Complaint Files</p>
+          <div className="space-y-2">
+            {complaintDocs.map(doc => (
+              <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-blue-200 bg-white p-3">
+                <FileText className="h-4 w-4 shrink-0 text-blue-500" />
+                <a href={doc.url || '#'} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</p>
+                  <p className="text-xs text-slate-400">{formatDate(doc.created_at)}</p>
+                </a>
+                <button onClick={() => handleDeleteDoc(doc)}
+                  className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Upload button */}
+      <div className="mt-4">
+        <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+          className="inline-flex items-center gap-1.5 px-3 py-2 border border-blue-300 rounded-lg text-xs font-medium text-blue-700 bg-white hover:bg-blue-50 disabled:opacity-50">
+          <Upload className="w-3.5 h-3.5" />
+          {uploading ? 'Uploading...' : 'Upload Complaint Document'}
+        </button>
+        <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.doc" className="hidden"
+          onChange={(e) => handleUpload(e.target.files)} />
+        {!hasText && complaintDocs.length === 0 && (
+          <p className="text-xs text-slate-400 mt-2">No complaint drafted yet. Use the Drafter to create one, or upload an existing complaint.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CaseTypeSelector({ caseId, currentTypes, onUpdate }) {
   const types = ['FCRA', 'FDCPA', 'TCPA'];
   const [selected, setSelected] = useState(() => {
@@ -1184,65 +1323,18 @@ export default function CaseDetail() {
             <AgentPipelineStatus caseId={id} statuses={pipelineStatuses} />
           )}
 
-          {/* Complaint Draft Viewer */}
-          {hasComplaint && (
-            <div className="card">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-slate-900">Complaint Draft</h2>
-                <div className="flex gap-2">
-                  {!editingComplaint && (
-                    <button
-                      onClick={() => setEditingComplaint(true)}
-                      className="btn-secondary gap-1.5 text-xs"
-                    >
-                      <Edit3 className="h-3.5 w-3.5" />
-                      Edit
-                    </button>
-                  )}
-                  {editingComplaint && (
-                    <>
-                      <button
-                        onClick={() => {
-                          setEditingComplaint(false);
-                          setComplaintText(caseData.complaint_text || caseData.complaint_draft || '');
-                        }}
-                        className="btn-secondary gap-1.5 text-xs"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditingComplaint(false);
-                          // In a real app, this would save to the API
-                        }}
-                        className="btn-primary gap-1.5 text-xs"
-                      >
-                        <Save className="h-3.5 w-3.5" />
-                        Save Edits
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="mt-4">
-                {editingComplaint ? (
-                  <textarea
-                    value={complaintText}
-                    onChange={(e) => setComplaintText(e.target.value)}
-                    rows={20}
-                    className="input font-mono text-xs leading-relaxed"
-                  />
-                ) : (
-                  <div className="max-h-[600px] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-6">
-                    <div className="prose prose-sm prose-slate max-w-none whitespace-pre-wrap font-serif text-sm leading-relaxed">
-                      {complaintText}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Complaint Section */}
+          <ComplaintSection
+            caseId={id}
+            caseData={caseData}
+            complaintText={complaintText}
+            setComplaintText={setComplaintText}
+            editingComplaint={editingComplaint}
+            setEditingComplaint={setEditingComplaint}
+            documents={documents}
+            onRefresh={() => { fetchCase(); fetchDocuments(); }}
+            onDownload={handleDownloadApprovedComplaint}
+          />
 
           {/* Complaint with Exhibits — shown after approval */}
           {(status === 'approved' || status === 'filed' || status === 'closed') && (
