@@ -9,6 +9,9 @@ import {
   FileSignature,
   FileText,
   Loader2,
+  MessageSquare,
+  Bot,
+  User,
   Plus,
   RefreshCw,
   Send,
@@ -18,13 +21,17 @@ import {
 import {
   createAttorney,
   createClosingStatement,
+  createConversation,
   downloadClosingStatement,
   getAttorneys,
   getCases,
   getClosingStatements,
   getClosingStatementSettlementSource,
+  getConversation,
+  getConversations,
   saveDownloadedBlob,
   sendClosingStatementForSignature,
+  streamAgentMessage,
   uploadSettlementForClosingStatement,
 } from '../../lib/api';
 
@@ -96,6 +103,12 @@ export default function ClosingStatements() {
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  const [draftChatOpen, setDraftChatOpen] = useState(false);
+  const [draftConversation, setDraftConversation] = useState(null);
+  const [draftMessages, setDraftMessages] = useState([]);
+  const [draftChatInput, setDraftChatInput] = useState('');
+  const [draftChatLoading, setDraftChatLoading] = useState(false);
+  const [draftChatSending, setDraftChatSending] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const fileInputRef = useRef(null);
@@ -263,6 +276,10 @@ export default function ClosingStatements() {
     setSettlement(null);
     setForm({ ...emptyForm, attorney_id: form.attorney_id || defaultAttorneyId });
     setStatement(null);
+    setDraftChatOpen(false);
+    setDraftConversation(null);
+    setDraftMessages([]);
+    setDraftChatInput('');
     setError('');
     setNotice('');
     setLoadingSavedSettlement(false);
@@ -311,6 +328,10 @@ export default function ClosingStatements() {
     setSelectedCaseId(caseId);
     setSettlement(null);
     setStatement(null);
+    setDraftChatOpen(false);
+    setDraftConversation(null);
+    setDraftMessages([]);
+    setDraftChatInput('');
     setError('');
     setNotice('');
     setForm({
@@ -328,6 +349,109 @@ export default function ClosingStatements() {
   const updateField = (field, value) => {
     setForm((previous) => ({ ...previous, [field]: value }));
     setStatement(null);
+  };
+
+  const applyDraftDetail = (content) => {
+    const detail = String(content || '').trim();
+    if (!detail) return;
+    setForm((previous) => {
+      const existing = String(previous.non_monetary_terms || '').trim();
+      if (existing.includes(detail)) return previous;
+      return {
+        ...previous,
+        non_monetary_terms: existing ? `${existing}\n\n${detail}` : detail,
+      };
+    });
+    setStatement(null);
+    setNotice('The selected drafting-chat detail was added to Additional settlement terms. Review and edit it before generating the Closing Statement.');
+  };
+
+  const openDraftChat = async () => {
+    if (!selectedCaseId || !settlement) {
+      setError('Choose a case and attach its settlement before opening the Closing Statement drafting chat.');
+      return;
+    }
+    setError('');
+    setDraftChatOpen(true);
+    setDraftChatLoading(true);
+    try {
+      const caseConversations = await getConversations(selectedCaseId);
+      const existing = (caseConversations || []).find((item) => item.agent_type === 'closing_statement_drafter');
+      const conversation = existing || await createConversation(
+        'closing_statement_drafter',
+        selectedCaseId,
+        `Closing Statement — ${form.case_number || 'Case'}`,
+      );
+      const fullConversation = existing ? await getConversation(existing.id) : { ...conversation, messages: [] };
+      setDraftConversation(conversation);
+      setDraftMessages(fullConversation.messages || []);
+    } catch (err) {
+      setError(err.message || 'Could not open the Closing Statement drafting chat.');
+      setDraftChatOpen(false);
+    } finally {
+      setDraftChatLoading(false);
+    }
+  };
+
+  const handleDraftChatSend = async () => {
+    const requestedDetail = draftChatInput.trim();
+    if (!requestedDetail || !draftConversation?.id || draftChatSending) return;
+    const statementFacts = [
+      `Client: ${form.signer_name || 'Not entered'}`,
+      `Adverse party: ${form.adverse_party || 'Not entered'}`,
+      `Gross settlement: ${formatMoney(grossCents)}`,
+      `Client proceeds: ${formatMoney(clientCents)}`,
+      `Additional settlement terms already included: ${form.non_monetary_terms || 'None'}`,
+    ].join('\n');
+    const prompt = [
+      'Help draft an optional additional Closing Statement detail using only the verified facts below and the attorney\'s request.',
+      'Do not change or invent settlement amounts, parties, confidentiality obligations, or legal conclusions.',
+      'Return a concise, attorney-reviewable paragraph only; the attorney must explicitly choose whether to add it to the statement.',
+      '',
+      'Verified Closing Statement facts:',
+      statementFacts,
+      '',
+      `Attorney request: ${requestedDetail}`,
+    ].join('\n');
+    const optimisticUserMessage = {
+      role: 'user',
+      content: requestedDetail,
+      created_at: new Date().toISOString(),
+    };
+    const streamId = `closing-draft-${Date.now()}`;
+    setDraftMessages((previous) => [
+      ...previous,
+      optimisticUserMessage,
+      { role: 'assistant', content: '', created_at: new Date().toISOString(), _streamId: streamId },
+    ]);
+    setDraftChatInput('');
+    setDraftChatSending(true);
+    try {
+      await streamAgentMessage(draftConversation.id, prompt, (partialText) => {
+        setDraftMessages((previous) => previous.map((message) => (
+          message._streamId === streamId ? { ...message, content: partialText } : message
+        )));
+      });
+      setDraftMessages((previous) => previous.map((message) => (
+        message._streamId === streamId ? { ...message, _streamId: undefined } : message
+      )));
+    } catch (err) {
+      setDraftMessages((previous) => previous.map((message) => (
+        message._streamId === streamId
+          ? { ...message, content: 'The drafting assistant could not respond. Please try again or add the detail directly below.', _streamId: undefined }
+          : message
+      )));
+      setError(err.message || 'Could not send the drafting request.');
+    } finally {
+      setDraftChatSending(false);
+    }
+  };
+
+  const handleDraftChatKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleDraftChatSend();
+    }
   };
 
   const handleAddAttorney = async () => {
@@ -564,7 +688,51 @@ export default function ClosingStatements() {
               <TextField label="Adverse party" value={form.adverse_party} disabled={!settlement} onChange={(value) => updateField('adverse_party', value)} placeholder="Defendant or released party" />
             </div>
             <TextField label="Account or matter reference" value={form.account_reference} disabled={!settlement} onChange={(value) => updateField('account_reference', value)} placeholder="Account number or matter description" />
-            <TextArea label="Non-monetary settlement terms" value={form.non_monetary_terms} disabled={!settlement} onChange={(value) => updateField('non_monetary_terms', value)} placeholder="For example: Debt waiver and tradeline deletion terms." />
+            <div className={`overflow-hidden rounded-xl border ${draftChatOpen ? 'border-primary-200 bg-primary-50/40' : 'border-slate-200 bg-slate-50'}`}>
+              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-start gap-2.5">
+                  <div className="mt-0.5 rounded-lg bg-primary-100 p-1.5 text-primary-700"><MessageSquare className="h-4 w-4" /></div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Closing Statement drafting chat</h3>
+                    <p className="mt-0.5 text-xs leading-5 text-slate-600">Add case-specific details or ask for optional wording. You choose exactly what is added to the statement.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => (draftChatOpen ? setDraftChatOpen(false) : void openDraftChat())} disabled={!settlement || draftChatLoading} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-primary-200 bg-white px-3 py-2 text-sm font-semibold text-primary-700 shadow-sm hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-60">
+                  {draftChatLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
+                  {draftChatLoading ? 'Opening…' : draftChatOpen ? 'Hide chat' : 'Open chat'}
+                </button>
+              </div>
+              {draftChatOpen && <div className="border-t border-primary-100 bg-white">
+                <div className="max-h-80 space-y-3 overflow-y-auto p-4" aria-live="polite">
+                  {draftMessages.length === 0 && <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">Describe the additional settlement detail you need, such as a specific non-monetary term or a requested clarification. The assistant will return suggested wording; it will not change any distribution figures or add wording until you choose it.</div>}
+                  {draftMessages.map((message, index) => {
+                    const isAttorney = message.role === 'user';
+                    const text = String(message.content || '').trim();
+                    return <div key={message.id || message._streamId || `${message.role}-${index}`} className={`flex gap-2.5 ${isAttorney ? 'justify-end' : 'justify-start'}`}>
+                      {!isAttorney && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-100 text-primary-700"><Bot className="h-4 w-4" /></div>}
+                      <div className={`max-w-[88%] rounded-xl px-3 py-2.5 text-sm leading-5 ${isAttorney ? 'bg-primary-700 text-white' : 'border border-slate-200 bg-slate-50 text-slate-700'}`}>
+                        <div className="whitespace-pre-wrap">{text || <span className="inline-flex items-center gap-1.5 text-slate-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Drafting…</span>}</div>
+                        {text && <button type="button" onClick={() => applyDraftDetail(text)} className={`mt-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold ${isAttorney ? 'bg-white/15 text-white hover:bg-white/25' : 'bg-primary-50 text-primary-700 hover:bg-primary-100'}`}>
+                          <Plus className="h-3.5 w-3.5" /> {isAttorney ? 'Add my detail' : 'Add suggested wording'}
+                        </button>}
+                      </div>
+                      {isAttorney && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-200 text-slate-600"><User className="h-4 w-4" /></div>}
+                    </div>;
+                  })}
+                </div>
+                <div className="border-t border-slate-100 p-3">
+                  <label className="sr-only" htmlFor="closing-statement-draft-chat">Describe a detail for the Closing Statement</label>
+                  <div className="flex items-end gap-2">
+                    <textarea id="closing-statement-draft-chat" value={draftChatInput} onChange={(event) => setDraftChatInput(event.target.value)} onKeyDown={handleDraftChatKeyDown} disabled={draftChatSending || draftChatLoading} rows={3} placeholder="For example: Add that the creditor will update the account status after the agreed payment is issued." className="min-h-[76px] flex-1 resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-100 disabled:cursor-not-allowed disabled:bg-slate-100" />
+                    <button type="button" onClick={() => void handleDraftChatSend()} disabled={!draftChatInput.trim() || !draftConversation?.id || draftChatSending} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-primary-700 px-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-800 disabled:cursor-not-allowed disabled:bg-slate-300">
+                      {draftChatSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Send
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">Press Enter to send or Shift + Enter for a new line. Suggestions remain separate until you select <span className="font-semibold text-slate-700">Add suggested wording</span>.</p>
+                </div>
+              </div>}
+            </div>
+            <TextArea label="Additional settlement terms" value={form.non_monetary_terms} disabled={!settlement} onChange={(value) => updateField('non_monetary_terms', value)} placeholder="Attorney-reviewed wording from the drafting chat appears here. You may also enter or revise terms directly." />
             <div className="grid gap-4 sm:grid-cols-2">
               <TextField label="Client signer name" value={form.signer_name} disabled={!settlement} onChange={(value) => updateField('signer_name', value)} placeholder="Client's legal name" />
               <TextField label="Client signer email" type="email" value={form.signer_email} disabled={!settlement} onChange={(value) => updateField('signer_email', value)} placeholder="client@example.com" />
