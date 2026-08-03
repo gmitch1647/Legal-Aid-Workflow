@@ -44,6 +44,7 @@ import {
   getReferralPartners,
   assignReferral,
   submitCase,
+  getDefendants,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -651,38 +652,99 @@ export default function ClientProfile() {
 // Upload Existing Case
 // ---------------------------------------------------------------------------
 
+const FEDERAL_COURTS = [
+  'United States District Court, Northern District of Georgia, Atlanta Division',
+  'United States District Court, Northern District of Georgia, Gainesville Division',
+  'United States District Court, Northern District of Georgia, Newnan Division',
+  'United States District Court, Northern District of Georgia, Rome Division',
+  'United States District Court, Middle District of Georgia',
+  'United States District Court, Southern District of Georgia',
+  'United States District Court, Northern District of Alabama',
+  'United States District Court, Middle District of Alabama',
+  'United States District Court, Southern District of Alabama',
+  'United States District Court, Northern District of Florida',
+  'United States District Court, Middle District of Florida',
+  'United States District Court, Southern District of Florida',
+  'United States District Court, District of South Carolina',
+  'United States District Court, Western District of North Carolina',
+  'United States District Court, Eastern District of North Carolina',
+  'United States District Court, Middle District of North Carolina',
+  'United States District Court, Eastern District of Tennessee',
+  'United States District Court, Middle District of Tennessee',
+  'United States District Court, Western District of Tennessee',
+  'United States District Court, Northern District of Texas',
+  'United States District Court, Southern District of Texas',
+  'United States District Court, Eastern District of Texas',
+  'United States District Court, Western District of Texas',
+  'United States District Court, District of New Jersey',
+  'United States District Court, Eastern District of New York',
+  'United States District Court, Southern District of New York',
+  'United States District Court, Northern District of Illinois',
+  'United States District Court, Central District of California',
+  'United States District Court, Northern District of California',
+  'United States District Court, Eastern District of Pennsylvania',
+  'United States District Court, District of Maryland',
+  'United States District Court, District of Columbia',
+];
+
 function NewCaseForm({ clientId, clientName, onComplete, onCancel }) {
-  const [form, setForm] = useState({
-    defendant_name: '',
-    case_type: 'FCRA',
-    court: '',
-    case_facts: '',
-    damages_description: '',
-  });
+  const [selectedDefendants, setSelectedDefendants] = useState([]);
+  const [defendantSearch, setDefendantSearch] = useState('');
+  const [allDefendants, setAllDefendants] = useState([]);
+  const [courtSearch, setCourtSearch] = useState('');
+  const [courtFocused, setCourtFocused] = useState(false);
+  const [caseType, setCaseType] = useState('FCRA');
+  const [caseFacts, setCaseFacts] = useState('');
+  const [damages, setDamages] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  function update(field, value) {
-    setForm(prev => ({ ...prev, [field]: value }));
+  useEffect(() => {
+    getDefendants().then(d => setAllDefendants(d || [])).catch(() => {});
+  }, []);
+
+  const filteredDefendants = allDefendants.filter(d =>
+    !selectedDefendants.find(s => s.id === d.id) &&
+    (!defendantSearch || (d.name || '').toLowerCase().includes(defendantSearch.toLowerCase()))
+  );
+
+  const filteredCourts = FEDERAL_COURTS.filter(c =>
+    courtSearch.length >= 2 && c.toLowerCase().includes(courtSearch.toLowerCase())
+  );
+
+  function addDefendant(d) {
+    setSelectedDefendants(prev => [...prev, d]);
+    setDefendantSearch('');
+  }
+
+  function addCustomDefendant() {
+    if (!defendantSearch.trim()) return;
+    const custom = { id: 'custom_' + Date.now(), name: defendantSearch.trim(), custom: true };
+    setSelectedDefendants(prev => [...prev, custom]);
+    setDefendantSearch('');
+  }
+
+  function removeDefendant(id) {
+    setSelectedDefendants(prev => prev.filter(d => d.id !== id));
   }
 
   async function handleSubmit() {
-    if (!form.defendant_name.trim()) { setError('Enter at least one defendant'); return; }
+    if (selectedDefendants.length === 0) { setError('Add at least one defendant'); return; }
     setSaving(true);
     setError('');
     try {
-      const { supabase } = await import('../../lib/supabase');
+      const { supabase: sb } = await import('../../lib/supabase');
+      const defNames = selectedDefendants.map(d => d.name).join(', ');
+      const caseFactsText = `=== PLAINTIFF ===\nName: ${clientName}\n\n=== DEFENDANTS ===\n${selectedDefendants.map(d => d.name + (d.registered_address ? `\n${d.registered_address}` : '')).join('\n\n')}\n\n=== FACTS ===\n${caseFacts}`;
 
-      const caseFacts = `=== PLAINTIFF ===\nName: ${clientName}\n\n=== DEFENDANTS ===\n${form.defendant_name}\n\n=== FACTS ===\n${form.case_facts}`;
-
-      const { data, error: insertErr } = await supabase.from('cases').insert({
+      const { error: insertErr } = await sb.from('cases').insert({
         client_id: clientId,
         plaintiff_name: clientName,
-        defendant_name: form.defendant_name.trim(),
-        case_type: form.case_type,
-        court: form.court.trim() || null,
-        case_facts: caseFacts,
-        damages_description: form.damages_description.trim() || null,
+        defendant_name: defNames,
+        case_type: caseType,
+        court: courtSearch.trim() || null,
+        case_facts: caseFactsText,
+        damages_description: damages.trim() || null,
         status: 'submitted',
       }).select().single();
 
@@ -690,9 +752,7 @@ function NewCaseForm({ clientId, clientName, onComplete, onCancel }) {
       onComplete();
     } catch (err) {
       setError(err.message || 'Failed to create case');
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
   return (
@@ -702,49 +762,101 @@ function NewCaseForm({ clientId, clientName, onComplete, onCancel }) {
         <button onClick={onCancel} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Defendant(s) *</label>
-          <input value={form.defendant_name} onChange={e => update('defendant_name', e.target.value)}
-            placeholder="e.g. Equifax Information Services"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-        </div>
-        <div>
-          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Case Type</label>
-          <div className="flex gap-1">
-            {['FCRA', 'FDCPA', 'TCPA'].map(t => (
-              <button key={t} onClick={() => update('case_type', form.case_type === t ? '' : t)}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border transition ${
-                  form.case_type === t
-                    ? t === 'FCRA' ? 'bg-blue-100 text-blue-700 border-blue-300'
-                      : t === 'FDCPA' ? 'bg-purple-100 text-purple-700 border-purple-300'
-                      : 'bg-green-100 text-green-700 border-green-300'
-                    : 'bg-white text-slate-400 border-slate-200'
-                }`}>
-                {t}
-              </button>
+      {/* Defendants */}
+      <div>
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Defendant(s) *</label>
+        {selectedDefendants.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {selectedDefendants.map(d => (
+              <span key={d.id} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 rounded-lg text-xs font-medium">
+                {d.name}
+                <button onClick={() => removeDefendant(d.id)} className="text-blue-400 hover:text-blue-600"><X className="w-3 h-3" /></button>
+              </span>
             ))}
           </div>
+        )}
+        <div className="relative">
+          <input value={defendantSearch} onChange={e => setDefendantSearch(e.target.value)}
+            placeholder="Search defendants or type a new one..."
+            onKeyDown={e => { if (e.key === 'Enter' && defendantSearch.trim() && filteredDefendants.length === 0) { e.preventDefault(); addCustomDefendant(); } }}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          {defendantSearch && (
+            <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+              {filteredDefendants.slice(0, 8).map(d => (
+                <button key={d.id} onClick={() => addDefendant(d)}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 flex items-center justify-between">
+                  <div>
+                    <span className="font-medium text-slate-800">{d.name}</span>
+                    {d.registered_address && <span className="text-slate-400 ml-2">{d.registered_address}</span>}
+                  </div>
+                  <Plus className="w-3 h-3 text-slate-400" />
+                </button>
+              ))}
+              {defendantSearch.trim() && !filteredDefendants.find(d => d.name.toLowerCase() === defendantSearch.toLowerCase()) && (
+                <button onClick={addCustomDefendant}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-50 text-emerald-700 font-medium border-t border-slate-100">
+                  <Plus className="w-3 h-3 inline mr-1" /> Add "{defendantSearch.trim()}"
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Case Type */}
       <div>
-        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Court</label>
-        <input value={form.court} onChange={e => update('court', e.target.value)}
-          placeholder="e.g. United States District Court, Northern District of Georgia"
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Case Type</label>
+        <div className="flex gap-1">
+          {['FCRA', 'FDCPA', 'TCPA'].map(t => (
+            <button key={t} onClick={() => setCaseType(caseType === t ? '' : t)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold border transition ${
+                caseType === t
+                  ? t === 'FCRA' ? 'bg-blue-100 text-blue-700 border-blue-300'
+                    : t === 'FDCPA' ? 'bg-purple-100 text-purple-700 border-purple-300'
+                    : 'bg-green-100 text-green-700 border-green-300'
+                  : 'bg-white text-slate-400 border-slate-200'
+              }`}>
+              {t}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {/* Court */}
+      <div>
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Court</label>
+        <div className="relative">
+          <input value={courtSearch}
+            onChange={e => setCourtSearch(e.target.value)}
+            onFocus={() => setCourtFocused(true)}
+            onBlur={() => setTimeout(() => setCourtFocused(false), 200)}
+            placeholder="Start typing court name..."
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          {courtFocused && filteredCourts.length > 0 && (
+            <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+              {filteredCourts.map(c => (
+                <button key={c} onClick={() => { setCourtSearch(c); setCourtFocused(false); }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 text-slate-700">
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Case Facts */}
       <div>
         <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Case Facts</label>
-        <textarea value={form.case_facts} onChange={e => update('case_facts', e.target.value)}
+        <textarea value={caseFacts} onChange={e => setCaseFacts(e.target.value)}
           rows={4} placeholder="Describe what happened..."
           className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y" />
       </div>
 
+      {/* Damages */}
       <div>
         <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Damages Description</label>
-        <textarea value={form.damages_description} onChange={e => update('damages_description', e.target.value)}
+        <textarea value={damages} onChange={e => setDamages(e.target.value)}
           rows={2} placeholder="Describe damages suffered..."
           className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y" />
       </div>
