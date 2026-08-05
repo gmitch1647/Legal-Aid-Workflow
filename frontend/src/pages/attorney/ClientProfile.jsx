@@ -43,7 +43,6 @@ import {
   assignAttorneyToClient,
   getReferralPartners,
   assignReferral,
-  submitCase,
   getDefendants,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
@@ -107,6 +106,64 @@ const STATUS_ICONS = {
   closed: 'text-slate-400',
   denied: 'text-red-500',
 };
+
+function normalizedDefendants(values = []) {
+  const byName = new Map();
+  for (const value of values) {
+    const entry = typeof value === 'string'
+      ? { name: value.trim() }
+      : { id: value?.id, name: String(value?.name || '').trim(), custom: Boolean(value?.custom) };
+    if (!entry.name) continue;
+    const key = entry.name.toLocaleLowerCase();
+    if (!byName.has(key)) byName.set(key, entry);
+  }
+  return [...byName.values()];
+}
+
+function caseCaption(plaintiffName, defendants) {
+  const plaintiff = String(plaintiffName || '').trim() || 'Client';
+  const defendantNames = normalizedDefendants(defendants).map((defendant) => defendant.name);
+  return `${plaintiff} v. ${defendantNames.join(', ') || 'Unknown Defendant'}`;
+}
+
+function caseFactsWithParties(plaintiffName, defendants, facts = '') {
+  const defendantBlock = normalizedDefendants(defendants).map((defendant) => defendant.name).join('\n');
+  return `=== PLAINTIFF ===\nName: ${String(plaintiffName || '').trim() || 'Client'}\n\n=== DEFENDANTS ===\n${defendantBlock || 'Unknown Defendant'}\n\n=== FACTS ===\n${facts.trim()}`;
+}
+
+async function linkCaseDefendants(caseId, defendants) {
+  const defendantEntries = normalizedDefendants(defendants);
+  const defendantIds = [];
+
+  for (const defendant of defendantEntries) {
+    let defendantId = defendant.custom ? null : defendant.id;
+    if (!defendantId) {
+      const { data: matches, error: lookupError } = await supabase
+        .from('defendants')
+        .select('id')
+        .ilike('name', defendant.name)
+        .limit(1);
+      if (lookupError) throw lookupError;
+      defendantId = matches?.[0]?.id;
+    }
+    if (!defendantId) {
+      const { data: created, error: createError } = await supabase
+        .from('defendants')
+        .insert({ name: defendant.name, is_custom: true })
+        .select('id')
+        .single();
+      if (createError) throw createError;
+      defendantId = created?.id;
+    }
+    if (defendantId) defendantIds.push(defendantId);
+  }
+
+  if (!defendantIds.length) throw new Error('Could not link the selected defendants to the new case.');
+  const { error: linkError } = await supabase
+    .from('case_defendants')
+    .insert(defendantIds.map((defendantId) => ({ case_id: caseId, defendant_id: defendantId })));
+  if (linkError) throw linkError;
+}
 
 // ---------------------------------------------------------------------------
 // Client Profile Component
@@ -733,22 +790,22 @@ function NewCaseForm({ clientId, clientName, onComplete, onCancel }) {
     setSaving(true);
     setError('');
     try {
-      const { supabase: sb } = await import('../../lib/supabase');
-      const defNames = selectedDefendants.map(d => d.name).join(', ');
-      const caseFactsText = `=== PLAINTIFF ===\nName: ${clientName}\n\n=== DEFENDANTS ===\n${selectedDefendants.map(d => d.name + (d.registered_address ? `\n${d.registered_address}` : '')).join('\n\n')}\n\n=== FACTS ===\n${caseFacts}`;
-
-      const { error: insertErr } = await sb.from('cases').insert({
+      const defendants = normalizedDefendants(selectedDefendants);
+      const defNames = defendants.map((defendant) => defendant.name).join(', ');
+      const { data: createdCase, error: insertErr } = await supabase.from('cases').insert({
         client_id: clientId,
         plaintiff_name: clientName,
         defendant_name: defNames,
+        case_number: caseCaption(clientName, defendants),
         case_type: caseType,
         court: courtSearch.trim() || null,
-        case_facts: caseFactsText,
-        damages_description: damages.trim() || null,
+        case_facts: caseFactsWithParties(clientName, defendants, caseFacts),
+        damages_description: damages.trim() || 'See case facts.',
         status: 'submitted',
-      }).select().single();
+      }).select('id').single();
 
       if (insertErr) throw insertErr;
+      await linkCaseDefendants(createdCase.id, defendants);
       onComplete();
     } catch (err) {
       setError(err.message || 'Failed to create case');
@@ -897,16 +954,26 @@ function UploadExistingCase({ clientId, clientName, onComplete, onCancel }) {
     setError('');
 
     try {
-      // Create the case
-      const caseResult = await submitCase({
-        full_name: clientName,
-        defendants: defendants ? defendants.split(',').map(d => ({ name: d.trim() })) : [],
-        description: `[${caseType}] ${description}`,
+      const defendantEntries = normalizedDefendants(defendants.split(','));
+      if (!defendantEntries.length) {
+        setError('Add at least one defendant before uploading the complaint.');
+        return;
+      }
+      const defendantNames = defendantEntries.map((defendant) => defendant.name).join(', ');
+      const { data: createdCase, error: caseError } = await supabase.from('cases').insert({
         client_id: clientId,
-      });
+        plaintiff_name: clientName,
+        defendant_name: defendantNames,
+        case_number: caseCaption(clientName, defendantEntries),
+        case_type: caseType,
+        case_facts: caseFactsWithParties(clientName, defendantEntries, description),
+        damages_description: description.trim() || 'See uploaded complaint.',
+        status: 'submitted',
+      }).select('id').single();
+      if (caseError) throw caseError;
+      await linkCaseDefendants(createdCase.id, defendantEntries);
 
-      const caseId = caseResult?.id || caseResult?.case_id;
-
+      const caseId = createdCase.id;
       if (caseId) {
         // Upload complaint document
         if (complaintFile) {

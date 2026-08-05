@@ -32,7 +32,9 @@ function asRows(value, fallbackKeys = []) {
 
 function caseLabel(caseRow) {
   const client = caseRow?.client_name || caseRow?.client?.full_name || caseRow?.plaintiff_name || 'Client';
-  const number = caseRow?.case_number || `Case ${(caseRow?.id || '').slice(0, 8)}`;
+  const matterName = String(caseRow?.case_number || '').trim();
+  if (/\bv\.\s+\S/i.test(matterName)) return matterName;
+  const number = matterName || `Case ${(caseRow?.id || '').slice(0, 8)}`;
   return `${client} — ${number}`;
 }
 
