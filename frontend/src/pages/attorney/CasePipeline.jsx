@@ -145,6 +145,7 @@ export default function CasePipeline() {
             notify_email: s.notify_email || false,
             notify_sms: s.notify_sms || false,
             notify_attorney: s.notify_attorney || false,
+            notify_attorney_id: s.notify_attorney_id || 'assigned',
             notify_on_enter: s.notify_on_enter || false,
             notification_template: s.notification_template || '',
           }))
@@ -685,8 +686,8 @@ export default function CasePipeline() {
                     {col.id && (
                       <button
                         onClick={(e) => { e.stopPropagation(); setStageSettingsId(stageSettingsId === col.id ? null : col.id); }}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-blue-500 transition"
-                        title="Stage settings"
+                        className={`p-1 transition ${stageSettingsId === col.id ? 'text-blue-600' : 'text-slate-400 hover:text-blue-500'}`}
+                        title="Stage notification settings"
                       >
                         <Settings className="w-3.5 h-3.5" />
                       </button>
