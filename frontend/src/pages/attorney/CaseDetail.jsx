@@ -208,6 +208,7 @@ function NotesModal({ title, placeholder, submitLabel, onSubmit, onCancel, loadi
 function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, editingComplaint, setEditingComplaint, documents, onRefresh, onDownload }) {
   const [uploading, setUploading] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const fileInputRef = React.useRef(null);
 
   const complaintDocs = documents.filter(d =>
@@ -222,10 +223,14 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   async function handleUpload(files) {
     if (!files?.length) return;
     setUploading(true);
+    setUploadError('');
     for (const file of Array.from(files)) {
       try {
         await uploadDocument(caseId, file, 'complaint');
-      } catch (err) { console.error('Complaint upload failed:', err); }
+      } catch (err) {
+        console.error('Complaint upload failed:', err);
+        setUploadError(err.message || 'Upload failed');
+      }
     }
     setUploading(false);
     if (onRefresh) onRefresh();
@@ -336,7 +341,10 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
         </button>
         <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.doc" className="hidden"
           onChange={(e) => handleUpload(e.target.files)} />
-        {!hasText && complaintDocs.length === 0 && (
+        {uploadError && (
+          <p className="text-xs text-red-600 mt-2">Error: {uploadError}</p>
+        )}
+        {!hasText && complaintDocs.length === 0 && !uploadError && (
           <p className="text-xs text-slate-400 mt-2">No complaint drafted yet. Use the Drafter to create one, or upload an existing complaint.</p>
         )}
       </div>
@@ -389,6 +397,7 @@ function CaseTypeSelector({ caseId, currentTypes, onUpdate }) {
 
 function DocumentsUploadSection({ caseId, documents, onRefresh }) {
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [category, setCategory] = useState('other');
   const fileInputRef = React.useRef(null);
 
@@ -409,10 +418,14 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
   async function handleUpload(files) {
     if (!files?.length) return;
     setUploading(true);
+    setUploadError('');
     for (const file of Array.from(files)) {
       try {
         await uploadDocument(caseId, file, category);
-      } catch (err) { console.error('Upload failed:', err); }
+      } catch (err) {
+        console.error('Upload failed:', err);
+        setUploadError(err.message || 'Upload failed');
+      }
     }
     setUploading(false);
     if (onRefresh) onRefresh();
@@ -448,6 +461,7 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
         <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" className="hidden"
           onChange={e => handleUpload(e.target.files)} />
       </div>
+      {uploadError && <p className="text-xs text-red-600 mt-1 px-1">{uploadError}</p>}
 
       {/* List */}
       <div className="mt-4 space-y-2">
