@@ -226,6 +226,15 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         image.save(payload, format="PNG")
         return payload.getvalue()
 
+    def _wide_signature_png(self):
+        image = Image.new("RGBA", (360, 100), "white")
+        for x in range(8, 352):
+            y = 42 + ((x * 7) % 28)
+            image.putpixel((x, y), (0, 0, 0, 255))
+        payload = io.BytesIO()
+        image.save(payload, format="PNG")
+        return payload.getvalue()
+
     def test_execution_block_detector_selects_left_client_fields(self):
         document = fitz.open(stream=self._two_party_execution_pdf(), filetype="pdf")
         placement = signing._execution_block_placement(document)
@@ -281,6 +290,30 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(placement["layout"], "horizontal")
         self.assertEqual(placement["page"], 4)
         self.assertNotEqual(placement["strategy"], "fallback_last_page")
+
+    def test_horizontal_settlement_signature_stays_in_compact_text_safe_band(self):
+        source_pdf = self._horizontal_settlement_execution_pdf()
+        source = fitz.open(stream=source_pdf, filetype="pdf")
+        execution_page = source[4]
+        agreement_body = execution_page.search_for("IN WITNESS WHEREOF")[0]
+        client_name = execution_page.search_for("CLIENT EXAMPLE")[0]
+        source.close()
+
+        _, placement = signing._embed_signature(
+            source_pdf,
+            self._wide_signature_png(),
+            "Client Example",
+            "Client Example",
+            return_placement=True,
+        )
+        signature_rect = fitz.Rect(placement["signature_rect"])
+        rendered_rect = fitz.Rect(placement["rendered_signature_rect"])
+
+        self.assertEqual(placement["layout"], "horizontal")
+        self.assertLessEqual(signature_rect.width, 160)
+        self.assertGreaterEqual(rendered_rect.y0, agreement_body.y1 + 3)
+        self.assertLessEqual(rendered_rect.y1, client_name.y0 - 2)
+        self.assertLessEqual(rendered_rect.height, 25)
 
     def test_signature_image_is_trimmed_and_fitted_inside_execution_field(self):
         image = Image.new("RGBA", (300, 100), "white")

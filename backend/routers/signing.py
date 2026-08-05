@@ -1035,6 +1035,48 @@ def _fit_signature_image(sig_image_bytes: bytes, target_rect):
         return sig_image_bytes, field_rect
 
 
+def _horizontal_signature_band(page, by_rect, field_left: float, field_right: float) -> tuple[float, float]:
+    """Return a compact, text-safe signature band for a horizontal `By:` row.
+
+    Client names are commonly printed immediately below the line, while the
+    final agreement paragraph can sit just above it. Keep a handwritten
+    signature in the available whitespace instead of filling the entire area
+    between those text blocks.
+    """
+    import fitz  # PyMuPDF
+
+    preceding_bottom = None
+    try:
+        for block in page.get_text("dict").get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if not span.get("text", "").strip():
+                        continue
+                    span_rect = fitz.Rect(span["bbox"])
+                    if span_rect.y1 > by_rect.y0 - 0.25:
+                        continue
+                    if span_rect.x1 < field_left or span_rect.x0 > field_right:
+                        continue
+                    if preceding_bottom is None or span_rect.y1 > preceding_bottom:
+                        preceding_bottom = span_rect.y1
+    except Exception as exc:
+        logger.warning("Could not measure nearby execution-block text: %s", exc)
+
+    # A 14–28 pt band produces a legible but restrained signature. The fallback
+    # is directly on the blank portion of the By line if the agreement body
+    # leaves too little space above the line.
+    signature_top = max(by_rect.y0 - 18.0, 36.0)
+    if preceding_bottom is not None:
+        signature_top = max(signature_top, preceding_bottom + 3.5)
+    signature_bottom = by_rect.y1 - 4.0
+
+    if signature_bottom - signature_top < 14.0:
+        signature_top = by_rect.y0 + 1.0
+        signature_bottom = by_rect.y1 - 1.0
+
+    return signature_top, signature_bottom
+
+
 def _execution_block_placement(doc) -> Optional[dict]:
     """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
 
@@ -1105,9 +1147,13 @@ def _execution_block_placement(doc) -> Optional[dict]:
             # Keep the signature inside the actual plaintiff line, ending before
             # the date label rather than treating the later defense block as a
             # second column. The signature sits above the printed client name.
-            field_right = min(date_rect.x0 - 14, field_left + 205)
-            signature_top = max(by_rect.y0 - 35, 36)
-            signature_bottom = max(signature_top + 24, by_rect.y1 - 2)
+            field_right = min(date_rect.x0 - 14, field_left + 160)
+            signature_top, signature_bottom = _horizontal_signature_band(
+                page,
+                by_rect,
+                field_left,
+                field_right,
+            )
         else:
             next_column = min(
                 (
