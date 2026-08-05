@@ -25,6 +25,14 @@ import {
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
+function newSubmissionId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const value = Math.floor(Math.random() * 16);
+    return (character === 'x' ? value : ((value & 0x3) | 0x8)).toString(16);
+  });
+}
+
 function clientFromCase(caseData) {
   const client = caseData?.client || {};
   return {
@@ -36,6 +44,7 @@ function clientFromCase(caseData) {
 
 export default function SettlementAgreementModal({ caseId, mode = 'settlement', onClose, onSent }) {
   const fileInputRef = useRef(null);
+  const submissionIdRef = useRef('');
   const isCreditDisclosure = mode === 'credit_disclosure';
   const documentLabel = isCreditDisclosure ? 'Credit Disclosure' : 'Settlement Agreement';
   const documentLabelLower = documentLabel.toLowerCase();
@@ -95,6 +104,7 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
       return;
     }
 
+    submissionIdRef.current = '';
     setFile(candidate);
     setError('');
     if (!title || title === 'Settlement Agreement') {
@@ -138,6 +148,8 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
       formData.append('case_id', caseId);
       formData.append('client_id', client.id);
       formData.append('message', message.trim() || defaultMessage);
+      if (!submissionIdRef.current) submissionIdRef.current = newSubmissionId();
+      formData.append('submission_id', submissionIdRef.current);
       const signingSession = await createSigningSession(formData);
       let settlementSource = null;
       let attachmentError = '';
@@ -194,7 +206,7 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
                       <p className="truncate text-sm font-semibold text-emerald-950">{file.name}</p>
                       <p className="mt-0.5 text-xs text-emerald-700">{(file.size / 1024).toFixed(0)} KB · Ready to send</p>
                     </div>
-                    <button onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} className="rounded-lg p-1 text-emerald-700 transition hover:bg-emerald-100" aria-label="Remove selected agreement"><X className="h-4 w-4" /></button>
+                    <button onClick={() => { submissionIdRef.current = ''; setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} className="rounded-lg p-1 text-emerald-700 transition hover:bg-emerald-100" aria-label="Remove selected agreement"><X className="h-4 w-4" /></button>
                   </div>
                 ) : (
                   <div onDragOver={(event) => event.preventDefault()} onDrop={onDrop} onClick={() => fileInputRef.current?.click()} className="cursor-pointer rounded-xl border-2 border-dashed border-slate-300 px-5 py-7 text-center transition hover:border-primary-400 hover:bg-primary-50/40">
@@ -210,22 +222,22 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">{contactLabel} name <span className="text-red-600">*</span></label>
-                  <input value={signerName} onChange={(event) => setSignerName(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
+                  <input value={signerName} onChange={(event) => { submissionIdRef.current = ''; setSignerName(event.target.value); }} className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">{contactLabel} email <span className="text-red-600">*</span></label>
-                  <div className="relative"><Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input type="email" value={signerEmail} onChange={(event) => setSignerEmail(event.target.value)} className="w-full rounded-lg border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" /></div>
+                  <div className="relative"><Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input type="email" value={signerEmail} onChange={(event) => { submissionIdRef.current = ''; setSignerEmail(event.target.value); }} className="w-full rounded-lg border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" /></div>
                 </div>
               </div>
 
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Document title</label>
-                <input value={title} onChange={(event) => setTitle(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
+                <input value={title} onChange={(event) => { submissionIdRef.current = ''; setTitle(event.target.value); }} className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
               </div>
 
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Message to client</label>
-                <textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={3} className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
+                <textarea value={message} onChange={(event) => { submissionIdRef.current = ''; setMessage(event.target.value); }} rows={3} className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
               </div>
 
               {error && <div className="flex gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><p>{error}</p></div>}

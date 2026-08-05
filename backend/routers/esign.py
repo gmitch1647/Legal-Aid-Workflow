@@ -871,19 +871,44 @@ async def list_signature_requests(
     client_id: Optional[str] = None,
     authorization: str = Header(default=None),
 ):
+    """List the attorney's signature documents from the authoritative sources.
+
+    LegalFlow-managed agreements are written to ``signing_sessions`` first. The
+    legacy ``signature_requests`` row is only a dashboard mirror and can be
+    delayed independently, so reading the mirror alone can make a successful
+    first send look as though it did not happen. Merge the two sources here and
+    exclude mirrored IDs to keep the settlement checklist immediately accurate.
+    """
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
     supabase = get_supabase()
-    query = supabase.table("signature_requests").select("*").order("created_at", desc=True)
+    in_app_query = (
+        supabase.table("signing_sessions")
+        .select(IN_APP_SESSION_FIELDS)
+        .eq("sent_by", profile["id"])
+    )
+    in_app_sessions = _load_dashboard_rows(in_app_query, case_id, client_id)
+    in_app_documents = [_in_app_dashboard_document(session) for session in in_app_sessions]
+    in_app_ids = {str(session["id"]) for session in in_app_sessions}
 
-    if case_id:
-        query = query.eq("case_id", case_id)
-    if client_id:
-        query = query.eq("client_id", client_id)
+    provider_query = (
+        supabase.table("signature_requests")
+        .select("id,title,document_type,signer_name,signer_email,case_id,client_id,status,sent_at,signed_at,completed_at,created_at")
+        .eq("sent_by", profile["id"])
+    )
+    provider_rows = _load_dashboard_rows(provider_query, case_id, client_id)
+    external_documents = [
+        _external_dashboard_document(request)
+        for request in provider_rows
+        if str(request["id"]) not in in_app_ids
+    ]
 
-    resp = query.limit(100).execute()
-    return resp.data or []
+    return sorted(
+        in_app_documents + external_documents,
+        key=lambda document: document.get("signed_at") or document.get("sent_at") or document.get("created_at") or "",
+        reverse=True,
+    )[:100]
 
 
 # ---------------------------------------------------------------------------

@@ -337,6 +337,40 @@ class GroupedEsignDashboardTests(unittest.TestCase):
             }],
         })
 
+    def test_request_list_uses_authoritative_in_app_session_before_legacy_mirror(self):
+        pending_settlement = {**self.settlement, "status": "awaiting_signature", "signed_path": None}
+        supabase = _DashboardSupabase({
+            "signing_sessions": [pending_settlement],
+            # This deliberately simulates the short period immediately after a
+            # successful first send, before the non-authoritative mirror exists.
+            "signature_requests": [],
+        })
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", _attorney_user
+        ):
+            requests = asyncio.run(
+                esign.list_signature_requests("case-123", authorization="Bearer token")
+            )
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["id"], "settlement-session")
+        self.assertEqual(requests[0]["provider"], "legalflow")
+        self.assertEqual(requests[0]["document_type"], "settlement")
+        self.assertEqual(requests[0]["status"], "awaiting_signature")
+
+    def test_request_list_deduplicates_in_app_session_and_legacy_mirror(self):
+        supabase = self._supabase()
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", _attorney_user
+        ):
+            requests = asyncio.run(
+                esign.list_signature_requests("case-123", authorization="Bearer token")
+            )
+
+        request_ids = [request["id"] for request in requests]
+        self.assertEqual(request_ids.count("settlement-session"), 1)
+        self.assertIn("closing-provider-request", request_ids)
+
     def test_grouped_dashboard_uses_signed_session_and_groups_workflow_documents(self):
         supabase = self._supabase()
         with patch.object(esign, "get_supabase", return_value=supabase), patch.object(

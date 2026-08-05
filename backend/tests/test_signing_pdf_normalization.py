@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -45,10 +46,15 @@ class _FakeSigningStorage:
 
 
 class _FakeSigningQuery:
-    def __init__(self):
+    def __init__(self, data=None):
+        self.data = data or []
         self.update_payload = None
         self.insert_payloads = []
         self.eq_args = None
+        self.filters = []
+
+    def select(self, _fields):
+        return self
 
     def update(self, payload):
         self.update_payload = payload
@@ -60,18 +66,25 @@ class _FakeSigningQuery:
 
     def eq(self, column, value):
         self.eq_args = (column, value)
+        self.filters.append((column, value))
+        return self
+
+    def limit(self, _value):
         return self
 
     def execute(self):
-        return SimpleNamespace(data=[])
+        rows = self.data
+        for column, value in self.filters:
+            rows = [row for row in rows if str(row.get(column)) == str(value)]
+        return SimpleNamespace(data=rows)
 
 
 class _FakeSigningSupabase:
-    def __init__(self, downloads=None):
+    def __init__(self, downloads=None, existing_session=None):
         self.bucket = _FakeSigningBucket(downloads)
         self.storage = _FakeSigningStorage(self.bucket)
         self.queries = {
-            "signing_sessions": _FakeSigningQuery(),
+            "signing_sessions": _FakeSigningQuery([existing_session] if existing_session else []),
             "signature_requests": _FakeSigningQuery(),
         }
 
@@ -149,6 +162,39 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(stored["file_options"]["content-type"], signing.DOCX_MIME_TYPE)
         session_record = supabase.queries["signing_sessions"].insert_payloads[0]
         self.assertEqual(session_record["original_path"], stored["path"])
+
+    def test_first_send_retry_returns_existing_session_without_duplicate_upload(self):
+        session_id = "c49b4102-2ce6-422e-8db6-241ac8873ee0"
+        existing_session = {
+            "id": session_id,
+            "token": "existing-token",
+            "status": "awaiting_signature",
+            "original_path": "signing/c49b4102/source_Settlement Agreement.pdf",
+            "document_type": "settlement",
+            "sent_by": "attorney-1",
+        }
+        supabase = _FakeSigningSupabase(existing_session=existing_session)
+        upload = _FakeUpload(b"%PDF-1.7\nexisting-source", "Settlement Agreement.pdf", "application/pdf")
+
+        with patch.dict(os.environ, {"FRONTEND_URL": "https://legalflow.example"}), patch.object(
+            signing, "get_supabase", return_value=supabase
+        ), patch.object(signing, "_get_current_user", _attorney_user):
+            result = asyncio.run(
+                signing.create_signing_session(
+                    file=upload,
+                    signer_name="Client Example",
+                    signer_email="client@example.test",
+                    title="Settlement Agreement",
+                    submission_id=session_id,
+                    authorization="Bearer token",
+                )
+            )
+
+        self.assertTrue(result["reused"])
+        self.assertEqual(result["session_id"], session_id)
+        self.assertEqual(result["signing_url"], "https://legalflow.example/sign/existing-token")
+        self.assertEqual(supabase.bucket.uploads, [])
+        self.assertEqual(supabase.queries["signing_sessions"].insert_payloads, [])
 
     def test_docx_session_generates_separate_pdf_without_mutating_source_path(self):
         source_path = "signing/session-123/source_agreement.docx"

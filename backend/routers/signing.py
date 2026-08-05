@@ -68,6 +68,48 @@ def _generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _submission_session_id(submission_id: object) -> str:
+    """Use the browser's stable submission UUID when a request is retried.
+
+    The Settlement Center can lose a response after the document has already
+    been stored. Reusing this ID lets the next request safely return that same
+    signing session instead of creating a duplicate agreement and email.
+    """
+    if submission_id is None or submission_id == "":
+        return str(uuid.uuid4())
+    try:
+        return str(uuid.UUID(str(submission_id)))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid document submission identifier.") from exc
+
+
+def _existing_submission_session(supabase, session_id: str, attorney_id: str) -> Optional[dict]:
+    """Return an existing LegalFlow session owned by the current attorney."""
+    response = (
+        supabase.table("signing_sessions")
+        .select("id,token,status,original_path,document_type")
+        .eq("id", session_id)
+        .eq("sent_by", attorney_id)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def _existing_submission_response(session: dict) -> dict:
+    """Return the normal create response for a recovered first-send request."""
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return {
+        "session_id": session["id"],
+        "token": session["token"],
+        "signing_url": f"{frontend_url}/sign/{session['token']}",
+        "storage_path": session.get("original_path"),
+        "status": session.get("status") or "awaiting_signature",
+        "review_only": _is_view_only_document(session.get("document_type")),
+        "reused": True,
+    }
+
+
 def _safe_filename(filename: str) -> str:
     """Return a basename suitable for a storage-path component."""
     safe_name = Path(filename or "document").name.strip()
@@ -431,6 +473,7 @@ async def create_signing_session(
     case_id: str = Form(None),
     client_id: str = Form(None),
     message: str = Form("Please review and sign the attached document."),
+    submission_id: str = Form(None),
     authorization: str = Header(default=None),
 ):
     profile = await _get_current_user(authorization)
@@ -439,6 +482,7 @@ async def create_signing_session(
     document_type = _form_text(document_type, "general")
     title = _form_text(title, "Document for Signature")
     message = _form_text(message, "Please review and sign the attached document.")
+    submission_id = _form_text(submission_id, "")
     is_view_only = _is_view_only_document(document_type)
     session_status = "awaiting_review" if is_view_only else "awaiting_signature"
 
@@ -459,7 +503,14 @@ async def create_signing_session(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     supabase = get_supabase()
-    session_id = str(uuid.uuid4())
+    session_id = _submission_session_id(submission_id)
+    if submission_id:
+        # If the prior request created its session but the browser did not
+        # receive the response, return the saved session without re-uploading
+        # the document or delivering a duplicate email.
+        existing_session = _existing_submission_session(supabase, session_id, profile["id"])
+        if existing_session:
+            return _existing_submission_response(existing_session)
     token = _generate_token()
 
     # Preserve the attorney's original source attachment byte-for-byte.
@@ -472,6 +523,14 @@ async def create_signing_session(
             file_options={"content-type": source_content_type},
         )
     except Exception as e:
+        # A response interruption can leave the first request completed while a
+        # retry reaches storage at the same path. Recover the existing session
+        # when possible instead of treating that successful first send as a
+        # failed upload.
+        if submission_id:
+            existing_session = _existing_submission_session(supabase, session_id, profile["id"])
+            if existing_session:
+                return _existing_submission_response(existing_session)
         logger.error("Failed to upload signing document: %s", e)
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
@@ -496,6 +555,13 @@ async def create_signing_session(
     try:
         supabase.table("signing_sessions").insert(record).execute()
     except Exception as e:
+        # Concurrent retries that share a submission ID can race at the insert.
+        # Re-read the authoritative session before reporting an error so the
+        # attorney is not asked to send the same agreement a second time.
+        if submission_id:
+            existing_session = _existing_submission_session(supabase, session_id, profile["id"])
+            if existing_session:
+                return _existing_submission_response(existing_session)
         logger.error("Failed to create signing session: %s", e)
         try:
             supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
@@ -577,6 +643,7 @@ async def create_signing_session(
         "signing_url": signing_url,
         "status": session_status,
         "review_only": is_view_only,
+        "reused": False,
     }
 
 
