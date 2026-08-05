@@ -586,6 +586,12 @@ function NotificationsTab() {
     client_message: true,
     pipeline_error: true,
     weekly_summary: false,
+    esign_document_viewed: true,
+    esign_document_signed: true,
+    esign_auto_reminders: true,
+    esign_reminder_initial_days: 2,
+    esign_reminder_interval_days: 3,
+    esign_reminder_max_count: 3,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -599,6 +605,13 @@ function NotificationsTab() {
 
   const handleToggle = (key) => () => {
     setPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
+    setSaved(false);
+  };
+
+  const handleNumberChange = (key, min, max) => (event) => {
+    const rawValue = Number(event.target.value);
+    const value = Number.isFinite(rawValue) ? Math.min(max, Math.max(min, rawValue)) : min;
+    setPrefs((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
   };
 
@@ -630,6 +643,11 @@ function NotificationsTab() {
     { key: 'client_message', label: 'Client Message', description: 'When a client sends a new message' },
     { key: 'pipeline_error', label: 'Pipeline Error', description: 'When the AI pipeline encounters an error' },
     { key: 'weekly_summary', label: 'Weekly Summary', description: 'Weekly digest of all case activity' },
+  ];
+
+  const ESIGN_ALERT_OPTIONS = [
+    { key: 'esign_document_viewed', label: 'Document Viewed', description: 'Receive an email when a client first opens a secure document link.' },
+    { key: 'esign_document_signed', label: 'Document Signed', description: 'Receive an email when a client completes a signature.' },
   ];
 
   return (
@@ -680,6 +698,109 @@ function NotificationsTab() {
           </label>
         ))}
       </div>
+
+      <section className="space-y-4 border-t border-slate-200 pt-6">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">E-Signature Notifications</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Track client activity without including document contents in notification emails.
+          </p>
+        </div>
+
+        <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {ESIGN_ALERT_OPTIONS.map((opt) => (
+            <label
+              key={opt.key}
+              className="flex cursor-pointer items-center justify-between px-4 py-4 transition-colors hover:bg-slate-50"
+            >
+              <div>
+                <p className="text-sm font-medium text-slate-900">{opt.label}</p>
+                <p className="mt-0.5 text-xs text-slate-500">{opt.description}</p>
+              </div>
+              <div className="relative ml-4 shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(prefs[opt.key])}
+                  onChange={handleToggle(opt.key)}
+                  className="sr-only"
+                />
+                <div className={`h-6 w-11 rounded-full transition-colors ${prefs[opt.key] ? 'bg-primary-600' : 'bg-slate-200'}`}>
+                  <div className={`h-5 w-5 translate-y-0.5 rounded-full bg-white shadow-sm transition-transform ${prefs[opt.key] ? 'translate-x-[1.375rem]' : 'translate-x-0.5'}`} />
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-slate-900">Automatic pending-signature reminders</p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Emails stop automatically once a document is signed, declined, canceled, or expires.
+              </p>
+            </div>
+            <label className="relative shrink-0">
+              <input
+                type="checkbox"
+                checked={Boolean(prefs.esign_auto_reminders)}
+                onChange={handleToggle('esign_auto_reminders')}
+                className="sr-only"
+              />
+              <div className={`h-6 w-11 rounded-full transition-colors ${prefs.esign_auto_reminders ? 'bg-primary-600' : 'bg-slate-200'}`}>
+                <div className={`h-5 w-5 translate-y-0.5 rounded-full bg-white shadow-sm transition-transform ${prefs.esign_auto_reminders ? 'translate-x-[1.375rem]' : 'translate-x-0.5'}`} />
+              </div>
+            </label>
+          </div>
+
+          {prefs.esign_auto_reminders && (
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <label className="text-xs font-medium text-slate-700">
+                First reminder after
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={prefs.esign_reminder_initial_days}
+                    onChange={handleNumberChange('esign_reminder_initial_days', 1, 30)}
+                    className="input h-9 w-20"
+                  />
+                  <span className="text-xs font-normal text-slate-500">days</span>
+                </div>
+              </label>
+              <label className="text-xs font-medium text-slate-700">
+                Repeat every
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={prefs.esign_reminder_interval_days}
+                    onChange={handleNumberChange('esign_reminder_interval_days', 1, 30)}
+                    className="input h-9 w-20"
+                  />
+                  <span className="text-xs font-normal text-slate-500">days</span>
+                </div>
+              </label>
+              <label className="text-xs font-medium text-slate-700">
+                Maximum reminders
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={prefs.esign_reminder_max_count}
+                    onChange={handleNumberChange('esign_reminder_max_count', 1, 10)}
+                    className="input h-9 w-20"
+                  />
+                  <span className="text-xs font-normal text-slate-500">emails</span>
+                </div>
+              </label>
+            </div>
+          )}
+        </div>
+      </section>
 
       <div className="flex items-center gap-3 border-t border-slate-200 pt-6">
         <button onClick={handleSave} disabled={saving} className="btn-primary gap-2">

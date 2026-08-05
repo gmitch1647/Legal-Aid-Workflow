@@ -30,6 +30,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 
+from utils.esign_notifications import notify_attorney_of_esign_event, signed_document_filename
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -224,8 +225,7 @@ def _link_signed_pdf_to_case(
         if existing.data:
             return
 
-        original_name = Path(session.get("original_path", "document.pdf")).stem
-        file_name = f"signed_{original_name.removeprefix('original_')}.pdf"
+        file_name = signed_document_filename(session)
         supabase.table("case_documents").insert({
             "case_id": case_id,
             "file_name": file_name,
@@ -597,23 +597,45 @@ async def get_signing_session(token: str):
     if session["status"] in ("signed", "complete"):
         raise HTTPException(status_code=400, detail="This document has already been signed.")
 
-    # Opening a credit disclosure is the only acknowledgement required. Keep
-    # the attorney-facing Settlement Center in sync without collecting a
-    # signature or client response.
-    if _is_view_only_document(session.get("document_type")) and session.get("status") == "awaiting_review":
+    # The first authenticated-token page load is the first secure view.  Record
+    # it once for every document type, keeping the in-app session authoritative
+    # and its legacy dashboard mirror aligned.  A view-only disclosure becomes
+    # complete on view; a signable document remains actionable with status
+    # ``viewed`` until the signer completes it.
+    if not session.get("viewed_at"):
         viewed_at = datetime.now(timezone.utc).isoformat()
+        is_view_only = _is_view_only_document(session.get("document_type"))
+        updated_status = (
+            "viewed"
+            if is_view_only or session.get("status") == "awaiting_signature"
+            else session.get("status")
+        )
         try:
             supabase.table("signing_sessions").update({
-                "status": "viewed",
+                "status": updated_status,
+                "viewed_at": viewed_at,
                 "updated_at": viewed_at,
             }).eq("id", session["id"]).execute()
             supabase.table("signature_requests").update({
-                "status": "viewed",
+                "status": updated_status,
+                "viewed_at": viewed_at,
                 "updated_at": viewed_at,
             }).eq("id", session["id"]).execute()
-            session["status"] = "viewed"
+            session.update({
+                "status": updated_status,
+                "viewed_at": viewed_at,
+            })
+            try:
+                await notify_attorney_of_esign_event(
+                    supabase=supabase,
+                    record=session,
+                    event="viewed",
+                    source_table="signing_sessions",
+                )
+            except Exception:
+                logger.exception("Could not send first-view alert for signing session %s", session["id"])
         except Exception:
-            logger.warning("Could not record credit disclosure review for %s", session["id"])
+            logger.warning("Could not record first secure document view for %s", session["id"])
 
     return {
         "session_id": session["id"],
@@ -767,8 +789,15 @@ async def complete_signing(token: str, request: Request):
         "audit_trail": audit,
         "updated_at": now,
     }).eq("token", token).execute()
+    signed_session = {
+        **session,
+        "status": "signed",
+        "signed_path": signed_path,
+        "signed_at": now,
+        "audit_trail": audit,
+    }
 
-    _link_signed_pdf_to_case(supabase, session, signed_path, signed_pdf)
+    _link_signed_pdf_to_case(supabase, signed_session, signed_path, signed_pdf)
 
     # A generated closing statement retains its own workflow record in addition
     # to the normal signing audit and linked case document.
@@ -795,31 +824,17 @@ async def complete_signing(token: str, request: Request):
     except Exception:
         pass
 
-    # Notify the attorney
+    # Email the attorney only if their E-Signature preferences permit it.  The
+    # helper records an exactly-once delivery timestamp after provider success.
     try:
-        from utils.email_service import send_email
-        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
-        attorney_resp = supabase.table("profiles").select("email, full_name").eq("id", session["sent_by"]).limit(1).execute()
-        if attorney_resp.data:
-            atty = attorney_resp.data[0]
-            await send_email(
-                to=atty["email"],
-                subject=f"Document Signed: {session['title']}",
-                body=f"""
-                <div style="font-family:sans-serif;font-size:14px;line-height:1.6;">
-                    <h2 style="color:#059669;">Document Signed</h2>
-                    <p>{session['signer_name']} has signed <strong>{session['title']}</strong>.</p>
-                    <p>
-                        <a href="{frontend_url}/attorney/esign"
-                           style="background:#2563eb;color:white;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">
-                            View in LegalFlow
-                        </a>
-                    </p>
-                </div>
-                """,
-            )
-    except Exception as e:
-        logger.warning("Failed to notify attorney of signature: %s", e)
+        await notify_attorney_of_esign_event(
+            supabase=supabase,
+            record=signed_session,
+            event="signed",
+            source_table="signing_sessions",
+        )
+    except Exception:
+        logger.exception("Could not send signature alert for signing session %s", session["id"])
 
     return {"status": "signed", "message": "Document signed successfully."}
 
@@ -851,7 +866,7 @@ async def download_signed_pdf(token: str, authorization: str = Header(default=No
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="signed_{session["title"]}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{signed_document_filename(session)}"'},
     )
 
 

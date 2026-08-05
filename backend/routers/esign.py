@@ -14,14 +14,15 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from utils.esign_notifications import notify_attorney_of_esign_event, signed_document_filename
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -328,7 +329,7 @@ def _group_dashboard_documents(supabase, documents: list[dict]) -> list[dict]:
     )
 
 
-async def _send_in_app_reminder(session: dict) -> None:
+async def _send_in_app_reminder(session: dict) -> bool:
     """Email a fresh review or signing link for an active LegalFlow session."""
     from html import escape
     from utils.email_service import send_email
@@ -351,7 +352,7 @@ async def _send_in_app_reminder(session: dict) -> None:
         body_copy = f"Please review and sign {session.get('title', 'your document')}."
         button_label = "Review &amp; Sign Document"
 
-    await send_email(
+    return await send_email(
         to=session["signer_email"],
         subject=subject,
         body=f"""
@@ -364,6 +365,167 @@ async def _send_in_app_reminder(session: dict) -> None:
         </div>
         """,
     )
+
+
+PENDING_REMINDER_STATUSES = ("awaiting_signature", "viewed", "awaiting_review")
+SESSION_REMINDER_FIELDS = (
+    "id, token, title, document_type, signer_name, signer_email, case_id, client_id, "
+    "sent_by, status, created_at, viewed_at, reminder_count, last_reminder_at"
+)
+REQUEST_REMINDER_FIELDS = (
+    "id, title, document_type, signer_name, signer_email, case_id, client_id, sent_by, "
+    "status, sent_at, created_at, viewed_at, reminder_count, last_reminder_at"
+)
+
+
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    """Normalize an ISO timestamp to an aware UTC datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _auto_reminder_is_due(record: dict[str, Any], preferences: dict[str, Any], now: datetime) -> bool:
+    """Return whether one pending record is eligible for its next reminder."""
+    if record.get("status") not in PENDING_REMINDER_STATUSES:
+        return False
+    reminder_count = int(record.get("reminder_count") or 0)
+    max_count = int(preferences["esign_reminder_max_count"])
+    if reminder_count >= max_count:
+        return False
+
+    last_reminder_at = _parse_utc_timestamp(record.get("last_reminder_at"))
+    sent_at = _parse_utc_timestamp(record.get("sent_at") or record.get("created_at"))
+    anchor = last_reminder_at or sent_at
+    if not anchor:
+        return False
+
+    wait_days = (
+        int(preferences["esign_reminder_interval_days"])
+        if last_reminder_at
+        else int(preferences["esign_reminder_initial_days"])
+    )
+    return now >= anchor + timedelta(days=wait_days)
+
+
+async def _send_external_reminder(request_record: dict[str, Any]) -> bool:
+    """Ask Dropbox Sign to send a provider-managed reminder for one request."""
+    if not _is_configured():
+        logger.warning("Cannot send automatic Dropbox Sign reminder: provider is not configured")
+        return False
+
+    import httpx
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{DROPBOX_SIGN_BASE}/signature_request/remind/{request_record['id']}",
+            json={"email_address": request_record["signer_email"]},
+            auth=(_get_api_key(), ""),
+        )
+    if response.status_code == 200:
+        return True
+    logger.warning(
+        "Dropbox Sign reminder failed for %s: HTTP %s",
+        request_record.get("id"),
+        response.status_code,
+    )
+    return False
+
+
+async def process_automatic_signature_reminders(
+    *,
+    supabase=None,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Send due reminders for pending documents while honoring attorney settings.
+
+    LegalFlow sessions remain authoritative for in-app signing.  Their legacy
+    request-table mirrors are excluded so a client never receives two reminders
+    for the same document in one scan.
+    """
+    from utils.esign_notifications import get_esign_preferences
+
+    supabase = supabase or get_supabase()
+    now = now or datetime.now(timezone.utc)
+    now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+    results = {"checked": 0, "sent": 0, "failed": 0, "skipped": 0}
+
+    try:
+        session_rows = (
+            supabase.table("signing_sessions")
+            .select(SESSION_REMINDER_FIELDS)
+            .in_("status", list(PENDING_REMINDER_STATUSES))
+            .limit(200)
+            .execute()
+            .data
+            or []
+        )
+        request_rows = (
+            supabase.table("signature_requests")
+            .select(REQUEST_REMINDER_FIELDS)
+            .in_("status", list(PENDING_REMINDER_STATUSES))
+            .limit(200)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        logger.exception("Could not load pending E-Signature reminders")
+        results["failed"] += 1
+        return results
+
+    in_app_ids = {str(row.get("id")) for row in session_rows}
+    candidates: list[tuple[str, dict[str, Any], bool]] = [
+        ("signing_sessions", row, True) for row in session_rows
+    ]
+    candidates.extend(
+        ("signature_requests", row, False)
+        for row in request_rows
+        if str(row.get("id")) not in in_app_ids
+    )
+
+    for source_table, record, is_in_app in candidates:
+        results["checked"] += 1
+        preferences, _attorney = await get_esign_preferences(supabase, record.get("sent_by"))
+        if not preferences["esign_auto_reminders"] or not _auto_reminder_is_due(record, preferences, now):
+            results["skipped"] += 1
+            continue
+
+        try:
+            delivered = (
+                await _send_in_app_reminder(record)
+                if is_in_app
+                else await _send_external_reminder(record)
+            )
+        except Exception:
+            logger.exception("Could not deliver automatic E-Signature reminder for %s", record.get("id"))
+            delivered = False
+
+        if not delivered:
+            results["failed"] += 1
+            continue
+
+        try:
+            supabase.table(source_table).update({
+                "reminder_count": int(record.get("reminder_count") or 0) + 1,
+                "last_reminder_at": now.isoformat(),
+            }).eq("id", record["id"]).execute()
+            results["sent"] += 1
+        except Exception:
+            # The provider accepted the email but tracking failed; log this as a
+            # delivery issue so an administrator can repair the history before a
+            # later scan retries.
+            logger.exception("Reminder delivered but not tracked for %s", record.get("id"))
+            results["failed"] += 1
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -867,10 +1029,12 @@ async def remind_signer(
         if in_app_session.get("status") not in allowed_statuses:
             raise HTTPException(status_code=400, detail="Only pending in-app requests can be reminded.")
         try:
-            await _send_in_app_reminder(in_app_session)
+            delivered = await _send_in_app_reminder(in_app_session)
         except Exception as exc:
             logger.exception("Could not send in-app document reminder for %s", request_id)
             raise HTTPException(status_code=500, detail="Could not send document reminder.") from exc
+        if not delivered:
+            raise HTTPException(status_code=502, detail="Email delivery failed. Please check the email configuration and try again.")
         return {
             "status": "review_reminder_sent" if is_view_only else "reminder_sent",
             "email": in_app_session["signer_email"],
@@ -886,15 +1050,12 @@ async def remind_signer(
 
     email = db_resp.data[0]["signer_email"]
 
-    import httpx
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{DROPBOX_SIGN_BASE}/signature_request/remind/{request_id}",
-            json={"email_address": email},
-            auth=(_get_api_key(), ""),
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail="Failed to send reminder")
+    delivered = await _send_external_reminder({
+        "id": request_id,
+        "signer_email": email,
+    })
+    if not delivered:
+        raise HTTPException(status_code=502, detail="Failed to send reminder")
 
     return {"status": "reminder_sent", "email": email}
 
@@ -1030,8 +1191,21 @@ async def download_signed_document(
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=signed-{request_id[:8]}.pdf"},
+            headers={"Content-Disposition": f'attachment; filename="{signed_document_filename(in_app_session)}"'},
         )
+
+    try:
+        metadata_response = (
+            supabase.table("signature_requests")
+            .select("id, title, document_type, signer_name")
+            .eq("id", request_id)
+            .limit(1)
+            .execute()
+        )
+        external_request = metadata_response.data[0] if metadata_response.data else {"title": f"Document {request_id[:8]}"}
+    except Exception:
+        logger.exception("Could not load signed-document metadata for %s", request_id)
+        external_request = {"title": f"Document {request_id[:8]}"}
 
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")
@@ -1050,7 +1224,28 @@ async def download_signed_document(
         return StreamingResponse(
             iter([resp.content]),
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=signed-{request_id[:8]}.pdf"},
+            headers={"Content-Disposition": f'attachment; filename="{signed_document_filename(external_request)}"'},
+        )
+
+
+async def _notify_external_esign_event(supabase, request_id: str, event: str) -> None:
+    """Deliver an attorney alert for one persisted external-provider event."""
+    response = (
+        supabase.table("signature_requests")
+        .select(
+            "id, title, document_type, signer_name, signer_email, case_id, client_id, "
+            "sent_by, status, viewed_at, view_notification_sent_at, signed_notification_sent_at"
+        )
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        await notify_attorney_of_esign_event(
+            supabase=supabase,
+            record=response.data[0],
+            event=event,
+            source_table="signature_requests",
         )
 
 
@@ -1097,7 +1292,7 @@ async def esign_webhook(request: Request):
         except Exception as e:
             logger.warning(f"Webhook DB update failed: {e}")
 
-        # Notify the attorney
+        # Preserve the in-app notice and also deliver the preference-aware email.
         try:
             req_resp = supabase.table("signature_requests").select("sent_by, title, case_id, signer_name").eq("id", signature_request_id).execute()
             if req_resp.data:
@@ -1109,6 +1304,7 @@ async def esign_webhook(request: Request):
                     message=f"{req.get('signer_name', 'Client')} signed \"{req.get('title', 'document')}\"",
                     case_id=req.get("case_id"),
                 )
+            await _notify_external_esign_event(supabase, signature_request_id, "signed")
         except Exception as e:
             logger.warning(f"Webhook notification failed: {e}")
 
@@ -1119,6 +1315,10 @@ async def esign_webhook(request: Request):
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", signature_request_id).execute()
+            # Some providers emit only the completion callback. The shared
+            # timestamp guard prevents a duplicate alert if an individual
+            # signer callback was already delivered.
+            await _notify_external_esign_event(supabase, signature_request_id, "signed")
         except Exception as e:
             logger.warning(f"Webhook DB update failed: {e}")
 
@@ -1133,10 +1333,19 @@ async def esign_webhook(request: Request):
 
     elif event_type == "signature_request_viewed":
         try:
-            supabase.table("signature_requests").update({
-                "status": "viewed",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", signature_request_id).execute()
+            now = datetime.now(timezone.utc).isoformat()
+            existing = (
+                supabase.table("signature_requests")
+                .select("id, viewed_at")
+                .eq("id", signature_request_id)
+                .limit(1)
+                .execute()
+            )
+            update_payload = {"status": "viewed", "updated_at": now}
+            if existing.data and not existing.data[0].get("viewed_at"):
+                update_payload["viewed_at"] = now
+            supabase.table("signature_requests").update(update_payload).eq("id", signature_request_id).execute()
+            await _notify_external_esign_event(supabase, signature_request_id, "viewed")
         except Exception as e:
             logger.warning(f"Webhook DB update failed: {e}")
 

@@ -160,6 +160,50 @@ async def start_suitedash_poller():
     logger.info("SuiteDash auto-poller scheduled")
 
 
+# ---------------------------------------------------------------------------
+# Automatic E-Signature reminder scheduler — checks pending documents hourly
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+async def start_esign_reminder_scheduler():
+    """Launch recurring, preference-aware E-Signature reminders.
+
+    The task performs deterministic database and email work only.  It is
+    disabled only when ``ESIGN_REMINDER_WORKER_ENABLED`` is explicitly set to a
+    false-like value, which allows a separately scheduled production worker to
+    take ownership if the service is scaled beyond one instance.
+    """
+    import asyncio
+
+    enabled = os.environ.get("ESIGN_REMINDER_WORKER_ENABLED", "true").strip().lower()
+    if enabled not in {"true", "1", "yes"}:
+        logger.info("E-Signature automatic reminder scheduler disabled")
+        return
+
+    async def _reminder_loop():
+        # Give the database and migration service a moment to become available.
+        await asyncio.sleep(45)
+        logger.info("E-Signature reminder scheduler started — checking hourly")
+        while True:
+            try:
+                from routers.esign import process_automatic_signature_reminders
+
+                result = await process_automatic_signature_reminders()
+                logger.info(
+                    "E-Signature reminder scan complete: checked=%s sent=%s failed=%s skipped=%s",
+                    result.get("checked", 0),
+                    result.get("sent", 0),
+                    result.get("failed", 0),
+                    result.get("skipped", 0),
+                )
+            except Exception:
+                logger.exception("E-Signature automatic reminder scan failed")
+            await asyncio.sleep(3600)
+
+    asyncio.create_task(_reminder_loop())
+    logger.info("E-Signature automatic reminder scheduler scheduled")
+
+
 @app.get("/", tags=["Health"])
 async def root():
     """Simple health check endpoint."""
