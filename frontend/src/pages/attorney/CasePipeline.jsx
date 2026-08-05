@@ -13,8 +13,13 @@ import {
   Check,
   Trash2,
   GripVertical,
+  Settings,
+  Mail,
+  MessageSquare,
+  User,
+  Save,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase, getStaffAttorneys } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, updatePipelineStage, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase, getStaffAttorneys } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -65,6 +70,7 @@ export default function CasePipeline() {
 
   // Edit mode — drag columns to reorder
   const [editMode, setEditMode] = useState(false);
+  const [stageSettingsId, setStageSettingsId] = useState(null);
 
   // Notification modal
   const [notifyModal, setNotifyModal] = useState(null); // { caseId, caseName, oldStatus, newStatus, stage }
@@ -300,9 +306,9 @@ export default function CasePipeline() {
         const { supabase } = await import('../../lib/supabase');
         let attorneyEmail = '';
         let attorneyName = '';
+        let attorneyPhone = '';
 
         if (notifyAttorneyId === 'assigned' && clientId) {
-          // Get the assigned attorney
           const { data: clientProfile } = await supabase
             .from('profiles')
             .select('assigned_attorney_id')
@@ -312,29 +318,52 @@ export default function CasePipeline() {
           if (clientProfile?.assigned_attorney_id) {
             const { data: atty } = await supabase
               .from('profiles')
-              .select('email, full_name')
+              .select('email, full_name, phone')
               .eq('id', clientProfile.assigned_attorney_id)
               .single();
             attorneyEmail = atty?.email || '';
             attorneyName = atty?.full_name || '';
+            attorneyPhone = atty?.phone || '';
           }
         } else {
-          // Specific attorney selected from dropdown
           const selected = staffAttorneyList.find(a => a.id === notifyAttorneyId);
           if (selected) {
             attorneyEmail = selected.email || '';
             attorneyName = selected.full_name || '';
+            attorneyPhone = selected.phone || '';
           }
         }
 
+        const stageName = notifyModal.stage?.name || newStatus;
+        const frontendUrl = window.location.origin;
+        const caseLink = `${frontendUrl}/attorney/cases/${caseId}`;
+
+        // Build message from template or default
+        const emailBody = (notifyModal.stage?.notification_template || notifyMessage || `Hi {attorney_name},\n\nThe case for {client_name} has been moved to "{stage_name}". Please review it in LegalFlow.\n\n{case_link}`)
+          .replace(/{attorney_name}/g, attorneyName)
+          .replace(/{client_name}/g, clientName)
+          .replace(/{stage_name}/g, stageName)
+          .replace(/{case_link}/g, caseLink);
+
+        // Send email
         if (attorneyEmail) {
           const { sendClientEmail } = await import('../../lib/api');
-          const stageName = notifyModal.stage?.name || newStatus;
           await sendClientEmail({
             client_id: clientId || '',
             to_email: attorneyEmail,
-            subject: `Case Update: ${clientName} moved to ${stageName}`,
-            body: `Attorney ${attorneyName},\n\nCase for ${clientName} has been moved to stage: ${stageName}.\n\nPlease review the case in LegalFlow.`,
+            subject: `Case Update: ${clientName} — ${stageName}`,
+            body: emailBody,
+          });
+        }
+
+        // Send SMS if enabled
+        if (sendSms && attorneyPhone) {
+          const { sendClientSMS } = await import('../../lib/api');
+          const smsBody = `LegalFlow: Case for ${clientName} moved to "${stageName}". View: ${caseLink}`;
+          await sendClientSMS({
+            client_id: clientId || '',
+            to_phone: attorneyPhone,
+            body: smsBody,
           });
         }
       } catch (err) {
@@ -655,6 +684,16 @@ export default function CasePipeline() {
                     </span>
                     {col.id && (
                       <button
+                        onClick={(e) => { e.stopPropagation(); setStageSettingsId(stageSettingsId === col.id ? null : col.id); }}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-blue-500 transition"
+                        title="Stage settings"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {col.notify_attorney && <Mail className="w-3 h-3 text-blue-400" title="Attorney email enabled" />}
+                    {col.id && (
+                      <button
                         onClick={() => handleDeleteStage(col.id, col.label)}
                         className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition"
                         title="Delete this stage"
@@ -664,6 +703,22 @@ export default function CasePipeline() {
                     )}
                   </div>
                 </div>
+
+                {/* Stage Settings Panel */}
+                {stageSettingsId === col.id && (
+                  <StageSettingsPanel
+                    stage={col}
+                    staffAttorneys={staffAttorneyList}
+                    onSave={async (updates) => {
+                      try {
+                        await updatePipelineStage(col.id, updates);
+                        setColumns(prev => prev.map(c => c.id === col.id ? { ...c, ...updates } : c));
+                        setStageSettingsId(null);
+                      } catch (err) { console.error('Failed to update stage:', err); }
+                    }}
+                    onClose={() => setStageSettingsId(null)}
+                  />
+                )}
 
                 {/* Droppable Area */}
                 <Droppable droppableId={col.key} type="CASE" isDropDisabled={editMode}>
@@ -832,6 +887,96 @@ export default function CasePipeline() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+function StageSettingsPanel({ stage, staffAttorneys, onSave, onClose }) {
+  const [notifyAttorney, setNotifyAttorney] = useState(stage.notify_attorney || false);
+  const [notifyEmail, setNotifyEmail] = useState(stage.notify_email || false);
+  const [notifySms, setNotifySms] = useState(stage.notify_sms || false);
+  const [attorneyId, setAttorneyId] = useState(stage.notify_attorney_id || 'assigned');
+  const [template, setTemplate] = useState(
+    stage.notification_template || `Hi {attorney_name},\n\nThe case for {client_name} has been moved to "${stage.label || stage.name}". Please review it in LegalFlow.\n\n{case_link}`
+  );
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    await onSave({
+      notify_attorney: notifyAttorney,
+      notify_email: notifyEmail,
+      notify_sms: notifySms,
+      notify_attorney_id: attorneyId,
+      notification_template: template,
+    });
+    setSaving(false);
+  }
+
+  return (
+    <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/50 p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-bold text-slate-700">Stage Notifications</h4>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-3.5 h-3.5" /></button>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" checked={notifyAttorney} onChange={e => setNotifyAttorney(e.target.checked)}
+          className="rounded border-slate-300" />
+        <Mail className="w-3.5 h-3.5 text-blue-500" />
+        <span className="text-xs text-slate-700">Email attorney when case enters this stage</span>
+      </label>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" checked={notifyEmail} onChange={e => setNotifyEmail(e.target.checked)}
+          className="rounded border-slate-300" />
+        <Mail className="w-3.5 h-3.5 text-emerald-500" />
+        <span className="text-xs text-slate-700">Email client when case enters this stage</span>
+      </label>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" checked={notifySms} onChange={e => setNotifySms(e.target.checked)}
+          className="rounded border-slate-300" />
+        <MessageSquare className="w-3.5 h-3.5 text-purple-500" />
+        <span className="text-xs text-slate-700">Text (SMS) attorney when case enters this stage</span>
+      </label>
+
+      {notifyAttorney && (
+        <div>
+          <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Which Attorney</label>
+          <select value={attorneyId} onChange={e => setAttorneyId(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="assigned">Assigned Attorney (auto)</option>
+            {staffAttorneys.map(a => (
+              <option key={a.id} value={a.id}>{a.full_name} ({a.email})</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {(notifyAttorney || notifyEmail) && (
+        <div>
+          <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+            Email Template
+            <span className="ml-2 font-normal normal-case text-slate-400">
+              Use: {'{client_name}'} {'{attorney_name}'} {'{stage_name}'} {'{case_link}'}
+            </span>
+          </label>
+          <textarea value={template} onChange={e => setTemplate(e.target.value)}
+            rows={4}
+            className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y font-mono" />
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="px-3 py-1 text-xs text-slate-500">Cancel</button>
+        <button onClick={handleSave} disabled={saving}
+          className="px-3 py-1 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1">
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+          Save
+        </button>
+      </div>
     </div>
   );
 }

@@ -49,6 +49,7 @@ class StageCreate(BaseModel):
     notify_email: bool = False
     notify_sms: bool = False
     notify_attorney: bool = False
+    notify_attorney_id: Optional[str] = None
     notification_template: Optional[str] = ""
 
 
@@ -63,6 +64,7 @@ class StageUpdate(BaseModel):
     notify_email: Optional[bool] = None
     notify_sms: Optional[bool] = None
     notify_attorney: Optional[bool] = None
+    notify_attorney_id: Optional[str] = None
     notification_template: Optional[str] = None
 
 
