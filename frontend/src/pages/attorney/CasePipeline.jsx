@@ -704,7 +704,21 @@ export default function CasePipeline() {
                         <Settings className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    {col.notify_attorney && <Mail className="w-3 h-3 text-blue-400" title="Attorney email enabled" />}
+                    {col.notify_attorney && (
+                      <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-100 rounded-full" title="Attorney email on">
+                        <Mail className="w-2.5 h-2.5 text-blue-600" />
+                      </span>
+                    )}
+                    {col.notify_email && (
+                      <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-100 rounded-full" title="Client email on">
+                        <Mail className="w-2.5 h-2.5 text-emerald-600" />
+                      </span>
+                    )}
+                    {col.notify_sms && (
+                      <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-100 rounded-full" title="SMS on">
+                        <MessageSquare className="w-2.5 h-2.5 text-purple-600" />
+                      </span>
+                    )}
                     {col.id && (
                       <button
                         onClick={() => handleDeleteStage(col.id, col.label)}
