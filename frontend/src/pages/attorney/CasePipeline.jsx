@@ -309,7 +309,9 @@ export default function CasePipeline() {
         let attorneyName = '';
         let attorneyPhone = '';
 
-        if (notifyAttorneyId === 'assigned' && clientId) {
+        const stageAttyId = notifyModal.stage?.notify_attorney_id || notifyAttorneyId;
+
+        if (stageAttyId === 'assigned' && clientId) {
           const { data: clientProfile } = await supabase
             .from('profiles')
             .select('assigned_attorney_id')
@@ -326,43 +328,52 @@ export default function CasePipeline() {
             attorneyName = atty?.full_name || '';
             attorneyPhone = atty?.phone || '';
           }
-        } else {
-          const selected = staffAttorneyList.find(a => a.id === notifyAttorneyId);
+        } else if (stageAttyId && stageAttyId !== 'assigned') {
+          // Look up from staff list first, then DB
+          const selected = staffAttorneyList.find(a => a.id === stageAttyId);
           if (selected) {
             attorneyEmail = selected.email || '';
             attorneyName = selected.full_name || '';
             attorneyPhone = selected.phone || '';
+          } else {
+            const { data: atty } = await supabase
+              .from('profiles')
+              .select('email, full_name, phone')
+              .eq('id', stageAttyId)
+              .single();
+            if (atty) {
+              attorneyEmail = atty.email || '';
+              attorneyName = atty.full_name || '';
+              attorneyPhone = atty.phone || '';
+            }
           }
         }
 
-        const stageName = notifyModal.stage?.name || newStatus;
+        const stageName = notifyModal.stage?.name || notifyModal.stage?.label || newStatus;
         const frontendUrl = window.location.origin;
         const caseLink = `${frontendUrl}/attorney/cases/${caseId}`;
 
-        // Build message from template or default
         const emailBody = (notifyModal.stage?.notification_template || notifyMessage || `Hi {attorney_name},\n\nThe case for {client_name} has been moved to "{stage_name}". Please review it in LegalFlow.\n\n{case_link}`)
           .replace(/{attorney_name}/g, attorneyName)
           .replace(/{client_name}/g, clientName)
           .replace(/{stage_name}/g, stageName)
           .replace(/{case_link}/g, caseLink);
 
-        // Send email
         if (attorneyEmail) {
           const { sendClientEmail } = await import('../../lib/api');
           await sendClientEmail({
-            client_id: clientId || '',
+            client_id: clientId || caseId,
             to_email: attorneyEmail,
             subject: `Case Update: ${clientName} — ${stageName}`,
             body: emailBody,
           });
         }
 
-        // Send SMS if enabled
         if (sendSms && attorneyPhone) {
           const { sendClientSMS } = await import('../../lib/api');
           const smsBody = `LegalFlow: Case for ${clientName} moved to "${stageName}". View: ${caseLink}`;
           await sendClientSMS({
-            client_id: clientId || '',
+            client_id: clientId || caseId,
             to_phone: attorneyPhone,
             body: smsBody,
           });
@@ -409,6 +420,7 @@ export default function CasePipeline() {
         setSendEmail(destStage.notify_email || false);
         setSendSms(destStage.notify_sms || false);
         setNotifyAttorney(destStage.notify_attorney || false);
+        setNotifyAttorneyId(destStage.notify_attorney_id || 'assigned');
         setNotifyMessage(destStage.notification_template || '');
         setNotifyModal({ caseId, caseName, oldStatus, newStatus, stage: destStage });
         return;
