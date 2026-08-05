@@ -91,14 +91,9 @@ export default function CaseCard({ caseData, onClick }) {
       }}
       className={`group cursor-pointer rounded-lg border border-slate-200 border-l-4 ${borderClass} bg-white p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md`}
     >
-      {/* Client name */}
-      <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-primary-700">
-        {client_name || 'Unknown Client'}
-      </p>
-
-      {/* Defendants */}
-      <p className="mt-1 truncate text-xs text-slate-500" title={defendantText}>
-        vs. {defendantText}
+      {/* Case Name */}
+      <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-primary-700" title={`${client_name || caseData.plaintiff_name || 'Unknown'} v. ${defendantText}`}>
+        {client_name || caseData.plaintiff_name || 'Unknown Client'} v. {defendantText}
       </p>
 
       {/* Case type badges */}
