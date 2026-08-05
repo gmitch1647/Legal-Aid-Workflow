@@ -395,6 +395,151 @@ function CaseTypeSelector({ caseId, currentTypes, onUpdate }) {
   );
 }
 
+function ContactAttorneySection({ caseId, caseData, staffAttorneys }) {
+  const [message, setMessage] = useState('');
+  const [subject, setSubject] = useState('');
+  const [sendVia, setSendVia] = useState('email');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState('');
+  const [error, setError] = useState('');
+  const [attorney, setAttorney] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadAttorney() {
+      setLoading(true);
+      try {
+        const { supabase: sb } = await import('../../lib/supabase');
+        const clientId = caseData?.client_id;
+        if (!clientId) { setLoading(false); return; }
+
+        const { data: profile } = await sb.from('profiles').select('assigned_attorney_id').eq('id', clientId).single();
+        if (profile?.assigned_attorney_id) {
+          const { data: atty } = await sb.from('profiles').select('id, full_name, email, phone').eq('id', profile.assigned_attorney_id).single();
+          if (atty) setAttorney(atty);
+        }
+      } catch (err) { console.error(err); }
+      finally { setLoading(false); }
+    }
+    loadAttorney();
+  }, [caseData?.client_id]);
+
+  const clientName = caseData?.plaintiff_name || caseData?.client_name || 'Client';
+  const caseLink = `${window.location.origin}/attorney/cases/${caseId}`;
+
+  async function handleSend() {
+    if (!message.trim()) { setError('Enter a message'); return; }
+    const targetAtty = attorney;
+    if (!targetAtty) { setError('No attorney assigned to this case'); return; }
+
+    setSending(true);
+    setError('');
+    setSent('');
+    try {
+      if (sendVia === 'email' || sendVia === 'both') {
+        if (!targetAtty.email) throw new Error('Attorney has no email address');
+        const { sendClientEmail } = await import('../../lib/api');
+        const emailSubject = subject.trim() || `Re: ${clientName} — Case Update`;
+        const emailBody = `${message.trim()}\n\n---\nCase: ${clientName}\nView case: ${caseLink}`;
+        await sendClientEmail({
+          client_id: caseData?.client_id || caseId,
+          to_email: targetAtty.email,
+          subject: emailSubject,
+          body: emailBody,
+        });
+      }
+      if (sendVia === 'sms' || sendVia === 'both') {
+        if (!targetAtty.phone) throw new Error('Attorney has no phone number');
+        const { sendClientSMS } = await import('../../lib/api');
+        const smsBody = `LegalFlow — ${clientName}: ${message.trim().slice(0, 140)}\n${caseLink}`;
+        await sendClientSMS({
+          client_id: caseData?.client_id || caseId,
+          to_phone: targetAtty.phone,
+          body: smsBody,
+        });
+      }
+      setSent(sendVia === 'both' ? 'Email and SMS sent!' : sendVia === 'email' ? 'Email sent!' : 'SMS sent!');
+      setMessage('');
+      setSubject('');
+      setTimeout(() => setSent(''), 5000);
+    } catch (err) {
+      setError(err.message || 'Failed to send');
+    } finally { setSending(false); }
+  }
+
+  return (
+    <div className="card border-indigo-200 bg-indigo-50/20">
+      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+        <Mail className="h-5 w-5 text-indigo-500" />
+        Contact Assigned Attorney
+      </h3>
+
+      {loading ? (
+        <div className="mt-3 text-xs text-slate-400">Loading attorney info...</div>
+      ) : !attorney ? (
+        <div className="mt-3 text-xs text-amber-600 bg-amber-50 rounded-lg p-2 border border-amber-200">
+          No attorney assigned to this case. Assign one in the Case Information section above.
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {/* Attorney info */}
+          <div className="flex items-center gap-3 bg-white rounded-lg border border-indigo-100 p-3">
+            <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center shrink-0">
+              <span className="text-xs font-bold text-indigo-700">
+                {(attorney.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-slate-900">{attorney.full_name}</div>
+              <div className="text-xs text-slate-500 flex gap-3">
+                {attorney.email && <span>{attorney.email}</span>}
+                {attorney.phone && <span>{attorney.phone}</span>}
+              </div>
+            </div>
+          </div>
+
+          {/* Send via toggle */}
+          <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5">
+            {[
+              { key: 'email', label: 'Email', icon: '✉' },
+              { key: 'sms', label: 'Text', icon: '💬' },
+              { key: 'both', label: 'Both', icon: '📨' },
+            ].map(opt => (
+              <button key={opt.key} onClick={() => setSendVia(opt.key)}
+                className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition ${
+                  sendVia === opt.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+                }`}>
+                {opt.icon} {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Subject (email only) */}
+          {(sendVia === 'email' || sendVia === 'both') && (
+            <input value={subject} onChange={e => setSubject(e.target.value)}
+              placeholder={`Subject (default: Re: ${clientName} — Case Update)`}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          )}
+
+          {/* Message */}
+          <textarea value={message} onChange={e => setMessage(e.target.value)}
+            rows={4} placeholder="Type your message to the attorney..."
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y" />
+
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          {sent && <p className="text-xs text-emerald-600 font-medium">{sent}</p>}
+
+          <button onClick={handleSend} disabled={sending || !message.trim()}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50">
+            {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            {sending ? 'Sending...' : 'Send'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DocumentsUploadSection({ caseId, documents, onRefresh }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -1758,6 +1903,9 @@ export default function CaseDetail() {
 
           {/* Documents */}
           <DocumentsUploadSection caseId={id} documents={documents} onRefresh={fetchDocuments} />
+
+          {/* Contact Attorney */}
+          <ContactAttorneySection caseId={id} caseData={caseData} staffAttorneys={staffAttorneys} />
 
           {/* Message Thread */}
           <MessageThread caseId={id} />
