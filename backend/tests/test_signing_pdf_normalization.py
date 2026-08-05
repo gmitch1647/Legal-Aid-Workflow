@@ -191,6 +191,34 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         document.close()
         return pdf_bytes
 
+    def _horizontal_settlement_execution_pdf(self):
+        """Mirror a settlement agreement with a client execution page before Exhibit A."""
+        document = fitz.open()
+        for page_number in range(4):
+            page = document.new_page(width=612, height=792)
+            page.insert_text((72, 72), f"Settlement agreement page {page_number + 1}", fontsize=11)
+
+        execution_page = document.new_page(width=612, height=792)
+        execution_page.insert_text((72, 180), "IN WITNESS WHEREOF, this Agreement is executed.", fontsize=11)
+        execution_page.insert_text((72, 205), "By:", fontsize=11)
+        execution_page.insert_text((324, 205), "Date:", fontsize=11)
+        execution_page.insert_text((108, 220), "CLIENT EXAMPLE", fontsize=11)
+        execution_page.insert_text((72, 275), "COMPANY EXAMPLE, LLC", fontsize=11)
+        # Preserve the sub-point x-coordinate variation found in PDFs produced
+        # by the source agreement tool; it must still be treated as the same
+        # signature column as the client field above.
+        execution_page.insert_text((71.999984741, 322), "By:", fontsize=11)
+        execution_page.insert_text((324, 322), "Date:", fontsize=11)
+        execution_page.insert_text((108, 337), "One of its Attorneys", fontsize=11)
+
+        exhibit_page = document.new_page(width=612, height=792)
+        exhibit_page.insert_text((280, 110), "Exhibit A", fontsize=12)
+        exhibit_page.insert_text((250, 160), "Click or tap here to enter text.", fontsize=10)
+
+        pdf_bytes = document.tobytes()
+        document.close()
+        return pdf_bytes
+
     def _signature_png(self):
         image = Image.new("RGBA", (120, 30), "white")
         image.putpixel((5, 5), (0, 0, 0, 255))
@@ -224,6 +252,35 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(placement["page"], 0)
         self.assertIn("rendered_signature_rect", placement)
         self.assertIn("date_style", placement)
+
+    def test_horizontal_settlement_block_is_selected_before_trailing_exhibit(self):
+        document = fitz.open(stream=self._horizontal_settlement_execution_pdf(), filetype="pdf")
+        placement = signing._execution_block_placement(document)
+        document.close()
+
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement["strategy"], "detected_execution_block")
+        self.assertEqual(placement["layout"], "horizontal")
+        self.assertEqual(placement["page"], 4)
+        self.assertGreater(placement["signature_rect"][0], 89)
+        self.assertLess(placement["signature_rect"][2], 324)
+        self.assertLess(placement["signature_rect"][3], 210)
+        self.assertGreater(placement["date_origin"][0], 349)
+
+    def test_horizontal_settlement_embedding_never_uses_exhibit_page(self):
+        signed_pdf, placement = signing._embed_signature(
+            self._horizontal_settlement_execution_pdf(),
+            self._signature_png(),
+            "Client Example",
+            "Client Example",
+            return_placement=True,
+        )
+
+        self.assertTrue(signed_pdf.startswith(b"%PDF"))
+        self.assertEqual(placement["strategy"], "detected_execution_block")
+        self.assertEqual(placement["layout"], "horizontal")
+        self.assertEqual(placement["page"], 4)
+        self.assertNotEqual(placement["strategy"], "fallback_last_page")
 
     def test_signature_image_is_trimmed_and_fitted_inside_execution_field(self):
         image = Image.new("RGBA", (300, 100), "white")

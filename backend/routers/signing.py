@@ -1038,62 +1038,103 @@ def _fit_signature_image(sig_image_bytes: bytes, target_rect):
 def _execution_block_placement(doc) -> Optional[dict]:
     """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
 
-    The detector intentionally chooses the leftmost paired fields in the lower
-    portion of a page. This matches common settlement-agreement layouts while
-    avoiding a company-side execution block that is typically positioned right.
+    The detector chooses the leftmost paired fields on the execution page. It
+    permits valid upper-half signature blocks, which are common in agreements
+    followed by exhibits, while excluding the document-header area.
     """
     import fitz  # PyMuPDF
 
     for page in reversed(doc):
         page_rect = page.rect
+        # Settlement execution blocks may appear well above the midpoint when
+        # an agreement includes an exhibit or addendum page. Exclude only the
+        # document-header region, not the entire upper half of the page.
+        minimum_execution_y = max(72.0, page_rect.height * 0.15)
         by_labels = [
             rect for rect in page.search_for("By:")
-            if rect.y0 >= page_rect.height * 0.55
+            if rect.y0 >= minimum_execution_y
         ]
         date_labels = [
             rect for rect in page.search_for("Date:")
-            if rect.y0 >= page_rect.height * 0.55
+            if rect.y0 >= minimum_execution_y
         ]
         if not by_labels or not date_labels:
             continue
 
         candidates = []
         for by_rect in by_labels:
-            matching_dates = [
+            # Most settlement agreements put the client signature and date on
+            # the same execution line: ``By: ________    Date: ________``.
+            # Prefer that horizontal pair before supporting the older vertical
+            # layout where Date appears below By on the same column.
+            horizontal_dates = [
+                date_rect for date_rect in date_labels
+                if date_rect.x0 >= by_rect.x1 + 60
+                and date_rect.x0 - by_rect.x1 <= page_rect.width * 0.72
+                and abs(date_rect.y0 - by_rect.y0) <= 20
+            ]
+            if horizontal_dates:
+                date_rect = min(
+                    horizontal_dates,
+                    key=lambda rect: (abs(rect.y0 - by_rect.y0), rect.x0),
+                )
+                candidates.append((by_rect, date_rect, "horizontal"))
+                continue
+
+            vertical_dates = [
                 date_rect for date_rect in date_labels
                 if date_rect.y0 > by_rect.y0
                 and date_rect.y0 - by_rect.y0 <= 105
                 and abs(date_rect.x0 - by_rect.x0) <= 24
             ]
-            if matching_dates:
-                candidates.append((by_rect, min(matching_dates, key=lambda rect: rect.y0)))
+            if vertical_dates:
+                candidates.append((by_rect, min(vertical_dates, key=lambda rect: rect.y0), "vertical"))
         if not candidates:
             continue
 
-        # The leftmost paired execution fields are the client-facing block.
-        by_rect, date_rect = min(candidates, key=lambda pair: (pair[0].x0, pair[0].y0))
-        next_column = min(
-            (candidate_by.x0 for candidate_by, _ in candidates if candidate_by.x0 > by_rect.x0 + 80),
-            default=page_rect.width - 54,
+        # The leftmost, then uppermost, paired execution fields belong to the
+        # client signer in a two-party settlement agreement. PDF text extractors
+        # can vary coordinates by fractions of a point between visually aligned
+        # lines, so normalize the column before selecting the upper client line.
+        by_rect, date_rect, layout = min(
+            candidates,
+            key=lambda pair: (round(pair[0].x0, 1), pair[0].y0, pair[2]),
         )
         field_left = by_rect.x1 + 10
-        # Execution lines are commonly shorter than the space between columns;
-        # keep the artwork within the client line instead of spanning the gap.
-        field_right = min(next_column - 24, field_left + 155)
-        date_x = max(field_left, date_rect.x1 + 10)
+        if layout == "horizontal":
+            # Keep the signature inside the actual plaintiff line, ending before
+            # the date label rather than treating the later defense block as a
+            # second column. The signature sits above the printed client name.
+            field_right = min(date_rect.x0 - 14, field_left + 205)
+            signature_top = max(by_rect.y0 - 35, 36)
+            signature_bottom = max(signature_top + 24, by_rect.y1 - 2)
+        else:
+            next_column = min(
+                (
+                    candidate_by.x0
+                    for candidate_by, _, _ in candidates
+                    if candidate_by.x0 > by_rect.x0 + 80
+                ),
+                default=page_rect.width - 54,
+            )
+            # Execution lines are commonly shorter than the space between columns;
+            # keep the artwork within the client line instead of spanning the gap.
+            field_right = min(next_column - 24, field_left + 155)
+            signature_top = max(by_rect.y0 - 30, 36)
+            signature_bottom = max(date_rect.y0 - 6, by_rect.y1 + 18)
+
         if field_right - field_left < 80:
             continue
-
-        # Reserve the full vertical space between the party heading and date
-        # field so descenders in a handwritten signature cannot be clipped.
+        date_x = max(field_left, date_rect.x1 + 10)
         signature_rect = fitz.Rect(
             field_left,
-            max(by_rect.y0 - 30, 36),
+            signature_top,
             field_right,
-            max(date_rect.y0 - 6, by_rect.y1 + 18),
+            signature_bottom,
         )
         return {
             "strategy": "detected_execution_block",
+            "layout": layout,
             "page": page.number,
             "signature_rect": [
                 round(signature_rect.x0, 2), round(signature_rect.y0, 2),
