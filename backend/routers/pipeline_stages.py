@@ -271,7 +271,8 @@ async def update_stage(
     _require_attorney(profile)
 
     supabase = get_supabase()
-    update_data = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Use exclude_unset so False/0/"" values are kept, only truly unset fields are skipped
+    update_data = body.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update.")
 
