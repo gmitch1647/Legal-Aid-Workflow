@@ -1,5 +1,6 @@
-import React from 'react';
-import { Calendar, Clock } from 'lucide-react';
+import React, { useState } from 'react';
+import { Calendar, Clock, Settings } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 const CASE_TYPE_STYLES = {
   FCRA: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -56,7 +57,7 @@ function parseCaseTypes(caseType) {
   return [];
 }
 
-export default function CaseCard({ caseData, onClick }) {
+export default function CaseCard({ caseData, onClick, onTypeChange }) {
   const {
     client_name,
     defendants,
@@ -64,6 +65,10 @@ export default function CaseCard({ caseData, onClick }) {
     created_at,
     updated_at,
   } = caseData;
+
+  const [showTypeSelector, setShowTypeSelector] = useState(false);
+  const [selectedTypes, setSelectedTypes] = useState(() => parseCaseTypes(case_type));
+  const [saving, setSaving] = useState(false);
 
   const caseTypes = parseCaseTypes(case_type);
   const primaryType = getPrimaryCaseType(case_type);
@@ -78,40 +83,81 @@ export default function CaseCard({ caseData, onClick }) {
         ? defendants
         : 'No defendant';
 
+  async function toggleType(type) {
+    const next = selectedTypes.includes(type)
+      ? selectedTypes.filter(t => t !== type)
+      : [...selectedTypes, type];
+    setSelectedTypes(next);
+    setSaving(true);
+    try {
+      await supabase.from('cases').update({ case_type: next.join(',') }).eq('id', caseData.id);
+      if (onTypeChange) onTypeChange(caseData.id, next.join(','));
+    } catch (err) { console.error('Failed to update case type:', err); }
+    finally { setSaving(false); }
+  }
+
   return (
     <div
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick?.();
-        }
-      }}
-      className={`group cursor-pointer rounded-lg border border-slate-200 border-l-4 ${borderClass} bg-white p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md`}
+      className={`group/card cursor-pointer rounded-lg border border-slate-200 border-l-4 ${borderClass} bg-white p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md`}
     >
       {/* Case Name */}
-      <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-primary-700" title={`${client_name || caseData.plaintiff_name || 'Unknown'} v. ${defendantText}`}>
-        {client_name || caseData.plaintiff_name || 'Unknown Client'} v. {defendantText}
-      </p>
-
-      {/* Case type badges */}
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {caseTypes.map((type) => (
-          <span
-            key={type}
-            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-              CASE_TYPE_STYLES[type] || 'bg-slate-100 text-slate-600 border-slate-200'
-            }`}
-          >
-            {type}
-          </span>
-        ))}
+      <div className="flex items-center justify-between">
+        <p
+          onClick={onClick}
+          className="truncate text-sm font-semibold text-slate-900 hover:text-primary-700 flex-1 min-w-0"
+          title={`${client_name || caseData.plaintiff_name || 'Unknown'} v. ${defendantText}`}
+        >
+          {client_name || caseData.plaintiff_name || 'Unknown Client'} v. {defendantText}
+        </p>
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowTypeSelector(!showTypeSelector); }}
+          className={`p-1 shrink-0 ml-1 transition ${showTypeSelector ? 'text-blue-600' : 'text-slate-300 hover:text-slate-500'}`}
+          title="Set case type"
+        >
+          <Settings className="w-3.5 h-3.5" />
+        </button>
       </div>
 
+      {/* Inline type selector */}
+      {showTypeSelector && (
+        <div className="mt-2 flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
+          {['FCRA', 'FDCPA', 'TCPA'].map(type => (
+            <button
+              key={type}
+              onClick={() => toggleType(type)}
+              className={`px-2.5 py-1 rounded-full text-[10px] font-bold border transition ${
+                selectedTypes.includes(type)
+                  ? type === 'FCRA' ? 'bg-blue-100 text-blue-700 border-blue-300'
+                    : type === 'FDCPA' ? 'bg-purple-100 text-purple-700 border-purple-300'
+                    : 'bg-green-100 text-green-700 border-green-300'
+                  : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              {type}
+            </button>
+          ))}
+          {saving && <Clock className="w-3 h-3 animate-spin text-slate-400" />}
+        </div>
+      )}
+
+      {/* Case type badges */}
+      {!showTypeSelector && caseTypes.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5" onClick={onClick}>
+          {caseTypes.map((type) => (
+            <span
+              key={type}
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                CASE_TYPE_STYLES[type] || 'bg-slate-100 text-slate-600 border-slate-200'
+              }`}
+            >
+              {type}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Footer: date + days */}
-      <div className="mt-3 flex items-center justify-between">
+      <div className="mt-3 flex items-center justify-between" onClick={onClick}>
         <div className="flex items-center gap-1 text-xs text-slate-400">
           <Calendar className="h-3 w-3" />
           <span>{formatDate(created_at)}</span>

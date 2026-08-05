@@ -779,6 +779,7 @@ export default function CasePipeline() {
                                 <CaseCard
                                   caseData={caseData}
                                   onClick={() => navigate(`/attorney/cases/${caseData.id}`)}
+                                  onTypeChange={(id, newType) => setCases(prev => prev.map(c => c.id === id ? { ...c, case_type: newType } : c))}
                                 />
                                 <button
                                   onClick={(e) => {
