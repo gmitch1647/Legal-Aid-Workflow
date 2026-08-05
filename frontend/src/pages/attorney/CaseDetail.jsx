@@ -387,6 +387,100 @@ function CaseTypeSelector({ caseId, currentTypes, onUpdate }) {
   );
 }
 
+function DocumentsUploadSection({ caseId, documents, onRefresh }) {
+  const [uploading, setUploading] = useState(false);
+  const [category, setCategory] = useState('other');
+  const fileInputRef = React.useRef(null);
+
+  const generalDocs = documents.filter(d => {
+    const cat = (d.document_category || d.category || '').toLowerCase();
+    return cat !== 'pii' && cat !== 'complaint';
+  });
+
+  const categories = [
+    { value: 'credit_report', label: 'Credit Report' },
+    { value: 'dispute_letter', label: 'Dispute Letter' },
+    { value: 'bureau_response', label: 'Bureau Response' },
+    { value: 'collection_notice', label: 'Collection Notice' },
+    { value: 'call_log', label: 'Call Log' },
+    { value: 'other', label: 'Other' },
+  ];
+
+  async function handleUpload(files) {
+    if (!files?.length) return;
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      try {
+        await uploadDocument(caseId, file, category);
+      } catch (err) { console.error('Upload failed:', err); }
+    }
+    setUploading(false);
+    if (onRefresh) onRefresh();
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleDelete(doc) {
+    if (!confirm(`Delete "${doc.file_name}"?`)) return;
+    try {
+      await deleteDocument(caseId, doc.id);
+      if (onRefresh) onRefresh();
+    } catch (err) { alert('Delete failed: ' + err.message); }
+  }
+
+  return (
+    <div className="card">
+      <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+        <File className="h-5 w-5 text-slate-400" />
+        Documents ({generalDocs.length})
+      </h3>
+
+      {/* Upload */}
+      <div className="mt-3 flex items-center gap-2">
+        <select value={category} onChange={e => setCategory(e.target.value)}
+          className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+          {categories.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-50">
+          <Upload className="w-3.5 h-3.5" />
+          {uploading ? 'Uploading...' : 'Upload Document'}
+        </button>
+        <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" className="hidden"
+          onChange={e => handleUpload(e.target.files)} />
+      </div>
+
+      {/* List */}
+      <div className="mt-4 space-y-2">
+        {generalDocs.length > 0 ? (
+          generalDocs.map(doc => (
+            <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50">
+              <a href={doc.url || doc.file_url || '#'} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-3 flex-1 min-w-0">
+                <FileText className="h-5 w-5 shrink-0 text-slate-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-700">
+                    {doc.file_name || doc.name || doc.filename || 'Document'}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {(doc.document_category || doc.category || doc.type || 'File').replace(/_/g, ' ')} · {formatDate(doc.created_at || doc.uploaded_at)}
+                  </p>
+                </div>
+                <ExternalLink className="h-4 w-4 shrink-0 text-slate-300" />
+              </a>
+              <button onClick={() => handleDelete(doc)}
+                className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-slate-400">No documents uploaded.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PiiSection({ caseId, documents, onRefresh }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = React.useRef(null);
@@ -1649,38 +1743,7 @@ export default function CaseDetail() {
           <PiiSection caseId={id} documents={documents} onRefresh={fetchDocuments} />
 
           {/* Documents */}
-          <div className="card">
-            <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-              <File className="h-5 w-5 text-slate-400" />
-              Documents
-            </h3>
-            <div className="mt-4 space-y-2">
-              {documents.length > 0 ? (
-                documents.map((doc) => (
-                  <a
-                    key={doc.id}
-                    href={doc.url || doc.file_url || '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50"
-                  >
-                    <FileText className="h-5 w-5 shrink-0 text-slate-400" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-700">
-                        {doc.file_name || doc.name || doc.filename || 'Document'}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {doc.category || doc.type || 'File'} &middot; {formatDate(doc.created_at || doc.uploaded_at)}
-                      </p>
-                    </div>
-                    <ExternalLink className="h-4 w-4 shrink-0 text-slate-300" />
-                  </a>
-                ))
-              ) : (
-                <p className="text-sm text-slate-400">No documents uploaded.</p>
-              )}
-            </div>
-          </div>
+          <DocumentsUploadSection caseId={id} documents={documents} onRefresh={fetchDocuments} />
 
           {/* Message Thread */}
           <MessageThread caseId={id} />
