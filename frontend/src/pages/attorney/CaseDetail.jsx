@@ -40,6 +40,10 @@ import {
   requestRevision,
   denyCase,
   updateCaseStatus,
+  getPipelineStages,
+  sendOiseEngagementContract,
+  sendClientEmail,
+  sendClientSMS,
   getDocuments,
   getMessages,
   sendMessage,
@@ -841,6 +845,7 @@ export default function CaseDetail() {
 
   const [caseData, setCaseData] = useState(null);
   const [pipelineStatuses, setPipelineStatuses] = useState([]);
+  const [caseStages, setCaseStages] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -850,6 +855,8 @@ export default function CaseDetail() {
   const [approveModal, setApproveModal] = useState(false);
   const [revisionModal, setRevisionModal] = useState(false);
   const [denyModal, setDenyModal] = useState(false);
+  const [stageChangeModal, setStageChangeModal] = useState(null);
+  const [stageChangeLoading, setStageChangeLoading] = useState(false);
 
   // Attorney assignment
   const [staffAttorneys, setStaffAttorneys] = useState([]);
@@ -935,6 +942,12 @@ export default function CaseDetail() {
     getStaffAttorneys().then(data => setStaffAttorneys(data || [])).catch(() => {});
     getReferralPartners().then(data => setReferralPartners(data || [])).catch(() => {});
   }, [fetchCase, fetchPipeline, fetchDocuments]);
+
+  useEffect(() => {
+    getPipelineStages(caseData?.pipeline_id || 'all')
+      .then((stages) => setCaseStages(Array.isArray(stages) ? stages : []))
+      .catch((err) => console.debug('Pipeline stages unavailable:', err.message));
+  }, [caseData?.pipeline_id]);
 
   const handleAssignReferral = async (partnerId) => {
     setSelectedPartnerId(partnerId);
@@ -1158,6 +1171,138 @@ export default function CaseDetail() {
     }
   };
 
+  const handleStageSelection = (nextStatus) => {
+    const currentStatus = caseData?.status || 'submitted';
+    if (!nextStatus || nextStatus === currentStatus) return;
+
+    const selectedStage = caseStages.find((stage) => stage.slug === nextStatus) || {
+      slug: nextStatus,
+      name: STATUS_LABELS[nextStatus] || nextStatus.replace(/_/g, ' '),
+    };
+
+    if (nextStatus === 'documents_signed') {
+      setError('Documents Signed is updated automatically when the client completes the representation agreement.');
+      return;
+    }
+
+    if (nextStatus === 'doc_sent_for_signature') {
+      setStageChangeModal({ type: 'engagement', stage: selectedStage });
+      return;
+    }
+
+    setStageChangeModal({
+      type: 'stage',
+      stage: selectedStage,
+      shouldNotify: Boolean(selectedStage.notify_email || selectedStage.notify_sms || selectedStage.notify_attorney),
+    });
+  };
+
+  const notifyStageRecipients = async (stage) => {
+    const client = caseData?.client || {};
+    const clientId = caseData?.client_id || id;
+    const clientEmail = client.email || caseData?.client_email || caseData?.plaintiff_email;
+    const clientPhone = client.phone || caseData?.client_phone || caseData?.plaintiff_phone;
+    const stageName = stage.name || stage.label || stage.slug;
+    const caseLink = `${window.location.origin}/attorney/cases/${id}`;
+    const clientMessage = (stage.notification_template || `Hi {client_name}, your case status has been updated to: {stage_name}.`)
+      .replace(/{client_name}/g, clientName)
+      .replace(/{stage_name}/g, stageName)
+      .replace(/{case_status}/g, stage.slug.replace(/_/g, ' '))
+      .replace(/{case_link}/g, caseLink);
+
+    const deliveryTasks = [];
+    if (stage.notify_email && clientEmail) {
+      deliveryTasks.push(sendClientEmail({
+        client_id: clientId,
+        to_email: clientEmail,
+        subject: `Case Update: ${stageName}`,
+        body: clientMessage,
+      }));
+    }
+    if (stage.notify_sms && clientPhone) {
+      deliveryTasks.push(sendClientSMS({
+        client_id: clientId,
+        to_phone: clientPhone,
+        body: clientMessage,
+      }));
+    }
+
+    if (stage.notify_attorney) {
+      try {
+        let recipient = null;
+        const attorneyId = stage.notify_attorney_id || 'assigned';
+        if (attorneyId === 'assigned') {
+          const assignedId = client.assigned_attorney_id;
+          recipient = staffAttorneys.find((attorney) => attorney.id === assignedId) || null;
+          if (!recipient && assignedId) {
+            const { supabase } = await import('../../lib/supabase');
+            const { data } = await supabase
+              .from('profiles')
+              .select('email, full_name')
+              .eq('id', assignedId)
+              .single();
+            recipient = data || null;
+          }
+        } else {
+          recipient = staffAttorneys.find((attorney) => attorney.id === attorneyId) || null;
+          if (!recipient) {
+            const { supabase } = await import('../../lib/supabase');
+            const { data } = await supabase
+              .from('profiles')
+              .select('email, full_name')
+              .eq('id', attorneyId)
+              .single();
+            recipient = data || null;
+          }
+        }
+        if (recipient?.email) {
+          const attorneyMessage = (stage.notification_template || `Hi {attorney_name},\n\nThe case for {client_name} has been moved to "{stage_name}". Please review it in LegalFlow.\n\n{case_link}`)
+            .replace(/{attorney_name}/g, recipient.full_name || 'Attorney')
+            .replace(/{client_name}/g, clientName)
+            .replace(/{stage_name}/g, stageName)
+            .replace(/{case_status}/g, stage.slug.replace(/_/g, ' '))
+            .replace(/{case_link}/g, caseLink);
+          deliveryTasks.push(sendClientEmail({
+            client_id: clientId,
+            to_email: recipient.email,
+            subject: `Case Update: ${clientName} — ${stageName}`,
+            body: attorneyMessage,
+          }));
+        }
+      } catch (err) {
+        console.error('Attorney stage notification setup failed:', err);
+      }
+    }
+
+    const settled = await Promise.allSettled(deliveryTasks);
+    const failed = settled.filter((result) => result.status === 'rejected');
+    if (failed.length) {
+      console.warn('One or more stage notifications could not be delivered.', failed);
+    }
+  };
+
+  const handleConfirmStageChange = async () => {
+    if (!stageChangeModal || stageChangeLoading) return;
+    setStageChangeLoading(true);
+    try {
+      if (stageChangeModal.type === 'engagement') {
+        await sendOiseEngagementContract(id);
+      } else {
+        await updateCaseStatus(id, stageChangeModal.stage.slug);
+        if (stageChangeModal.shouldNotify) {
+          await notifyStageRecipients(stageChangeModal.stage);
+        }
+      }
+      setStageChangeModal(null);
+      await fetchCase();
+      await fetchPipeline();
+    } catch (err) {
+      setError(err.message || 'Could not update the pipeline stage.');
+    } finally {
+      setStageChangeLoading(false);
+    }
+  };
+
   const handleSaveNote = async () => {
     if (!newNote.trim()) return;
     try {
@@ -1263,6 +1408,28 @@ export default function CaseDetail() {
                 {revisionCount >= 3 && <AlertTriangle className="mr-1 h-3 w-3" />}
                 {revisionCount} revision{revisionCount !== 1 ? 's' : ''}
               </span>
+            )}
+            {caseStages.length > 0 && (
+              <label className="ml-1 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm">
+                <span className="text-slate-500">Move to</span>
+                <select
+                  value={status}
+                  onChange={(event) => handleStageSelection(event.target.value)}
+                  disabled={stageChangeLoading}
+                  className="max-w-48 bg-transparent font-semibold text-slate-800 outline-none disabled:cursor-not-allowed"
+                  aria-label="Move case to pipeline stage"
+                >
+                  {!caseStages.some((stage) => stage.slug === status) && (
+                    <option value={status}>{STATUS_LABELS[status] || status.replace(/_/g, ' ')}</option>
+                  )}
+                  {caseStages.map((stage) => (
+                    <option key={stage.id || stage.slug} value={stage.slug} disabled={stage.slug === 'documents_signed'}>
+                      {stage.name || stage.slug.replace(/_/g, ' ')}{stage.slug === 'documents_signed' ? ' (automatic)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {stageChangeLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary-600" />}
+              </label>
             )}
           </div>
         </div>
@@ -1951,6 +2118,22 @@ export default function CaseDetail() {
           loading={actionLoading}
           onSubmit={handleDeny}
           onCancel={() => setDenyModal(false)}
+        />
+      )}
+
+      {stageChangeModal && (
+        <ConfirmModal
+          title={stageChangeModal.type === 'engagement' ? 'Send Oise Law Contract for Signature' : `Move case to ${stageChangeModal.stage.name || stageChangeModal.stage.slug}`}
+          message={stageChangeModal.type === 'engagement'
+            ? `LegalFlow will send Esther Oise’s representation agreement to ${clientName} for signature. The case will move only after the signing invitation is accepted for delivery.`
+            : stageChangeModal.shouldNotify
+              ? `This stage has configured notifications. LegalFlow will move the case and send the enabled case-update notifications.`
+              : `Move this case to ${stageChangeModal.stage.name || stageChangeModal.stage.slug}?`}
+          confirmLabel={stageChangeModal.type === 'engagement' ? 'Send Contract for Signature' : stageChangeModal.shouldNotify ? 'Move Case & Send Notifications' : 'Move Case'}
+          confirmColor="green"
+          loading={stageChangeLoading}
+          onConfirm={handleConfirmStageChange}
+          onCancel={() => setStageChangeModal(null)}
         />
       )}
     </div>
