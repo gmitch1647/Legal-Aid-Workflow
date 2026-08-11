@@ -24,6 +24,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from routers.w9 import W9_STORAGE_BUCKET
 from utils.esign_notifications import notify_attorney_of_esign_event, signed_document_filename
 from utils.supabase_client import get_supabase
 
@@ -1045,7 +1046,7 @@ async def deliver_completed_settlement_package(
 
     try:
         settlement_pdf = supabase.storage.from_("documents").download(settlement["signed_path"])
-        w9_pdf = supabase.storage.from_("documents").download(submission_result.data[0]["completed_pdf_path"])
+        w9_pdf = supabase.storage.from_(W9_STORAGE_BUCKET).download(submission_result.data[0]["completed_pdf_path"])
     except Exception as exc:
         logger.exception("Could not download completed settlement package PDFs for delivery")
         raise HTTPException(status_code=500, detail="Could not retrieve the completed settlement documents.") from exc

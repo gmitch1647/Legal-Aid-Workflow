@@ -299,24 +299,28 @@ class _PackageQuery:
 
 
 class _PackageBucket:
-    def __init__(self, settlement_pdf, w9_pdf):
-        self.settlement_pdf = settlement_pdf
-        self.w9_pdf = w9_pdf
-        self.downloaded = []
+    def __init__(self, content, bucket_name, downloads):
+        self.content = content
+        self.bucket_name = bucket_name
+        self.downloads = downloads
 
     def download(self, path):
-        self.downloaded.append(path)
-        return self.w9_pdf if str(path).startswith("w9/") else self.settlement_pdf
+        self.downloads.append((self.bucket_name, path))
+        return self.content
 
 
 class _PackageStorage:
     def __init__(self, settlement_pdf, w9_pdf):
-        self.bucket = _PackageBucket(settlement_pdf, w9_pdf)
+        self.downloads = []
+        self.documents_bucket = _PackageBucket(settlement_pdf, "documents", self.downloads)
+        self.w9_bucket = _PackageBucket(w9_pdf, "w9-documents", self.downloads)
 
     def from_(self, bucket):
-        if bucket != "documents":
-            raise AssertionError(f"Unexpected bucket {bucket}")
-        return self.bucket
+        if bucket == "documents":
+            return self.documents_bucket
+        if bucket == "w9-documents":
+            return self.w9_bucket
+        raise AssertionError(f"Unexpected bucket {bucket}")
 
 
 class _PackageSupabase:
@@ -364,6 +368,10 @@ class SettlementPackageDeliveryTests(unittest.TestCase):
         self.assertEqual(attachments[0]["content"], b"%PDF-1.7\\nsigned settlement")
         self.assertEqual(attachments[1]["content"], b"%PDF-1.7\\ncompleted w9")
         self.assertEqual(attachments[1]["filename"], "Client_Example_Completed_W-9.pdf")
+        self.assertEqual(
+            supabase.storage.downloads,
+            [("documents", "signing/settlement/signed_agreement.pdf"), ("w9-documents", "w9/w9-123/completed_form_w9.pdf")],
+        )
         self.assertNotIn("attorney/w9?request_id=w9-123", send_email.await_args.kwargs["body"])
         self.assertNotIn("not attached", send_email.await_args.kwargs["body"])
         delivery_query = supabase.queries["settlement_document_deliveries"]
