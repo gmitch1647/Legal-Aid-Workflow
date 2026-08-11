@@ -14,7 +14,9 @@ import hmac
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Optional
 
@@ -615,6 +617,14 @@ async def list_templates(authorization: str = Header(default=None)):
 # POST /send — send a signature request
 # ---------------------------------------------------------------------------
 
+class SettlementPackageDeliveryPayload(BaseModel):
+    """Explicit confirmation to deliver completed settlement records to one attorney."""
+
+    case_id: str
+    attorney_profile_id: str
+    confirmed: bool = False
+
+
 class SignatureRequestPayload(BaseModel):
     template_id: Optional[str] = None
     title: str = "Document for Signature"
@@ -917,6 +927,190 @@ async def send_document_for_signature(
         "title": title,
         "status": "awaiting_signature",
         "details_url": sig_data.get("details_url"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /settlement-package/deliver — selected-attorney completed document email
+# ---------------------------------------------------------------------------
+
+@router.post("/settlement-package/deliver")
+async def deliver_completed_settlement_package(
+    payload: SettlementPackageDeliveryPayload,
+    authorization: str = Header(default=None),
+):
+    """Email a selected attorney the signed settlement agreement and secure W-9 link.
+
+    A completed W-9 contains a taxpayer ID. It deliberately remains in LegalFlow's
+    protected records and is never attached to email. The signed settlement PDF is
+    attached for the attorney's records, and the same email contains an authenticated
+    LegalFlow link to the completed W-9.
+    """
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="Confirm delivery before sending completed settlement records.")
+
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+
+    case_result = (
+        supabase.table("cases")
+        .select("id,client_id,case_number")
+        .eq("id", payload.case_id)
+        .limit(1)
+        .execute()
+    )
+    if not case_result.data:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    case_row = case_result.data[0]
+
+    attorney_result = (
+        supabase.table("profiles")
+        .select("id,role,full_name,email")
+        .eq("id", payload.attorney_profile_id)
+        .limit(1)
+        .execute()
+    )
+    if not attorney_result.data:
+        raise HTTPException(status_code=404, detail="Selected attorney was not found in LegalFlow.")
+    recipient = attorney_result.data[0]
+    if recipient.get("role") not in ("attorney", "staff_attorney") or not recipient.get("email"):
+        raise HTTPException(status_code=400, detail="Choose an active LegalFlow attorney with an email address.")
+
+    settlement_result = (
+        supabase.table("signing_sessions")
+        .select("id,title,document_type,status,signed_path,signed_at,signer_name,case_id,client_id")
+        .eq("case_id", payload.case_id)
+        .order("signed_at", desc=True)
+        .limit(25)
+        .execute()
+    )
+    settlement = next(
+        (
+            row for row in (settlement_result.data or [])
+            if row.get("document_type") in ("settlement", "settlement_agreement")
+            and row.get("status") in ("signed", "complete")
+            and row.get("signed_path")
+        ),
+        None,
+    )
+    if not settlement:
+        raise HTTPException(status_code=409, detail="A completed signed settlement agreement is required before delivery.")
+
+    w9_result = (
+        supabase.table("w9_requests")
+        .select("id,title,status,case_id,client_id,submitted_at")
+        .eq("case_id", payload.case_id)
+        .eq("status", "complete")
+        .order("submitted_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not w9_result.data:
+        raise HTTPException(status_code=409, detail="A completed Form W-9 is required before delivery.")
+    w9_request = w9_result.data[0]
+
+    submission_result = (
+        supabase.table("w9_submissions")
+        .select("id,completed_pdf_path")
+        .eq("request_id", w9_request["id"])
+        .limit(1)
+        .execute()
+    )
+    if not submission_result.data or not submission_result.data[0].get("completed_pdf_path"):
+        raise HTTPException(status_code=409, detail="The completed W-9 PDF is not available yet.")
+
+    delivery_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"legalflow:settlement-package:{payload.case_id}:{recipient['id']}:{settlement['id']}:{w9_request['id']}",
+    ))
+    prior_delivery = (
+        supabase.table("settlement_document_deliveries")
+        .select("id,status,sent_at")
+        .eq("id", delivery_id)
+        .limit(1)
+        .execute()
+    )
+    if prior_delivery.data and prior_delivery.data[0].get("status") == "sent":
+        return {
+            "status": "already_sent",
+            "delivery_id": delivery_id,
+            "sent_at": prior_delivery.data[0].get("sent_at"),
+            "message": "The selected attorney already received this completed settlement package.",
+        }
+
+    now = datetime.now(timezone.utc).isoformat()
+    delivery_record = {
+        "id": delivery_id,
+        "case_id": payload.case_id,
+        "client_id": case_row.get("client_id") or settlement.get("client_id") or w9_request.get("client_id"),
+        "settlement_session_id": settlement["id"],
+        "w9_request_id": w9_request["id"],
+        "recipient_profile_id": recipient["id"],
+        "recipient_email": recipient["email"],
+        "sent_by": profile["id"],
+        "status": "sending",
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        supabase.table("settlement_document_deliveries").upsert(
+            delivery_record, on_conflict="id"
+        ).execute()
+    except Exception as exc:
+        logger.exception("Could not prepare settlement package delivery for case %s", payload.case_id)
+        raise HTTPException(status_code=500, detail="Could not prepare the completed document delivery.") from exc
+
+    try:
+        settlement_pdf = supabase.storage.from_("documents").download(settlement["signed_path"])
+    except Exception as exc:
+        logger.exception("Could not download signed settlement agreement for delivery")
+        raise HTTPException(status_code=500, detail="Could not retrieve the signed settlement agreement.") from exc
+
+    from html import escape
+    from utils.email_service import send_email
+
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    w9_url = f"{frontend_url}/attorney/w9?request_id={quote(str(w9_request['id']))}"
+    client_name = escape(str(settlement.get("signer_name") or "the client"))
+    case_label = escape(str(case_row.get("case_number") or f"Case {payload.case_id[:8]}"))
+    settlement_filename = signed_document_filename(settlement)
+    delivered = await send_email(
+        to=recipient["email"],
+        subject=f"Completed Settlement Documents: {client_name}",
+        body=f"""
+        <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:600px;">
+          <h2 style="color:#059669;">Completed Settlement Documents</h2>
+          <p>Hello {escape(str(recipient.get('full_name') or 'Attorney'))},</p>
+          <p>The completed settlement package for <strong>{client_name}</strong> is ready for <strong>{case_label}</strong>.</p>
+          <ul>
+            <li><strong>Signed settlement agreement:</strong> attached to this email.</li>
+            <li><strong>Completed Form W-9:</strong> available through LegalFlow's protected records link below.</li>
+          </ul>
+          <p><a href="{w9_url}" style="background:#1e40af;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:600;display:inline-block;">Open Completed W-9 Securely</a></p>
+          <p style="font-size:12px;color:#64748b;">The W-9 is not attached because it contains sensitive taxpayer information. Please sign in to LegalFlow before accessing it, and do not forward this email.</p>
+        </div>
+        """,
+        attachments=[{"filename": settlement_filename, "content": settlement_pdf}],
+        idempotency_key=f"settlement-package-{delivery_id}",
+    )
+    if not delivered:
+        supabase.table("settlement_document_deliveries").update({
+            "status": "failed", "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", delivery_id).execute()
+        raise HTTPException(status_code=502, detail="The completed documents could not be delivered by email. Please try again.")
+
+    sent_at = datetime.now(timezone.utc).isoformat()
+    supabase.table("settlement_document_deliveries").update({
+        "status": "sent", "sent_at": sent_at, "updated_at": sent_at,
+    }).eq("id", delivery_id).execute()
+    return {
+        "status": "sent",
+        "delivery_id": delivery_id,
+        "sent_at": sent_at,
+        "recipient_name": recipient.get("full_name") or recipient["email"],
+        "recipient_email": recipient["email"],
+        "message": "The selected attorney received the signed settlement agreement and secure W-9 access link.",
     }
 
 

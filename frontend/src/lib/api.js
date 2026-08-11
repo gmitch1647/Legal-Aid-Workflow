@@ -1088,6 +1088,17 @@ export async function sendDocumentForSignature(formData) {
   return response.json();
 }
 
+export async function sendCompletedSettlementPackage(caseId, attorneyProfileId) {
+  return request('/esign/settlement-package/deliver', {
+    method: 'POST',
+    body: JSON.stringify({
+      case_id: caseId,
+      attorney_profile_id: attorneyProfileId,
+      confirmed: true,
+    }),
+  });
+}
+
 export async function getSignatureRequests(caseId = null, clientId = null) {
   const params = new URLSearchParams();
   if (caseId) params.append('case_id', caseId);

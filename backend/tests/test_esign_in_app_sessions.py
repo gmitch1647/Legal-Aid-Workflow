@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 from fastapi import HTTPException
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from routers import esign
 
@@ -256,6 +256,122 @@ class _DashboardSupabase:
 
     def table(self, table_name):
         return _DashboardQuery(self.tables.get(table_name, []))
+
+
+class _PackageQuery:
+    def __init__(self, rows=None):
+        self.rows = [dict(row) for row in (rows or [])]
+        self.filters = []
+        self.upsert_payloads = []
+        self.update_payloads = []
+
+    def select(self, _fields):
+        return self
+
+    def eq(self, column, value):
+        self.filters.append((column, value))
+        return self
+
+    def order(self, _column, desc=False):
+        return self
+
+    def limit(self, _value):
+        return self
+
+    def upsert(self, payload, on_conflict=None):
+        self.upsert_payloads.append((payload, on_conflict))
+        return self
+
+    def update(self, payload):
+        self.update_payloads.append(payload)
+        return self
+
+    def execute(self):
+        rows = self.rows
+        for column, value in self.filters:
+            rows = [row for row in rows if str(row.get(column)) == str(value)]
+        return SimpleNamespace(data=rows)
+
+
+class _PackageBucket:
+    def __init__(self, settlement_pdf):
+        self.settlement_pdf = settlement_pdf
+        self.downloaded = []
+
+    def download(self, path):
+        self.downloaded.append(path)
+        return self.settlement_pdf
+
+
+class _PackageStorage:
+    def __init__(self, settlement_pdf):
+        self.bucket = _PackageBucket(settlement_pdf)
+
+    def from_(self, bucket):
+        if bucket != "documents":
+            raise AssertionError(f"Unexpected bucket {bucket}")
+        return self.bucket
+
+
+class _PackageSupabase:
+    def __init__(self):
+        self.queries = {
+            "cases": _PackageQuery([{"id": "case-123", "client_id": "client-123", "case_number": "Client Example v. Acme"}]),
+            "profiles": _PackageQuery([{"id": "attorney-2", "role": "attorney", "full_name": "Selected Attorney", "email": "selected@example.test"}]),
+            "signing_sessions": _PackageQuery([{
+                "id": "settlement-session", "title": "Settlement Agreement — Client Example", "document_type": "settlement",
+                "status": "signed", "signed_path": "signing/settlement/signed_agreement.pdf", "signed_at": "2026-08-11T15:00:00+00:00",
+                "signer_name": "Client Example", "case_id": "case-123", "client_id": "client-123",
+            }]),
+            "w9_requests": _PackageQuery([{
+                "id": "w9-123", "title": "Form W-9", "status": "complete", "case_id": "case-123",
+                "client_id": "client-123", "submitted_at": "2026-08-11T15:10:00+00:00",
+            }]),
+            "w9_submissions": _PackageQuery([{"id": "submission-123", "request_id": "w9-123", "completed_pdf_path": "w9/w9-123/completed_form_w9.pdf"}]),
+            "settlement_document_deliveries": _PackageQuery([]),
+        }
+        self.storage = _PackageStorage(b"%PDF-1.7\\nsigned settlement")
+
+    def table(self, table_name):
+        return self.queries[table_name]
+
+
+class SettlementPackageDeliveryTests(unittest.TestCase):
+    def test_completed_package_attaches_settlement_and_securely_links_w9(self):
+        supabase = _PackageSupabase()
+        payload = esign.SettlementPackageDeliveryPayload(
+            case_id="case-123", attorney_profile_id="attorney-2", confirmed=True,
+        )
+
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", new=AsyncMock(return_value={"id": "sender-1", "role": "attorney"})
+        ), patch("utils.email_service.send_email", new=AsyncMock(return_value=True)) as send_email:
+            result = asyncio.run(esign.deliver_completed_settlement_package(payload, "Bearer token"))
+
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(send_email.await_args.kwargs["to"], "selected@example.test")
+        self.assertEqual(send_email.await_args.kwargs["attachments"][0]["content"], b"%PDF-1.7\\nsigned settlement")
+        self.assertIn("attorney/w9?request_id=w9-123", send_email.await_args.kwargs["body"])
+        self.assertIn("not attached", send_email.await_args.kwargs["body"])
+        delivery_query = supabase.queries["settlement_document_deliveries"]
+        self.assertEqual(delivery_query.upsert_payloads[0][0]["recipient_profile_id"], "attorney-2")
+        self.assertEqual(delivery_query.update_payloads[-1]["status"], "sent")
+
+    def test_completed_package_rejects_when_w9_is_not_complete(self):
+        supabase = _PackageSupabase()
+        supabase.queries["w9_requests"] = _PackageQuery([])
+        payload = esign.SettlementPackageDeliveryPayload(
+            case_id="case-123", attorney_profile_id="attorney-2", confirmed=True,
+        )
+
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", new=AsyncMock(return_value={"id": "sender-1", "role": "attorney"})
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(esign.deliver_completed_settlement_package(payload, "Bearer token"))
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("completed Form W-9", raised.exception.detail)
 
 
 class GroupedEsignDashboardTests(unittest.TestCase):

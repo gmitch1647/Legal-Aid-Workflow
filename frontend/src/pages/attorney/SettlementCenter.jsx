@@ -19,6 +19,8 @@ import {
   getClosingStatements,
   getSignatureRequests,
   listW9Requests,
+  getAttorneys,
+  sendCompletedSettlementPackage,
 } from '../../lib/api';
 import SettlementAgreementModal, { SettlementAgreementStatusModal } from './SettlementAgreementModal';
 
@@ -140,6 +142,9 @@ export default function SettlementCenter() {
   const [loadingCases, setLoadingCases] = useState(true);
   const [loadingWorkflow, setLoadingWorkflow] = useState(false);
   const [agreementPanel, setAgreementPanel] = useState(null);
+  const [showAttorneyDelivery, setShowAttorneyDelivery] = useState(false);
+  const [deliveryAttorneys, setDeliveryAttorneys] = useState([]);
+  const [loadingDeliveryAttorneys, setLoadingDeliveryAttorneys] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -210,6 +215,7 @@ export default function SettlementCenter() {
   const creditDisclosureKind = requestStatus(creditDisclosure);
   const w9Kind = requestStatus(w9);
   const closingKind = closingStatus(closingStatement);
+  const completedSettlementPackageReady = agreementKind === 'complete' && w9Kind === 'complete';
 
   const returnTo = selectedCaseId
     ? `/attorney/settlements?case_id=${encodeURIComponent(selectedCaseId)}`
@@ -234,6 +240,30 @@ export default function SettlementCenter() {
   const openCreditDisclosurePanel = () => {
     setNotice('');
     setAgreementPanel(creditDisclosureNeedsReplacement ? 'disclosure-send' : 'disclosure-status');
+  };
+
+  const openAttorneyDelivery = async () => {
+    setNotice('');
+    setError('');
+    setShowAttorneyDelivery(true);
+    setLoadingDeliveryAttorneys(true);
+    try {
+      const rows = asRows(await getAttorneys(), ['attorneys', 'data']);
+      setDeliveryAttorneys(rows.filter((attorney) => attorney.email));
+    } catch (err) {
+      setDeliveryAttorneys([]);
+      setError(err.message || 'Unable to load the attorney directory.');
+    } finally {
+      setLoadingDeliveryAttorneys(false);
+    }
+  };
+
+  const handleAttorneyDeliverySent = (result) => {
+    setShowAttorneyDelivery(false);
+    const recipient = result?.recipient_name || result?.recipient_email || 'the selected attorney';
+    setNotice(result?.status === 'already_sent'
+      ? `The completed settlement package was already sent to ${recipient}.`
+      : `The signed settlement agreement was emailed to ${recipient}. The completed W-9 is available through the secure LegalFlow link in that email.`);
   };
 
   const handleAgreementSent = async ({ documentType, settlementSource, attachmentError } = {}) => {
@@ -329,6 +359,19 @@ export default function SettlementCenter() {
                 </section>
               )}
 
+              {completedSettlementPackageReady && (
+                <section className="flex flex-col gap-4 rounded-2xl border border-indigo-200 bg-indigo-50 p-5 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">Completed document delivery</p>
+                    <h2 className="mt-1 text-lg font-bold text-indigo-950">Email the completed settlement package to an attorney</h2>
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-indigo-900/85">Choose an attorney in LegalFlow. The signed settlement agreement will be attached, and the completed W-9 will be provided through a protected LegalFlow link because it contains taxpayer information.</p>
+                  </div>
+                  <button onClick={openAttorneyDelivery} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-indigo-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-800">
+                    <Send className="h-4 w-4" /> Send completed documents
+                  </button>
+                </section>
+              )}
+
               <section className="grid gap-4 lg:grid-cols-3">
                 <StepCard
                   number="1"
@@ -369,6 +412,15 @@ export default function SettlementCenter() {
           )}
         </>
       )}
+      {showAttorneyDelivery && selectedCase && (
+        <CompletedSettlementDeliveryModal
+          caseRow={selectedCase}
+          attorneys={deliveryAttorneys}
+          loadingAttorneys={loadingDeliveryAttorneys}
+          onClose={() => setShowAttorneyDelivery(false)}
+          onSent={handleAttorneyDeliverySent}
+        />
+      )}
       {agreementPanel === 'agreement-send' && selectedCaseId && (
         <SettlementAgreementModal
           key={`agreement-send-${selectedCaseId}`}
@@ -403,6 +455,76 @@ export default function SettlementCenter() {
           onRefresh={() => loadWorkflow(selectedCaseId)}
         />
       )}
+    </div>
+  );
+}
+
+
+function CompletedSettlementDeliveryModal({ caseRow, attorneys, loadingAttorneys, onClose, onSent }) {
+  const [selectedAttorneyId, setSelectedAttorneyId] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const defaultAttorney = attorneys.find((attorney) => attorney.is_default && attorney.email) || attorneys[0];
+    if (defaultAttorney && !selectedAttorneyId) {
+      setSelectedAttorneyId(String(defaultAttorney.profile_id || defaultAttorney.id));
+    }
+  }, [attorneys, selectedAttorneyId]);
+
+  const selectedAttorney = attorneys.find((attorney) => String(attorney.profile_id || attorney.id) === String(selectedAttorneyId));
+
+  const sendPackage = async () => {
+    if (!selectedAttorneyId || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      const result = await sendCompletedSettlementPackage(caseRow.id, selectedAttorneyId);
+      onSent(result);
+    } catch (err) {
+      setError(err.message || 'Could not send the completed settlement package.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Send completed settlement documents">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+        <div className="border-b border-slate-200 px-5 py-4">
+          <h2 className="text-lg font-bold text-slate-900">Send completed settlement documents</h2>
+          <p className="mt-1 text-sm text-slate-600">Choose the LegalFlow attorney who should receive the completed records for this case.</p>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            <p className="font-semibold">{caseLabel(caseRow)}</p>
+            <p className="mt-1 text-xs leading-5">The signed settlement agreement will be attached. The completed Form W-9 will remain protected in LegalFlow and will be opened through a secure sign-in link in the same email.</p>
+          </div>
+          {loadingAttorneys ? (
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading attorneys…</div>
+          ) : attorneys.length === 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">No attorney with an email address is available in LegalFlow.</div>
+          ) : (
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500">Send to attorney</label>
+              <select value={selectedAttorneyId} onChange={(event) => setSelectedAttorneyId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100">
+                {attorneys.map((attorney) => {
+                  const value = String(attorney.profile_id || attorney.id);
+                  return <option key={value} value={value}>{attorney.full_name || 'Attorney'} — {attorney.email}</option>;
+                })}
+              </select>
+              {selectedAttorney && <p className="mt-2 text-xs text-slate-500">The completed package will be routed to {selectedAttorney.email}.</p>}
+            </div>
+          )}
+          {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertCircle className="mr-1 inline h-4 w-4" /> {error}</div>}
+        </div>
+        <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-4">
+          <button onClick={onClose} disabled={sending} className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancel</button>
+          <button onClick={sendPackage} disabled={sending || loadingAttorneys || !selectedAttorneyId} className="inline-flex items-center gap-2 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">
+            {sending ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : <><Send className="h-4 w-4" /> Send documents</>}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
