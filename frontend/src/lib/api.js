@@ -246,6 +246,44 @@ export async function deleteDocument(caseId, docId) {
   return request(`/cases/${caseId}/documents/${docId}`, { method: 'DELETE' });
 }
 
+export async function getDocumentRequests(caseId) {
+  return request(`/cases/${caseId}/document-requests`);
+}
+
+export async function createDocumentRequest(caseId, data) {
+  return request(`/cases/${caseId}/document-requests`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function uploadRequestedDocument(requestId, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request(`/document-requests/${requestId}/upload`, { method: 'POST', body: formData });
+}
+
+export async function cancelDocumentRequest(requestId) {
+  return request(`/document-requests/${requestId}/cancel`, { method: 'POST' });
+}
+
+export async function getSettlementPayoutLedgers() {
+  return request('/settlement-payouts');
+}
+
+export async function createSettlementPayoutLedger(data) {
+  return request('/settlement-payouts', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateSettlementPayoutLedger(ledgerId, data) {
+  return request(`/settlement-payouts/${ledgerId}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function getSettlementPayouts(ledgerId) {
+  return request(`/settlement-payouts/${ledgerId}/payments`);
+}
+
+export async function recordSettlementPayout(ledgerId, data) {
+  return request(`/settlement-payouts/${ledgerId}/payments`, { method: 'POST', body: JSON.stringify(data) });
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------

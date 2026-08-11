@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getCase, getDocuments, downloadComplaint, downloadMemo } from '../../lib/api';
+import { getCase, getDocumentRequests, getDocuments, uploadRequestedDocument, downloadComplaint, downloadMemo } from '../../lib/api';
 import { getCurrentUser } from '../../lib/supabase';
 import MessageThread from '../../components/MessageThread';
 import ProgressBar from '../../components/ProgressBar';
-import { ArrowLeft, FileText, Download, MessageSquare, Clock, User } from 'lucide-react';
+import { ArrowLeft, FileText, Download, MessageSquare, Clock, User, Upload, CheckCircle2, Loader2 } from 'lucide-react';
 
 const STATUS_MESSAGES = {
   submitted: "We've received your case and are reviewing it. We'll be in touch soon.",
@@ -22,6 +22,9 @@ export default function CaseDetail() {
   const navigate = useNavigate();
   const [caseData, setCaseData] = useState(null);
   const [documents, setDocuments] = useState([]);
+  const [documentRequests, setDocumentRequests] = useState([]);
+  const [uploadingRequestId, setUploadingRequestId] = useState(null);
+  const [requestError, setRequestError] = useState('');
   const [loading, setLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(null);
 
@@ -32,13 +35,15 @@ export default function CaseDetail() {
   async function loadData() {
     try {
       setLoading(true);
-      const [caseRes, docsRes, user] = await Promise.all([
+      const [caseRes, docsRes, requestsRes, user] = await Promise.all([
         getCase(id),
         getDocuments(id),
+        getDocumentRequests(id),
         getCurrentUser(),
       ]);
       setCaseData(caseRes);
       setDocuments(docsRes || []);
+      setDocumentRequests(Array.isArray(requestsRes) ? requestsRes : []);
       setCurrentUserId(user?.id);
     } catch (err) {
       console.error('Failed to load case:', err);
@@ -73,6 +78,21 @@ export default function CaseDetail() {
       if (url) window.open(url, '_blank');
     } catch (err) {
       console.error('Download failed:', err);
+    }
+  }
+
+  async function handleRequestedUpload(request, file) {
+    if (!file) return;
+    setUploadingRequestId(request.id);
+    setRequestError('');
+    try {
+      const result = await uploadRequestedDocument(request.id, file);
+      setDocumentRequests((current) => current.map((item) => item.id === request.id ? { ...item, status: 'uploaded' } : item));
+      if (result?.document) setDocuments((current) => [result.document, ...current]);
+    } catch (err) {
+      setRequestError(err?.message || 'Could not upload the requested document.');
+    } finally {
+      setUploadingRequestId(null);
     }
   }
 
@@ -154,6 +174,38 @@ export default function CaseDetail() {
               </div>
             </div>
           )}
+
+          {/* Requested Documents */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
+            <h2 className="font-semibold text-slate-900 mb-1">Documents Requested From You</h2>
+            <p className="text-sm text-slate-500 mb-3">Upload each item your LegalFlow team has requested for this case.</p>
+            {requestError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{requestError}</p>}
+            {documentRequests.filter((item) => item.status !== 'cancelled').length === 0 ? (
+              <p className="text-sm text-slate-500">There are no requested documents at this time.</p>
+            ) : (
+              <div className="space-y-3">
+                {documentRequests.filter((item) => item.status !== 'cancelled').map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-slate-900">{item.title}</p>
+                        {item.description && <p className="mt-1 text-sm text-slate-600">{item.description}</p>}
+                        {item.due_date && <p className="mt-1 text-xs text-slate-500">Requested by {new Date(`${item.due_date}T00:00:00`).toLocaleDateString()}</p>}
+                      </div>
+                      {item.status === 'uploaded' ? <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700"><CheckCircle2 className="h-3.5 w-3.5" /> Uploaded</span> : <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Action needed</span>}
+                    </div>
+                    {item.status !== 'uploaded' && (
+                      <label className="mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                        {uploadingRequestId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                        {uploadingRequestId === item.id ? 'Uploading…' : 'Upload document'}
+                        <input type="file" className="hidden" disabled={uploadingRequestId === item.id} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt" onChange={(event) => handleRequestedUpload(item, event.target.files?.[0])} />
+                      </label>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Your Uploaded Documents */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">

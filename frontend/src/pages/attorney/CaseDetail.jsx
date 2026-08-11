@@ -58,6 +58,7 @@ import {
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
 import SecureDocumentLink from '../../components/SecureDocumentLink';
+import DocumentRequestPanel from '../../components/DocumentRequestPanel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2090,6 +2091,9 @@ export default function CaseDetail() {
 
           {/* PII Section */}
           <PiiSection caseId={id} documents={documents} onRefresh={fetchDocuments} />
+
+          {/* Client Document Requests */}
+          <DocumentRequestPanel caseId={id} />
 
           {/* Documents */}
           <DocumentsUploadSection caseId={id} documents={documents} onRefresh={fetchDocuments} />
