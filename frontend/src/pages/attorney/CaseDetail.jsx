@@ -57,6 +57,7 @@ import {
   deleteDocument,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
+import SecureDocumentLink from '../../components/SecureDocumentLink';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -322,10 +323,17 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
             {complaintDocs.map(doc => (
               <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-blue-200 bg-white p-3">
                 <FileText className="h-4 w-4 shrink-0 text-blue-500" />
-                <a href={doc.url || '#'} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-0">
-                  <p className="truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</p>
-                  <p className="text-xs text-slate-400">{formatDate(doc.created_at)}</p>
-                </a>
+                <SecureDocumentLink
+                  caseId={caseId}
+                  document={doc}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+                  onError={setUploadError}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</span>
+                    <span className="block text-xs text-slate-400">{formatDate(doc.created_at)}</span>
+                  </span>
+                </SecureDocumentLink>
                 <button onClick={() => handleDeleteDoc(doc)}
                   className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
                   <Trash2 className="h-3.5 w-3.5" />
@@ -624,19 +632,22 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
         {generalDocs.length > 0 ? (
           generalDocs.map(doc => (
             <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50">
-              <a href={doc.url || doc.file_url || '#'} target="_blank" rel="noopener noreferrer"
-                className="flex items-center gap-3 flex-1 min-w-0">
+              <SecureDocumentLink
+                caseId={caseId}
+                document={doc}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                onError={setUploadError}
+              >
                 <FileText className="h-5 w-5 shrink-0 text-slate-400" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-700">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-slate-700">
                     {doc.file_name || doc.name || doc.filename || 'Document'}
-                  </p>
-                  <p className="text-xs text-slate-400">
+                  </span>
+                  <span className="block text-xs text-slate-400">
                     {documentCategoryLabel(doc)} · {formatDate(doc.created_at || doc.uploaded_at)}
-                  </p>
-                </div>
-                <ExternalLink className="h-4 w-4 shrink-0 text-slate-300" />
-              </a>
+                  </span>
+                </span>
+              </SecureDocumentLink>
               <button onClick={() => handleDelete(doc)}
                 className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
                 <Trash2 className="h-3.5 w-3.5" />
@@ -698,11 +709,16 @@ function PiiSection({ caseId, documents, onRefresh }) {
           piiDocs.map(doc => (
             <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-amber-200 bg-white p-3">
               <Shield className="h-4 w-4 shrink-0 text-amber-500" />
-              <a href={doc.url || doc.file_url || '#'} target="_blank" rel="noopener noreferrer"
-                className="flex-1 min-w-0">
-                <p className="truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</p>
-                <p className="text-xs text-slate-400">{formatDate(doc.created_at || doc.uploaded_at)}</p>
-              </a>
+              <SecureDocumentLink
+                caseId={caseId}
+                document={doc}
+                className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</span>
+                  <span className="block text-xs text-slate-400">{formatDate(doc.created_at || doc.uploaded_at)}</span>
+                </span>
+              </SecureDocumentLink>
               <button onClick={() => handleDelete(doc)}
                 className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
                 <Trash2 className="h-3.5 w-3.5" />

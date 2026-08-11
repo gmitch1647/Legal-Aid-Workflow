@@ -46,6 +46,7 @@ import {
   getDefendants,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
+import SecureDocumentLink from '../../components/SecureDocumentLink';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1508,23 +1509,21 @@ function DocumentsSection({ documents, clientCases, onUploadComplete, onDelete }
         {documents.length > 0 ? (
           documents.map((doc) => (
             <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50">
-              <a
-                href={doc.url || doc.file_url || '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-3 flex-1 min-w-0"
+              <SecureDocumentLink
+                caseId={doc.case_id}
+                document={doc}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
               >
                 <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-700">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-slate-700">
                     {doc.file_name || doc.name || doc.filename || 'Document'}
-                  </p>
-                  <p className="text-xs text-slate-400">
+                  </span>
+                  <span className="block text-xs text-slate-400">
                     {doc.case_name || 'Case'} · {documentCategoryLabel(doc)}
-                  </p>
-                </div>
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-              </a>
+                  </span>
+                </span>
+              </SecureDocumentLink>
               <button
                 onClick={() => onDelete && onDelete(doc)}
                 className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0"

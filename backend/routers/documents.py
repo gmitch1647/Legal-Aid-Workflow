@@ -190,6 +190,73 @@ async def list_documents(case_id: str, authorization: str = Header(...)):
 
 
 # ---------------------------------------------------------------------------
+# GET /cases/{case_id}/documents/{doc_id}/access -- issue fresh document link
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cases/{case_id}/documents/{doc_id}/access")
+async def get_document_access_url(
+    case_id: str,
+    doc_id: str,
+    authorization: str = Header(...),
+):
+    """Issue a new, authorization-scoped storage URL for one document.
+
+    Storage links intentionally expire.  The frontend calls this endpoint at
+    click time rather than reusing a URL from a previously loaded document
+    list, which prevents an expired Storage JWT from being opened after a
+    case page has been left open for a while.  PII links are kept especially
+    short-lived because they contain sensitive records.
+    """
+    profile = await _get_current_user(authorization)
+    _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+
+    doc_resp = (
+        supabase.table("case_documents")
+        .select("id, case_id, storage_path, document_category, file_name")
+        .eq("id", doc_id)
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+    )
+    if not doc_resp.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+
+    doc = doc_resp.data[0]
+    storage_path = doc.get("storage_path")
+    if not storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This document is not available in secure storage.",
+        )
+
+    category = str(doc.get("document_category") or "").lower()
+    expires_in = 300 if category == "pii" else 900
+    try:
+        url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expires_in)
+        url = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
+    except Exception as exc:
+        logger.exception("Could not create a fresh document access URL for %s", doc_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not prepare the secure document link.",
+        ) from exc
+
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not prepare the secure document link.",
+        )
+
+    return {
+        "url": url,
+        "expires_in": expires_in,
+        "file_name": doc.get("file_name") or "Document",
+    }
+
+
+# ---------------------------------------------------------------------------
 # DELETE /cases/{case_id}/documents/{doc_id} -- delete a document
 # ---------------------------------------------------------------------------
 
