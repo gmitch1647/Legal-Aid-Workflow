@@ -49,16 +49,18 @@ def _money(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _payout_split(settlement_amount: Decimal, court_costs: Decimal, attorney_paid_costs: Decimal, percentage: Decimal) -> tuple[float, float]:
-    """Return the net settlement subject to the split and the expected share.
+def _payout_split(settlement_amount: Decimal, court_costs: Decimal, client_payouts: Decimal, percentage: Decimal) -> tuple[float, float, float]:
+    """Calculate the private split after court costs and client payouts.
 
-    Court costs and costs paid out to the attorney are deducted first.  A
-    negative balance is never carried into a payout calculation; it becomes
-    zero until the settlement amount is updated.
+    The amount paid to the client is deducted before the split.  The user's
+    editable percentage applies only to the remaining net amount, and the
+    attorney remainder is what remains after that private share.  A negative
+    net amount is clamped to zero for safe recordkeeping.
     """
-    net_split_amount = max(Decimal("0"), settlement_amount - court_costs - attorney_paid_costs)
+    net_split_amount = max(Decimal("0"), settlement_amount - court_costs - client_payouts)
     expected_amount = net_split_amount * percentage / Decimal("100")
-    return _money(net_split_amount), _money(expected_amount)
+    attorney_remainder = max(Decimal("0"), net_split_amount - expected_amount)
+    return _money(net_split_amount), _money(expected_amount), _money(attorney_remainder)
 
 
 class DocumentRequestCreate(BaseModel):
@@ -72,7 +74,7 @@ class PayoutLedgerCreate(BaseModel):
     case_id: str
     settlement_amount: float = Field(ge=0)
     court_costs: float = Field(default=0, ge=0)
-    attorney_paid_costs: float = Field(default=0, ge=0)
+    client_payouts: float = Field(default=0, ge=0)
     percentage: float = Field(default=35, ge=0, le=100)
     notes: Optional[str] = Field(default=None, max_length=2000)
 
@@ -80,7 +82,7 @@ class PayoutLedgerCreate(BaseModel):
 class PayoutLedgerUpdate(BaseModel):
     settlement_amount: Optional[float] = Field(default=None, ge=0)
     court_costs: Optional[float] = Field(default=None, ge=0)
-    attorney_paid_costs: Optional[float] = Field(default=None, ge=0)
+    client_payouts: Optional[float] = Field(default=None, ge=0)
     percentage: Optional[float] = Field(default=None, ge=0, le=100)
     notes: Optional[str] = Field(default=None, max_length=2000)
 
@@ -275,9 +277,9 @@ async def create_settlement_payout_ledger(body: PayoutLedgerCreate, authorizatio
     case = _case_or_404(supabase, body.case_id)
     settlement = Decimal(str(body.settlement_amount))
     court_costs = Decimal(str(body.court_costs))
-    attorney_paid_costs = Decimal(str(body.attorney_paid_costs))
+    client_payouts = Decimal(str(body.client_payouts))
     percentage = Decimal(str(body.percentage))
-    net_split_amount, expected = _payout_split(settlement, court_costs, attorney_paid_costs, percentage)
+    net_split_amount, expected, attorney_remainder = _payout_split(settlement, court_costs, client_payouts, percentage)
     existing = (
         supabase.table("settlement_payout_ledgers")
         .select("id")
@@ -295,10 +297,11 @@ async def create_settlement_payout_ledger(body: PayoutLedgerCreate, authorizatio
         "owner_id": profile["id"],
         "settlement_amount": _money(settlement),
         "court_costs": _money(court_costs),
-        "attorney_paid_costs": _money(attorney_paid_costs),
+        "client_payouts": _money(client_payouts),
         "net_split_amount": net_split_amount,
         "percentage": _money(percentage),
         "expected_amount": expected,
+        "attorney_remainder": attorney_remainder,
         "notes": (body.notes or "").strip() or None,
         "created_at": now,
         "updated_at": now,
@@ -318,16 +321,17 @@ async def update_settlement_payout_ledger(ledger_id: str, body: PayoutLedgerUpda
     current = existing.data[0]
     settlement = Decimal(str(body.settlement_amount if body.settlement_amount is not None else current.get("settlement_amount") or 0))
     court_costs = Decimal(str(body.court_costs if body.court_costs is not None else current.get("court_costs") or 0))
-    attorney_paid_costs = Decimal(str(body.attorney_paid_costs if body.attorney_paid_costs is not None else current.get("attorney_paid_costs") or 0))
+    client_payouts = Decimal(str(body.client_payouts if body.client_payouts is not None else current.get("client_payouts") or 0))
     percentage = Decimal(str(body.percentage if body.percentage is not None else current.get("percentage") or 35))
-    net_split_amount, expected_amount = _payout_split(settlement, court_costs, attorney_paid_costs, percentage)
+    net_split_amount, expected_amount, attorney_remainder = _payout_split(settlement, court_costs, client_payouts, percentage)
     update = {
         "settlement_amount": _money(settlement),
         "court_costs": _money(court_costs),
-        "attorney_paid_costs": _money(attorney_paid_costs),
+        "client_payouts": _money(client_payouts),
         "net_split_amount": net_split_amount,
         "percentage": _money(percentage),
         "expected_amount": expected_amount,
+        "attorney_remainder": attorney_remainder,
         "updated_at": _now(),
     }
     if body.notes is not None:
