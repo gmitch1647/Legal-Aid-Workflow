@@ -703,6 +703,8 @@ async def send_signature_request(
         "template_id": payload.template_id,
         "status": "awaiting_signature",
         "sent_by": profile["id"],
+        "notification_recipient_id": profile["id"],
+        "notification_recipient_email": profile.get("email", ""),
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -854,6 +856,8 @@ async def send_document_for_signature(
         "client_id": client_id if client_id else None,
         "status": "awaiting_signature",
         "sent_by": profile["id"],
+        "notification_recipient_id": profile["id"],
+        "notification_recipient_email": profile.get("email", ""),
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

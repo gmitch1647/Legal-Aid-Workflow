@@ -157,11 +157,20 @@ async def notify_attorney_of_esign_event(
     if record.get(notification_field):
         return False
 
-    preferences, attorney = await get_esign_preferences(supabase, record.get("sent_by"))
+    # New requests persist the initiating LegalFlow account as the recipient.
+    # ``sent_by`` remains a compatibility fallback for documents created before
+    # sender-recipient tracking was introduced.
+    recipient_profile_id = record.get("notification_recipient_id") or record.get("sent_by")
+    preferences, recipient_profile = await get_esign_preferences(supabase, recipient_profile_id)
     if not preferences[preference_key]:
         return False
-    if not attorney or not attorney.get("email"):
-        logger.warning("No attorney email is available for E-Signature event %s", record.get("id"))
+    recipient_email = str(
+        record.get("notification_recipient_email")
+        or (recipient_profile or {}).get("email")
+        or ""
+    ).strip()
+    if not recipient_email:
+        logger.warning("No sender email is available for E-Signature event %s", record.get("id"))
         return False
 
     title = record.get("title") or document_type_label(record.get("document_type"))
@@ -179,7 +188,7 @@ async def notify_attorney_of_esign_event(
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 
     sent = await send_email(
-        to=attorney["email"],
+        to=recipient_email,
         subject=f"{heading}: {title}",
         body=f"""
         <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;">

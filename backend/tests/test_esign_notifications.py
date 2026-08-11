@@ -102,14 +102,16 @@ class SentNotificationTests(unittest.TestCase):
             "document_type": "settlement",
             "signer_name": "Client Example",
             "sent_by": "attorney-1",
+            "notification_recipient_id": "sender-1",
+            "notification_recipient_email": "owner@example.com",
             "sent_notification_sent_at": None,
         }
         supabase = _Supabase({
             "signing_sessions": [record],
             "profiles": [{
-                "id": "attorney-1",
-                "email": "attorney@example.com",
-                "full_name": "Attorney Example",
+                "id": "sender-1",
+                "email": "owner@example.com",
+                "full_name": "Sender Example",
                 "notification_preferences": {"esign_document_sent": True},
             }],
         })
@@ -130,6 +132,7 @@ class SentNotificationTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(send_email.await_count, 1)
+        self.assertEqual(send_email.await_args.kwargs["to"], "owner@example.com")
         self.assertIsNotNone(record["sent_notification_sent_at"])
 
 
