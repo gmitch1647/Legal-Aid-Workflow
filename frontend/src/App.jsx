@@ -21,6 +21,7 @@ import {
   FileKey,
   DollarSign,
   FileSignature,
+  FolderOpen,
 } from 'lucide-react';
 import {
   supabase,
@@ -61,6 +62,7 @@ const W9Requests = React.lazy(() => import('./pages/attorney/W9Requests'));
 const ClosingStatements = React.lazy(() => import('./pages/attorney/ClosingStatements'));
 const SettlementCenter = React.lazy(() => import('./pages/attorney/SettlementCenter'));
 const AttorneyPayouts = React.lazy(() => import('./pages/attorney/AttorneyPayouts'));
+const SupportingDocuments = React.lazy(() => import('./pages/attorney/SupportingDocuments'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -465,6 +467,7 @@ const allAttorneyLinks = [
   { to: '/attorney/commissions', label: 'Commissions', icon: DollarSign, roles: ['attorney'] },
   { to: '/attorney/payouts', label: 'Attorney Payouts', icon: DollarSign, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/forms', label: 'Forms', icon: FileText, roles: ['attorney'] },
+  { to: '/attorney/supporting-documents', label: 'Supporting Documents', icon: FolderOpen, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/clients', label: 'Clients', icon: Users, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/settings', label: 'Settings', icon: Settings, roles: ['attorney'] },
 ];
@@ -562,6 +565,7 @@ export default function App() {
             <Route path="commissions" element={<CommissionsPage />} />
             <Route path="payouts" element={<AttorneyPayouts />} />
             <Route path="forms" element={<FormsPage />} />
+            <Route path="supporting-documents" element={<SupportingDocuments />} />
             <Route path="clients" element={<ClientList />} />
             <Route path="clients/:id" element={<ClientProfile />} />
             <Route path="settings" element={<AttorneySettings />} />

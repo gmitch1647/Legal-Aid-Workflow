@@ -305,6 +305,40 @@ export async function recordSettlementPayout(ledgerId, data) {
 }
 
 // ---------------------------------------------------------------------------
+// Supporting Documents Library
+// ---------------------------------------------------------------------------
+
+export async function getSupportingDocuments() {
+  return request('/supporting-documents');
+}
+
+export async function uploadSupportingDocument(file, description = '') {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (description.trim()) formData.append('description', description.trim());
+  return request('/supporting-documents', { method: 'POST', body: formData });
+}
+
+export async function deleteSupportingDocument(documentId) {
+  return request(`/supporting-documents/${documentId}`, { method: 'DELETE' });
+}
+
+export async function getSupportingDocumentAccessUrl(documentId) {
+  return request(`/supporting-documents/${documentId}/access`);
+}
+
+export async function getCaseSupportingDocuments(caseId) {
+  return request(`/cases/${caseId}/supporting-documents`);
+}
+
+export async function attachSupportingDocumentsToCase(caseId, documentIds) {
+  return request(`/cases/${caseId}/supporting-documents`, {
+    method: 'POST',
+    body: JSON.stringify(documentIds),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 

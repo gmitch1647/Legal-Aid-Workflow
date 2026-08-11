@@ -30,6 +30,7 @@ import {
   AlertCircle,
   Upload,
   Trash2,
+  FolderOpen,
 } from 'lucide-react';
 import { useAuth } from '../../App';
 import {
@@ -57,6 +58,10 @@ import {
   attachExistingDocumentAsComplaintExhibit,
   getUploadedComplaintWordDownload,
   deleteDocument,
+  attachSupportingDocumentsToCase,
+  getCaseSupportingDocuments,
+  getSupportingDocuments,
+  getSupportingDocumentAccessUrl,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
 import SecureDocumentLink from '../../components/SecureDocumentLink';
@@ -219,6 +224,14 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   const [draggingExhibitFor, setDraggingExhibitFor] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [libraryDocuments, setLibraryDocuments] = useState([]);
+  const [attachedLibraryDocuments, setAttachedLibraryDocuments] = useState([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryAttaching, setLibraryAttaching] = useState(false);
+  const [selectedLibraryIds, setSelectedLibraryIds] = useState([]);
+  const [openingSupportingId, setOpeningSupportingId] = useState('');
+  const [libraryMessage, setLibraryMessage] = useState('');
   const fileInputRef = React.useRef(null);
   const exhibitInputRefs = React.useRef({});
 
@@ -234,6 +247,74 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   const hasText = !!(caseData?.complaint_text || caseData?.complaint_draft);
   const status = caseData?.status;
   const isApproved = status === 'approved' || status === 'filed' || status === 'closed';
+  const attachedLibraryIds = new Set(attachedLibraryDocuments.map((item) => item.supporting_document_id));
+
+  async function loadSupportingLibrary() {
+    setLibraryLoading(true);
+    try {
+      const [libraryRows, attachedRows] = await Promise.all([
+        getSupportingDocuments(),
+        getCaseSupportingDocuments(caseId),
+      ]);
+      setLibraryDocuments(Array.isArray(libraryRows) ? libraryRows : libraryRows?.data || []);
+      setAttachedLibraryDocuments(Array.isArray(attachedRows) ? attachedRows : attachedRows?.data || []);
+    } catch (err) {
+      setUploadError(err.message || 'Could not load the supporting-document library.');
+    } finally {
+      setLibraryLoading(false);
+    }
+  }
+
+  React.useEffect(() => {
+    loadSupportingLibrary();
+  }, [caseId]);
+
+  async function handleLibraryToggle() {
+    const willOpen = !libraryOpen;
+    setLibraryOpen(willOpen);
+    setLibraryMessage('');
+    if (willOpen) await loadSupportingLibrary();
+  }
+
+  function toggleLibrarySelection(documentId) {
+    if (attachedLibraryIds.has(documentId)) return;
+    setSelectedLibraryIds((current) => (
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
+    ));
+  }
+
+  async function handleAttachSupportingDocuments() {
+    if (!selectedLibraryIds.length) return;
+    setLibraryAttaching(true);
+    setUploadError('');
+    setLibraryMessage('');
+    try {
+      await attachSupportingDocumentsToCase(caseId, selectedLibraryIds);
+      const count = selectedLibraryIds.length;
+      setSelectedLibraryIds([]);
+      setLibraryMessage(`${count} supporting ${count === 1 ? 'document is' : 'documents are'} now attached to this case.`);
+      await loadSupportingLibrary();
+    } catch (err) {
+      setUploadError(err.message || 'Could not attach the selected supporting documents.');
+    } finally {
+      setLibraryAttaching(false);
+    }
+  }
+
+  async function handleOpenSupportingDocument(document) {
+    setOpeningSupportingId(document.id);
+    setUploadError('');
+    try {
+      const { url } = await getSupportingDocumentAccessUrl(document.id);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setUploadError(err.message || 'Could not open the supporting document.');
+    } finally {
+      setOpeningSupportingId('');
+    }
+  }
 
   async function handleUpload(files) {
     if (!files?.length) return;
@@ -474,20 +555,119 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
         </div>
       )}
 
-      {/* Upload button */}
+      {attachedLibraryDocuments.length > 0 && (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <FolderOpen className="h-3.5 w-3.5 text-blue-600" /> Supporting Documents Attached to This Case
+            </p>
+            <span className="text-[11px] text-slate-400">Stored once in your library</span>
+          </div>
+          <div className="space-y-1.5">
+            {attachedLibraryDocuments.map((attachment) => {
+              const supportingDocument = attachment.supporting_documents || {};
+              const opening = openingSupportingId === supportingDocument.id;
+              return (
+                <button
+                  key={attachment.id}
+                  type="button"
+                  onClick={() => handleOpenSupportingDocument(supportingDocument)}
+                  disabled={!supportingDocument.id || opening}
+                  className="flex w-full items-center gap-2 rounded-md bg-slate-50 px-2.5 py-2 text-left transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {opening ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" /> : <File className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-700">{supportingDocument.file_name || 'Supporting document'}</span>
+                  <span className="text-[11px] font-medium text-blue-700">Open</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Complaint and reusable-supporting-document controls */}
       <div className="mt-4">
-        <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
-          className="inline-flex items-center gap-1.5 px-3 py-2 border border-blue-300 rounded-lg text-xs font-medium text-blue-700 bg-white hover:bg-blue-50 disabled:opacity-50">
-          <Upload className="w-3.5 h-3.5" />
-          {uploading ? 'Uploading...' : 'Upload Complaint Document'}
-        </button>
-        <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.doc" className="hidden"
-          onChange={(e) => handleUpload(e.target.files)} />
+        <div className="flex flex-wrap items-start gap-2">
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 border border-blue-300 rounded-lg text-xs font-medium text-blue-700 bg-white hover:bg-blue-50 disabled:opacity-50">
+            <Upload className="w-3.5 h-3.5" />
+            {uploading ? 'Uploading...' : 'Upload Complaint Document'}
+          </button>
+          <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.doc" className="hidden"
+            onChange={(e) => handleUpload(e.target.files)} />
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={handleLibraryToggle}
+              disabled={libraryAttaching}
+              aria-expanded={libraryOpen}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            >
+              <FolderOpen className="h-3.5 w-3.5 text-blue-600" />
+              Attach from Library
+              <ChevronDown className={`h-3.5 w-3.5 transition ${libraryOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {libraryOpen && (
+              <div className="absolute left-0 z-30 mt-2 w-[min(22rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <p className="text-sm font-semibold text-slate-800">Attach supporting documents</p>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-500">Select one or more reusable files to link to this case. No new storage copies are created.</p>
+                </div>
+                <div className="max-h-64 overflow-y-auto p-2">
+                  {libraryLoading ? (
+                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading library…</div>
+                  ) : libraryDocuments.length === 0 ? (
+                    <p className="px-3 py-6 text-center text-xs leading-5 text-slate-500">Your library is empty. Add reusable files from the Supporting Documents tab, then return here to attach them.</p>
+                  ) : (
+                    libraryDocuments.map((document) => {
+                      const attached = attachedLibraryIds.has(document.id);
+                      const selected = selectedLibraryIds.includes(document.id);
+                      return (
+                        <label
+                          key={document.id}
+                          className={`flex cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2.5 transition ${attached ? 'cursor-default bg-slate-50 opacity-70' : selected ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected || attached}
+                            disabled={attached || libraryAttaching}
+                            onChange={() => toggleLibrarySelection(document.id)}
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-semibold text-slate-700">{document.file_name}</span>
+                            {document.description && <span className="mt-0.5 block truncate text-[11px] text-slate-500">{document.description}</span>}
+                          </span>
+                          {attached && <span className="shrink-0 text-[10px] font-semibold text-emerald-700">Attached</span>}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-3 py-3">
+                  <button type="button" onClick={() => { setLibraryOpen(false); setSelectedLibraryIds([]); }} className="text-xs font-medium text-slate-600 hover:text-slate-900">Cancel</button>
+                  <button
+                    type="button"
+                    onClick={handleAttachSupportingDocuments}
+                    disabled={!selectedLibraryIds.length || libraryAttaching}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {libraryAttaching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Attach Selected{selectedLibraryIds.length ? ` (${selectedLibraryIds.length})` : ''}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        {libraryMessage && <p className="mt-2 text-xs text-emerald-700">{libraryMessage}</p>}
         {uploadError && (
           <p className="text-xs text-red-600 mt-2">Error: {uploadError}</p>
         )}
         {!hasText && complaintDocs.length === 0 && !uploadError && (
-          <p className="text-xs text-slate-400 mt-2">No complaint drafted yet. Use the Drafter to create one, or upload an existing complaint.</p>
+          <p className="text-xs text-slate-400 mt-2">No complaint drafted yet. Use the Drafter to create one, upload an existing complaint, or attach reusable supporting documents.</p>
         )}
       </div>
     </div>
