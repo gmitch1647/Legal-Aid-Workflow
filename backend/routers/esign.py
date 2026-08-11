@@ -1019,25 +1019,10 @@ async def deliver_completed_settlement_package(
     if not submission_result.data or not submission_result.data[0].get("completed_pdf_path"):
         raise HTTPException(status_code=409, detail="The completed W-9 PDF is not available yet.")
 
-    delivery_id = str(uuid.uuid5(
-        uuid.NAMESPACE_URL,
-        f"legalflow:settlement-package:{payload.case_id}:{recipient['id']}:{settlement['id']}:{w9_request['id']}",
-    ))
-    prior_delivery = (
-        supabase.table("settlement_document_deliveries")
-        .select("id,status,sent_at")
-        .eq("id", delivery_id)
-        .limit(1)
-        .execute()
-    )
-    if prior_delivery.data and prior_delivery.data[0].get("status") == "sent":
-        return {
-            "status": "already_sent",
-            "delivery_id": delivery_id,
-            "sent_at": prior_delivery.data[0].get("sent_at"),
-            "message": "The selected attorney already received this completed settlement package.",
-        }
-
+    # Each explicit confirmation is a separate, auditable delivery.  Do not reuse
+    # an earlier settled package record: the sender may need to resend the same
+    # completed PDFs to an attorney at any time.
+    delivery_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     delivery_record = {
         "id": delivery_id,
@@ -1053,9 +1038,7 @@ async def deliver_completed_settlement_package(
         "updated_at": now,
     }
     try:
-        supabase.table("settlement_document_deliveries").upsert(
-            delivery_record, on_conflict="id"
-        ).execute()
+        supabase.table("settlement_document_deliveries").insert(delivery_record).execute()
     except Exception as exc:
         logger.exception("Could not prepare settlement package delivery for case %s", payload.case_id)
         raise HTTPException(status_code=500, detail="Could not prepare the completed document delivery.") from exc
@@ -1095,6 +1078,8 @@ async def deliver_completed_settlement_package(
             {"filename": settlement_filename, "content": settlement_pdf},
             {"filename": w9_filename, "content": w9_pdf},
         ],
+        # This key protects a single send attempt from provider retries while a
+        # fresh delivery ID permits future user-confirmed resends.
         idempotency_key=f"settlement-package-{delivery_id}",
     )
     if not delivered:

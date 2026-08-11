@@ -263,6 +263,7 @@ class _PackageQuery:
         self.rows = [dict(row) for row in (rows or [])]
         self.filters = []
         self.upsert_payloads = []
+        self.insert_payloads = []
         self.update_payloads = []
 
     def select(self, _fields):
@@ -280,6 +281,10 @@ class _PackageQuery:
 
     def upsert(self, payload, on_conflict=None):
         self.upsert_payloads.append((payload, on_conflict))
+        return self
+
+    def insert(self, payload):
+        self.insert_payloads.append(payload)
         return self
 
     def update(self, payload):
@@ -362,8 +367,28 @@ class SettlementPackageDeliveryTests(unittest.TestCase):
         self.assertNotIn("attorney/w9?request_id=w9-123", send_email.await_args.kwargs["body"])
         self.assertNotIn("not attached", send_email.await_args.kwargs["body"])
         delivery_query = supabase.queries["settlement_document_deliveries"]
-        self.assertEqual(delivery_query.upsert_payloads[0][0]["recipient_profile_id"], "attorney-2")
+        self.assertEqual(delivery_query.insert_payloads[0]["recipient_profile_id"], "attorney-2")
         self.assertEqual(delivery_query.update_payloads[-1]["status"], "sent")
+
+    def test_completed_package_can_be_resent_with_new_delivery_audit_record(self):
+        supabase = _PackageSupabase()
+        payload = esign.SettlementPackageDeliveryPayload(
+            case_id="case-123", attorney_profile_id="attorney-2", confirmed=True,
+        )
+
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", new=AsyncMock(return_value={"id": "sender-1", "role": "attorney"})
+        ), patch("utils.email_service.send_email", new=AsyncMock(return_value=True)) as send_email:
+            first = asyncio.run(esign.deliver_completed_settlement_package(payload, "Bearer token"))
+            second = asyncio.run(esign.deliver_completed_settlement_package(payload, "Bearer token"))
+
+        self.assertEqual(first["status"], "sent")
+        self.assertEqual(second["status"], "sent")
+        self.assertNotEqual(first["delivery_id"], second["delivery_id"])
+        self.assertEqual(send_email.await_count, 2)
+        delivery_query = supabase.queries["settlement_document_deliveries"]
+        self.assertEqual(len(delivery_query.insert_payloads), 2)
+        self.assertNotEqual(delivery_query.insert_payloads[0]["id"], delivery_query.insert_payloads[1]["id"])
 
     def test_completed_package_rejects_when_w9_is_not_complete(self):
         supabase = _PackageSupabase()
