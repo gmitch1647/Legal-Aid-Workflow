@@ -18,7 +18,7 @@ export default function AttorneyPayouts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ case_id: '', settlement_amount: '', percentage: '35', notes: '' });
+  const [form, setForm] = useState({ case_id: '', settlement_amount: '', court_costs: '', attorney_paid_costs: '', percentage: '35', notes: '' });
   const [openLedgerId, setOpenLedgerId] = useState(null);
   const [payments, setPayments] = useState({});
   const [paymentForms, setPaymentForms] = useState({});
@@ -53,10 +53,12 @@ export default function AttorneyPayouts() {
       await createSettlementPayoutLedger({
         case_id: form.case_id,
         settlement_amount: Number(form.settlement_amount),
+        court_costs: Number(form.court_costs || 0),
+        attorney_paid_costs: Number(form.attorney_paid_costs || 0),
         percentage: Number(form.percentage || 0),
         notes: form.notes || null,
       });
-      setForm({ case_id: '', settlement_amount: '', percentage: '35', notes: '' });
+      setForm({ case_id: '', settlement_amount: '', court_costs: '', attorney_paid_costs: '', percentage: '35', notes: '' });
       await load();
     } catch (err) {
       setError(err?.message || 'Could not create the private payout record.');
@@ -70,6 +72,8 @@ export default function AttorneyPayouts() {
     try {
       const updated = await updateSettlementPayoutLedger(ledger.id, {
         settlement_amount: Number(ledger.settlement_amount || 0),
+        court_costs: Number(ledger.court_costs || 0),
+        attorney_paid_costs: Number(ledger.attorney_paid_costs || 0),
         percentage: Number(ledger.percentage || 0),
         notes: ledger.notes || null,
       });
@@ -123,16 +127,18 @@ export default function AttorneyPayouts() {
         <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"><LockKeyhole className="h-3.5 w-3.5" /> Only visible to you</span>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        {[['Expected share', totals.expected, 'text-primary-700'], ['Received from attorney', totals.received, 'text-emerald-700'], ['Still outstanding', totals.outstanding, 'text-amber-700']].map(([label, amount, style]) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">{label}</p><p className={`mt-1 text-2xl font-semibold ${style}`}>{money(amount)}</p></div>)}
+        <div className="grid gap-4 md:grid-cols-3">
+        {[['Expected share after costs', totals.expected, 'text-primary-700'], ['Received from attorney', totals.received, 'text-emerald-700'], ['Still outstanding', totals.outstanding, 'text-amber-700']].map(([label, amount, style]) => <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">{label}</p><p className={`mt-1 text-2xl font-semibold ${style}`}>{money(amount)}</p></div>)}
       </div>
 
       <form onSubmit={createLedger} className="rounded-xl border border-primary-100 bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center gap-2"><Plus className="h-5 w-5 text-primary-600" /><h2 className="font-semibold text-slate-900">Add settlement payout calculation</h2></div>
-        <p className="mb-4 text-sm text-slate-500">Enter the settlement amount and the percentage you agreed with the attorney. The expected amount recalculates from those inputs.</p>
-        <div className="grid gap-4 md:grid-cols-4">
+        <p className="mb-4 text-sm text-slate-500">Enter the settlement, court costs, and costs paid out to the attorney. LegalFlow subtracts both costs first, then applies your editable percentage to the remaining amount.</p>
+        <div className="grid gap-4 md:grid-cols-5">
           <label className="md:col-span-2 text-sm font-medium text-slate-700">Case<select required value={form.case_id} onChange={(e) => setForm({ ...form, case_id: e.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">Select a case</option>{cases.map((item) => <option key={item.id} value={item.id}>{item.case_number || item.plaintiff_name || `Case ${item.id.slice(0, 8)}`}</option>)}</select></label>
           <label className="text-sm font-medium text-slate-700">Settlement amount<input type="number" min="0" step="0.01" required value={form.settlement_amount} onChange={(e) => setForm({ ...form, settlement_amount: e.target.value })} placeholder="0.00" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+          <label className="text-sm font-medium text-slate-700">Court costs<input type="number" min="0" step="0.01" value={form.court_costs} onChange={(e) => setForm({ ...form, court_costs: e.target.value })} placeholder="0.00" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+          <label className="text-sm font-medium text-slate-700">Costs paid to attorney<input type="number" min="0" step="0.01" value={form.attorney_paid_costs} onChange={(e) => setForm({ ...form, attorney_paid_costs: e.target.value })} placeholder="0.00" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
           <label className="text-sm font-medium text-slate-700">Your percentage<input type="number" min="0" max="100" step="0.01" required value={form.percentage} onChange={(e) => setForm({ ...form, percentage: e.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-xs text-slate-400">Defaults to 35%; editable per case.</span></label>
           <label className="md:col-span-3 text-sm font-medium text-slate-700">Private notes<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Optional arrangement or payment notes" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
           <div className="flex items-end"><button disabled={saving} className="w-full rounded-lg bg-primary-700 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-800 disabled:opacity-60">{saving ? 'Saving…' : 'Create calculation'}</button></div>
@@ -146,8 +152,10 @@ export default function AttorneyPayouts() {
         {loading ? <p className="p-5 text-sm text-slate-500">Loading payout records…</p> : ledgers.length === 0 ? <p className="p-5 text-sm text-slate-500">No private settlement payout calculations yet.</p> : <div className="divide-y divide-slate-100">{ledgers.map((ledger) => (
           <div key={ledger.id} className="p-5">
             <div className="grid gap-3 md:grid-cols-6 md:items-end">
-              <div className="md:col-span-2"><p className="font-semibold text-slate-900">{ledger.case_name}</p><p className="mt-1 text-xs text-slate-500">Expected {money(ledger.expected_amount)} · Received {money(ledger.received_amount)} · Outstanding {money(ledger.outstanding_amount)}</p></div>
+              <div className="md:col-span-2"><p className="font-semibold text-slate-900">{ledger.case_name}</p><p className="mt-1 text-xs text-slate-500">Net to split {money(ledger.net_split_amount)} · Expected {money(ledger.expected_amount)} · Received {money(ledger.received_amount)} · Outstanding {money(ledger.outstanding_amount)}</p></div>
               <label className="text-xs font-medium text-slate-600">Settlement amount<input type="number" min="0" step="0.01" value={ledger.settlement_amount ?? ''} onChange={(e) => updateLedgerField(ledger.id, 'settlement_amount', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm" /></label>
+              <label className="text-xs font-medium text-slate-600">Court costs<input type="number" min="0" step="0.01" value={ledger.court_costs ?? ''} onChange={(e) => updateLedgerField(ledger.id, 'court_costs', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm" /></label>
+              <label className="text-xs font-medium text-slate-600">Attorney costs<input type="number" min="0" step="0.01" value={ledger.attorney_paid_costs ?? ''} onChange={(e) => updateLedgerField(ledger.id, 'attorney_paid_costs', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm" /></label>
               <label className="text-xs font-medium text-slate-600">Your percentage<input type="number" min="0" max="100" step="0.01" value={ledger.percentage ?? ''} onChange={(e) => updateLedgerField(ledger.id, 'percentage', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm" /></label>
               <button onClick={() => saveLedger(ledger)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Save className="h-4 w-4" /> Save calculation</button>
               <button onClick={() => openPayments(ledger.id)} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"><WalletCards className="h-4 w-4" /> Payouts {openLedgerId === ledger.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>

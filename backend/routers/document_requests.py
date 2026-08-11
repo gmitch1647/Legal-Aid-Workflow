@@ -49,6 +49,18 @@ def _money(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+def _payout_split(settlement_amount: Decimal, court_costs: Decimal, attorney_paid_costs: Decimal, percentage: Decimal) -> tuple[float, float]:
+    """Return the net settlement subject to the split and the expected share.
+
+    Court costs and costs paid out to the attorney are deducted first.  A
+    negative balance is never carried into a payout calculation; it becomes
+    zero until the settlement amount is updated.
+    """
+    net_split_amount = max(Decimal("0"), settlement_amount - court_costs - attorney_paid_costs)
+    expected_amount = net_split_amount * percentage / Decimal("100")
+    return _money(net_split_amount), _money(expected_amount)
+
+
 class DocumentRequestCreate(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     description: Optional[str] = Field(default=None, max_length=2000)
@@ -59,12 +71,16 @@ class DocumentRequestCreate(BaseModel):
 class PayoutLedgerCreate(BaseModel):
     case_id: str
     settlement_amount: float = Field(ge=0)
+    court_costs: float = Field(default=0, ge=0)
+    attorney_paid_costs: float = Field(default=0, ge=0)
     percentage: float = Field(default=35, ge=0, le=100)
     notes: Optional[str] = Field(default=None, max_length=2000)
 
 
 class PayoutLedgerUpdate(BaseModel):
     settlement_amount: Optional[float] = Field(default=None, ge=0)
+    court_costs: Optional[float] = Field(default=None, ge=0)
+    attorney_paid_costs: Optional[float] = Field(default=None, ge=0)
     percentage: Optional[float] = Field(default=None, ge=0, le=100)
     notes: Optional[str] = Field(default=None, max_length=2000)
 
@@ -258,8 +274,10 @@ async def create_settlement_payout_ledger(body: PayoutLedgerCreate, authorizatio
     supabase = get_supabase()
     case = _case_or_404(supabase, body.case_id)
     settlement = Decimal(str(body.settlement_amount))
+    court_costs = Decimal(str(body.court_costs))
+    attorney_paid_costs = Decimal(str(body.attorney_paid_costs))
     percentage = Decimal(str(body.percentage))
-    expected = _money(settlement * percentage / Decimal("100"))
+    net_split_amount, expected = _payout_split(settlement, court_costs, attorney_paid_costs, percentage)
     existing = (
         supabase.table("settlement_payout_ledgers")
         .select("id")
@@ -276,6 +294,9 @@ async def create_settlement_payout_ledger(body: PayoutLedgerCreate, authorizatio
         "client_id": case["client_id"],
         "owner_id": profile["id"],
         "settlement_amount": _money(settlement),
+        "court_costs": _money(court_costs),
+        "attorney_paid_costs": _money(attorney_paid_costs),
+        "net_split_amount": net_split_amount,
         "percentage": _money(percentage),
         "expected_amount": expected,
         "notes": (body.notes or "").strip() or None,
@@ -296,11 +317,17 @@ async def update_settlement_payout_ledger(ledger_id: str, body: PayoutLedgerUpda
         raise HTTPException(status_code=404, detail="Private payout ledger not found.")
     current = existing.data[0]
     settlement = Decimal(str(body.settlement_amount if body.settlement_amount is not None else current.get("settlement_amount") or 0))
+    court_costs = Decimal(str(body.court_costs if body.court_costs is not None else current.get("court_costs") or 0))
+    attorney_paid_costs = Decimal(str(body.attorney_paid_costs if body.attorney_paid_costs is not None else current.get("attorney_paid_costs") or 0))
     percentage = Decimal(str(body.percentage if body.percentage is not None else current.get("percentage") or 35))
+    net_split_amount, expected_amount = _payout_split(settlement, court_costs, attorney_paid_costs, percentage)
     update = {
         "settlement_amount": _money(settlement),
+        "court_costs": _money(court_costs),
+        "attorney_paid_costs": _money(attorney_paid_costs),
+        "net_split_amount": net_split_amount,
         "percentage": _money(percentage),
-        "expected_amount": _money(settlement * percentage / Decimal("100")),
+        "expected_amount": expected_amount,
         "updated_at": _now(),
     }
     if body.notes is not None:

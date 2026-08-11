@@ -3,7 +3,7 @@ from decimal import Decimal
 import unittest
 from pydantic import ValidationError
 
-from routers.document_requests import PayoutLedgerCreate, _money
+from routers.document_requests import PayoutLedgerCreate, _money, _payout_split
 
 
 class PrivatePayoutMathTests(unittest.TestCase):
@@ -15,6 +15,26 @@ class PrivatePayoutMathTests(unittest.TestCase):
         )
         expected = _money(Decimal(str(payload.settlement_amount)) * Decimal(str(payload.percentage)) / Decimal("100"))
         self.assertEqual(expected, 5950.00)
+
+    def test_costs_are_deducted_before_the_percentage_is_applied(self):
+        net_amount, expected_share = _payout_split(
+            Decimal("14000"),
+            Decimal("3000"),
+            Decimal("1000"),
+            Decimal("35"),
+        )
+        self.assertEqual(net_amount, 10000.00)
+        self.assertEqual(expected_share, 3500.00)
+
+    def test_costs_cannot_create_a_negative_amount_to_split(self):
+        net_amount, expected_share = _payout_split(
+            Decimal("1000"),
+            Decimal("800"),
+            Decimal("500"),
+            Decimal("35"),
+        )
+        self.assertEqual(net_amount, 0.00)
+        self.assertEqual(expected_share, 0.00)
 
     def test_default_percentage_remains_thirty_five_but_is_not_locked(self):
         default_payload = PayoutLedgerCreate(case_id="case-1", settlement_amount=1000)
