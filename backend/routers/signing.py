@@ -1251,8 +1251,12 @@ async def complete_signing(token: str, request: Request):
             sig_bytes,
             typed_name,
             session["signer_name"],
+            document_type=session.get("document_type"),
             return_placement=True,
         )
+    except ValueError as exc:
+        logger.warning("Signing stopped before storage because no valid execution placement was available: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as e:
         logger.error("Failed to embed signature: %s", e)
         raise HTTPException(status_code=500, detail=f"Signature embedding failed: {e}")
@@ -1603,6 +1607,19 @@ def _horizontal_signature_band(page, by_rect, field_left: float, field_right: fl
     return signature_top, signature_bottom
 
 
+def _execution_label_rects(page, label: str):
+    """Find an execution label despite capitalization differences in uploaded PDFs."""
+    matches = []
+    seen = set()
+    for variant in (label, label.upper(), label.lower(), label.title()):
+        for rect in page.search_for(variant):
+            key = (round(rect.x0, 2), round(rect.y0, 2), round(rect.x1, 2), round(rect.y1, 2))
+            if key not in seen:
+                seen.add(key)
+                matches.append(rect)
+    return matches
+
+
 def _execution_block_placement(doc) -> Optional[dict]:
     """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
 
@@ -1616,8 +1633,8 @@ def _execution_block_placement(doc) -> Optional[dict]:
     # block. Prefer it ahead of generic By:/Date: detection so signatures stay
     # within the dedicated client line and never fall back elsewhere in the PDF.
     for page in reversed(doc):
-        client_signature_labels = page.search_for("Client Signature:")
-        date_labels = page.search_for("Date:")
+        client_signature_labels = _execution_label_rects(page, "Client Signature:")
+        date_labels = _execution_label_rects(page, "Date:")
         for signature_label in client_signature_labels:
             paired_dates = [
                 date_label for date_label in date_labels
@@ -1659,11 +1676,11 @@ def _execution_block_placement(doc) -> Optional[dict]:
         # document-header region, not the entire upper half of the page.
         minimum_execution_y = max(72.0, page_rect.height * 0.15)
         by_labels = [
-            rect for rect in page.search_for("By:")
+            rect for rect in _execution_label_rects(page, "By:")
             if rect.y0 >= minimum_execution_y
         ]
         date_labels = [
-            rect for rect in page.search_for("Date:")
+            rect for rect in _execution_label_rects(page, "Date:")
             if rect.y0 >= minimum_execution_y
         ]
         if not by_labels or not date_labels:
@@ -1769,7 +1786,7 @@ def _execution_block_placement(doc) -> Optional[dict]:
             if rect.y0 >= page_rect.height * 0.45
         ]
         date_labels = [
-            rect for rect in page.search_for("Date:")
+            rect for rect in _execution_label_rects(page, "Date:")
             if rect.y0 >= page_rect.height * 0.50
         ]
         for heading_rect in headings:
@@ -1821,9 +1838,15 @@ def _embed_signature(
     sig_image_bytes: bytes,
     typed_name: str,
     signer_name: str,
+    document_type: Optional[str] = None,
     return_placement: bool = False,
 ):
-    """Embed a signature in detected execution fields, with a safe visual fallback."""
+    """Embed a signature in detected execution fields, with a safe visual fallback.
+
+    Settlement agreements require a real client execution line. They never use
+    the legacy footer fallback because that would create a misleading signed
+    artifact on the wrong part of the agreement.
+    """
     import fitz  # PyMuPDF
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1831,6 +1854,11 @@ def _embed_signature(
     display_name = typed_name or signer_name
     placement = _execution_block_placement(doc)
     if placement is None:
+        if str(document_type or "").lower() in ("settlement", "settlement_agreement"):
+            raise ValueError(
+                "LegalFlow could not locate the client By/Date execution line in this settlement agreement. "
+                "The agreement was not signed; ask the attorney to review the document layout before trying again."
+            )
         placement = _fallback_placement(doc[-1])
         logger.info("No execution block detected; using last-page fallback placement")
     else:

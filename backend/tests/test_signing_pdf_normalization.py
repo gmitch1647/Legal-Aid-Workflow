@@ -376,6 +376,7 @@ class SigningPdfNormalizationTests(unittest.TestCase):
             self._signature_png(),
             "Client Example",
             "Client Example",
+            document_type="settlement",
             return_placement=True,
         )
 
@@ -384,6 +385,50 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(placement["layout"], "horizontal")
         self.assertEqual(placement["page"], 4)
         self.assertNotEqual(placement["strategy"], "fallback_last_page")
+
+    def test_uppercase_horizontal_settlement_labels_use_client_execution_line(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((72, 180), "IN WITNESS WHEREOF, this Agreement is executed.", fontsize=11)
+        page.insert_text((72, 205), "BY:", fontsize=11)
+        page.insert_text((324, 205), "DATE:", fontsize=11)
+        page.insert_text((108, 220), "CLIENT EXAMPLE", fontsize=11)
+        page.insert_text((72, 275), "COMPANY EXAMPLE, LLC", fontsize=11)
+        page.insert_text((72, 322), "BY:", fontsize=11)
+        page.insert_text((324, 322), "DATE:", fontsize=11)
+        source_pdf = document.tobytes()
+        document.close()
+
+        _, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            "Client Example",
+            "Client Example",
+            document_type="settlement",
+            return_placement=True,
+        )
+
+        self.assertEqual(placement["strategy"], "detected_execution_block")
+        self.assertEqual(placement["page"], 0)
+        self.assertEqual(placement["layout"], "horizontal")
+        self.assertLess(placement["signature_rect"][3], 210)
+
+    def test_settlement_without_execution_line_is_not_signed_in_footer(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((72, 160), "Settlement Agreement and Release", fontsize=12)
+        source_pdf = document.tobytes()
+        document.close()
+
+        with self.assertRaisesRegex(ValueError, "could not locate the client By/Date execution line"):
+            signing._embed_signature(
+                source_pdf,
+                self._signature_png(),
+                "Client Example",
+                "Client Example",
+                document_type="settlement",
+                return_placement=True,
+            )
 
     def test_horizontal_settlement_signature_stays_in_compact_text_safe_band(self):
         source_pdf = self._horizontal_settlement_execution_pdf()
