@@ -17,6 +17,7 @@ class _Query:
         self.filters = []
         self.inserted = []
         self.updated = []
+        self.update_payload = None
 
     def select(self, _columns):
         self.filters = []
@@ -35,9 +36,18 @@ class _Query:
 
     def update(self, payload):
         self.updated.append(dict(payload))
+        self.update_payload = dict(payload)
         return self
 
     def execute(self):
+        if self.update_payload is not None:
+            rows = self.rows
+            for column, value in self.filters:
+                rows = [row for row in rows if str(row.get(column)) == str(value)]
+            for row in rows:
+                row.update(self.update_payload)
+            self.update_payload = None
+            return SimpleNamespace(data=rows)
         if self.inserted:
             latest = {**self.inserted[-1], "id": self.inserted[-1].get("id", "new-document")}
             return SimpleNamespace(data=[latest])
@@ -154,6 +164,30 @@ class ComplaintExhibitAndWordDownloadTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 400)
         self.assertIn("uploaded complaint", raised.exception.detail)
+
+    def test_existing_case_document_is_attached_without_reupload(self):
+        source = {
+            "id": "credit-report-1",
+            "case_id": "case-1",
+            "file_name": "Credit_Report.pdf",
+            "document_category": "credit_report",
+            "parent_document_id": None,
+        }
+        supabase = _Supabase(rows=[
+            {"id": "complaint-1", "case_id": "case-1", "document_category": "complaint"},
+            source,
+        ])
+        get_supabase, current_user, case_access = self._patches(supabase)
+        with get_supabase, current_user, case_access:
+            result = asyncio.run(documents.attach_existing_document_as_exhibit(
+                "case-1", "complaint-1", "credit-report-1", "Bearer test"
+            ))
+
+        self.assertFalse(result["already_attached"])
+        self.assertEqual(source["parent_document_id"], "complaint-1")
+        self.assertEqual(source["document_category"], "credit_report")
+        self.assertEqual(supabase.bucket.uploads, [])
+        self.assertEqual(supabase.documents.inserted, [])
 
     def test_word_download_streams_docx_attachment_for_uploaded_complaint(self):
         word_path = "cases/case-1/Brown_Complaint.docx"

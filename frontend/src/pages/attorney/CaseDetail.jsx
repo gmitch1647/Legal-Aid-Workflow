@@ -54,7 +54,8 @@ import {
   getReferralPartners,
   assignReferral,
   uploadDocument,
-  downloadUploadedComplaintWord,
+  attachExistingDocumentAsComplaintExhibit,
+  getUploadedComplaintWordDownload,
   deleteDocument,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
@@ -227,7 +228,7 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   });
 
   const complaintExhibits = documents.filter(d =>
-    (d.document_category || d.category || '').toLowerCase() === 'complaint_exhibit'
+    Boolean(d.parent_document_id) || (d.document_category || d.category || '').toLowerCase() === 'complaint_exhibit'
   );
 
   const hasText = !!(caseData?.complaint_text || caseData?.complaint_draft);
@@ -254,7 +255,7 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   async function handleComplaintWordDownload(doc) {
     setUploadError('');
     try {
-      const blob = await downloadUploadedComplaintWord(caseId, doc.id);
+      const blob = await getUploadedComplaintWordDownload(caseId, doc.id);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -265,6 +266,21 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
       URL.revokeObjectURL(url);
     } catch (err) {
       setUploadError(err.message || 'Could not download the Word complaint.');
+    }
+  }
+
+  async function handleExistingDocumentAttach(complaintDoc, documentId) {
+    if (!documentId) return;
+    setExhibitUploadingFor(complaintDoc.id);
+    setUploadError('');
+    try {
+      await attachExistingDocumentAsComplaintExhibit(caseId, complaintDoc.id, documentId);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setUploadError(err.message || 'Could not attach the existing document as an exhibit.');
+    } finally {
+      setExhibitUploadingFor(null);
+      setDraggingExhibitFor(null);
     }
   }
 
@@ -426,7 +442,15 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
                     <div
                       onDragOver={(event) => { event.preventDefault(); setDraggingExhibitFor(doc.id); }}
                       onDragLeave={(event) => { event.preventDefault(); if (draggingExhibitFor === doc.id) setDraggingExhibitFor(null); }}
-                      onDrop={(event) => { event.preventDefault(); handleExhibitUpload(doc, event.dataTransfer.files); }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const existingDocumentId = event.dataTransfer.getData('application/x-legalflow-case-document');
+                        if (existingDocumentId) {
+                          handleExistingDocumentAttach(doc, existingDocumentId);
+                        } else {
+                          handleExhibitUpload(doc, event.dataTransfer.files);
+                        }
+                      }}
                       onClick={() => exhibitInputRefs.current[doc.id]?.click()}
                       className={`cursor-pointer rounded-md border border-dashed px-3 py-3 text-center transition ${draggingExhibits ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50'}`}
                     >
@@ -737,7 +761,17 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
       <div className="mt-4 space-y-2">
         {generalDocs.length > 0 ? (
           generalDocs.map(doc => (
-            <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50">
+            <div
+              key={doc.id}
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'copy';
+                event.dataTransfer.setData('application/x-legalflow-case-document', doc.id);
+                event.dataTransfer.setData('text/plain', doc.file_name || 'Case document');
+              }}
+              className="flex cursor-grab items-center gap-3 rounded-lg border border-slate-100 p-3 transition-colors hover:bg-slate-50 active:cursor-grabbing"
+              title="Drag this document to a complaint's Exhibits area to attach it without uploading another copy"
+            >
               <SecureDocumentLink
                 caseId={caseId}
                 document={doc}
@@ -752,6 +786,9 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
                   <span className="block text-xs text-slate-400">
                     {documentCategoryLabel(doc)} · {formatDate(doc.created_at || doc.uploaded_at)}
                   </span>
+                  {doc.parent_document_id && (
+                    <span className="mt-0.5 inline-flex rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">Attached as exhibit</span>
+                  )}
                 </span>
               </SecureDocumentLink>
               <button onClick={() => handleDelete(doc)}

@@ -243,7 +243,13 @@ export async function getDocumentAccessUrl(caseId, docId) {
   return request(`/cases/${caseId}/documents/${docId}/access`);
 }
 
-export async function downloadUploadedComplaintWord(caseId, docId) {
+export async function attachExistingDocumentAsComplaintExhibit(caseId, complaintId, documentId) {
+  return request(`/cases/${caseId}/complaints/${complaintId}/exhibits/${documentId}`, {
+    method: 'POST',
+  });
+}
+
+export async function getUploadedComplaintWordDownload(caseId, docId) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/cases/${caseId}/documents/${docId}/word-download`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},

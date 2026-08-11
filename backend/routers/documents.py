@@ -215,6 +215,80 @@ async def upload_document(
 
 
 # ---------------------------------------------------------------------------
+# POST /cases/{case_id}/complaints/{complaint_id}/exhibits/{document_id}
+# ---------------------------------------------------------------------------
+
+
+@router.post("/cases/{case_id}/complaints/{complaint_id}/exhibits/{document_id}")
+async def attach_existing_document_as_exhibit(
+    case_id: str,
+    complaint_id: str,
+    document_id: str,
+    authorization: str = Header(...),
+):
+    """Attach an existing case document to one uploaded complaint.
+
+    The case-document row is linked through ``parent_document_id``; no second
+    storage upload or duplicated document record is created.  Its original
+    document category remains intact for the case file.
+    """
+    profile = await _get_current_user(authorization)
+    if profile.get("role") not in ("attorney", "staff_attorney"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only attorneys can attach complaint exhibits.")
+    _fetch_case_with_access(case_id, profile)
+    if complaint_id == document_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A complaint cannot be attached as its own exhibit.")
+
+    supabase = get_supabase()
+    complaint_result = (
+        supabase.table("case_documents")
+        .select("id,document_category")
+        .eq("id", complaint_id)
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+    )
+    if not complaint_result.data or str(complaint_result.data[0].get("document_category") or "").lower() != "complaint":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose an uploaded complaint in this case.")
+
+    document_result = (
+        supabase.table("case_documents")
+        .select("id,file_name,document_category,parent_document_id")
+        .eq("id", document_id)
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+    )
+    if not document_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The case document was not found.")
+
+    document = document_result.data[0]
+    if str(document.get("document_category") or "").lower() in ("complaint", "pii"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Complaint or PII files cannot be attached as existing exhibits from the document list.")
+
+    already_attached = str(document.get("parent_document_id") or "") == str(complaint_id)
+    try:
+        updated = (
+            supabase.table("case_documents")
+            .update({"parent_document_id": complaint_id})
+            .eq("id", document_id)
+            .eq("case_id", case_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Could not attach existing document %s to complaint %s", document_id, complaint_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not attach the case document as an exhibit.") from exc
+
+    return {
+        "message": "Document is already attached to this complaint." if already_attached else "Document attached as an exhibit.",
+        "document_id": document_id,
+        "complaint_id": complaint_id,
+        "already_attached": already_attached,
+        "document": (updated.data[0] if getattr(updated, "data", None) else {**document, "parent_document_id": complaint_id}),
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /cases/{case_id}/documents -- list documents
 # ---------------------------------------------------------------------------
 
