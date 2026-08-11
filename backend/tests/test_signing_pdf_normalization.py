@@ -33,6 +33,7 @@ class _FakeSigningBucket:
 
     def upload(self, **kwargs):
         self.uploads.append(kwargs)
+        self.downloads[kwargs["path"]] = kwargs["file"]
 
     def remove(self, paths):
         self.removed_paths.extend(paths)
