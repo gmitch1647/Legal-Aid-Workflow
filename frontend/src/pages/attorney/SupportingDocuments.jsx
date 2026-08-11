@@ -31,7 +31,7 @@ function displayDate(value) {
   });
 }
 
-export default function SupportingDocuments() {
+export default function SupportingDocuments({ embedded = false }) {
   const fileInputRef = useRef(null);
   const [documents, setDocuments] = useState([]);
   const [description, setDescription] = useState('');
@@ -108,30 +108,47 @@ export default function SupportingDocuments() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="flex flex-col gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2 text-blue-700">
-            <FolderOpen className="h-5 w-5" />
-            <span className="text-sm font-semibold">Document Library</span>
-          </div>
-          <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">Supporting Documents</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+    <div className={embedded ? 'space-y-6' : 'mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8'}>
+      {embedded ? (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-2xl text-sm leading-6 text-slate-600">
             Upload frequently used exhibits, reference material, and templates once. Select them from a case whenever you need them without creating another stored copy.
           </p>
+          <button
+            type="button"
+            onClick={loadDocuments}
+            disabled={loading}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={loadDocuments}
-          disabled={loading}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-blue-700">
+              <FolderOpen className="h-5 w-5" />
+              <span className="text-sm font-semibold">Document Library</span>
+            </div>
+            <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">Supporting Documents</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+              Upload frequently used exhibits, reference material, and templates once. Select them from a case whenever you need them without creating another stored copy.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={loadDocuments}
+            disabled={loading}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
+      )}
 
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+      <div className={`${embedded ? '' : 'mt-6 '}rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6`}>
         <div className="flex items-center gap-2">
           <Upload className="h-5 w-5 text-blue-700" />
           <h2 className="text-base font-semibold text-slate-900">Add to library</h2>

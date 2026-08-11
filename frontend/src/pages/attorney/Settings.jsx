@@ -21,6 +21,7 @@ import {
   RefreshCw,
   FileText,
   Sparkles,
+  FolderOpen,
 } from 'lucide-react';
 import { useAuth } from '../../App';
 import {
@@ -59,6 +60,7 @@ import {
   deleteCaseLaw,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
+import SupportingDocuments from './SupportingDocuments';
 
 // ---------------------------------------------------------------------------
 // Tab navigation
@@ -67,6 +69,7 @@ import { supabase } from '../../lib/supabase';
 const TABS = [
   { key: 'profile', label: 'Attorney Profile', icon: User },
   { key: 'team', label: 'Attorney Team', icon: Users },
+  { key: 'supporting_documents', label: 'Supporting Documents', icon: FolderOpen },
   { key: 'memory', label: 'AI Memory', icon: Sparkles },
   { key: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { key: 'pipeline', label: 'Pipeline Stages', icon: RefreshCw },
@@ -2825,6 +2828,8 @@ export default function Settings() {
         return <TeamTab />;
       case 'memory':
         return <MemoryTab />;
+      case 'supporting_documents':
+        return <SupportingDocuments embedded />;
       case 'referrals':
         return <ReferralsTab />;
       case 'knowledge':
