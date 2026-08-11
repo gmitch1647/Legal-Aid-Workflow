@@ -308,6 +308,59 @@ def _link_signed_pdf_to_case(
         )
 
 
+async def _send_client_signed_copy(
+    supabase,
+    session: dict,
+    signed_path: str,
+    signed_pdf: bytes,
+) -> bool:
+    """Email the signer one PDF copy after LegalFlow completes a signature.
+
+    The signed copy is attached only after storage succeeds. A durable timestamp
+    prevents duplicate delivery if the completion workflow is retried later.
+    """
+    if session.get("client_copy_sent_at") or not session.get("signer_email"):
+        return False
+
+    from html import escape
+    from utils.email_service import send_email
+
+    title = session.get("title") or "your agreement"
+    file_name = signed_document_filename(session)
+    delivered = await send_email(
+        to=session["signer_email"],
+        subject=f"Your Signed Copy: {title}",
+        body=f"""
+        <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;">
+          <h2 style="color:#059669;">Your Signed Agreement</h2>
+          <p>Hello {escape(str(session.get('signer_name') or ''))},</p>
+          <p>Thank you for completing <strong>{escape(str(title))}</strong>. A PDF copy of the signed agreement is attached for your records.</p>
+          <p style="font-size:12px;color:#64748b;">Please save this attachment in a secure location. If you have questions about the agreement, contact your attorney.</p>
+        </div>
+        """,
+        attachments=[{"filename": file_name, "content": signed_pdf}],
+        idempotency_key=f"signed-client-copy-{session['id']}",
+    )
+    if not delivered:
+        return False
+
+    sent_at = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table("signing_sessions").update({
+            "client_copy_sent_at": sent_at,
+            "updated_at": sent_at,
+        }).eq("id", session["id"]).execute()
+        supabase.table("signature_requests").update({
+            "client_copy_sent_at": sent_at,
+            "updated_at": sent_at,
+        }).eq("id", session["id"]).execute()
+    except Exception:
+        # The provider accepted the client email. Keep signature completion
+        # successful and log the metadata repair need for later follow-up.
+        logger.exception("Client signed copy was delivered but could not be recorded for %s", session["id"])
+    return True
+
+
 # ---------------------------------------------------------------------------
 # POST /create — attorney uploads a document and creates a signing session
 # ---------------------------------------------------------------------------
@@ -1141,6 +1194,14 @@ async def complete_signing(token: str, request: Request):
     }
 
     _link_signed_pdf_to_case(supabase, signed_session, signed_path, signed_pdf)
+
+    # The completed client agreement is retained in LegalFlow and emailed once
+    # as a signed PDF copy for the consumer's own records. Delivery failures do
+    # not affect the completed signature, stored PDF, or audit trail.
+    try:
+        await _send_client_signed_copy(supabase, signed_session, signed_path, signed_pdf)
+    except Exception:
+        logger.exception("Could not send signed client copy for signing session %s", session["id"])
 
     # A generated closing statement retains its own workflow record in addition
     # to the normal signing audit and linked case document.

@@ -12,6 +12,7 @@ import {
   deleteSigningSession,
   getGroupedSignatureDashboard, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
+  sendOiseEngagementContract,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 
@@ -57,6 +58,7 @@ export default function ESignatures() {
   const [loadError, setLoadError] = useState('');
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
+  const [sendModalMode, setSendModalMode] = useState('upload');
   const [showDetailModal, setShowDetailModal] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -239,7 +241,11 @@ export default function ESignatures() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
-          <button onClick={() => { setShowSendModal(true); if (configured) loadTemplates(); }}
+          <button onClick={() => { setSendModalMode('oise_contract'); setShowSendModal(true); }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100">
+            <FileText className="h-4 w-4" /> Send Oise Law Contract
+          </button>
+          <button onClick={() => { setSendModalMode('upload'); setShowSendModal(true); if (configured) loadTemplates(); }}
             className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
             <Send className="h-4 w-4" /> Send for Signature
           </button>
@@ -306,7 +312,7 @@ export default function ESignatures() {
             {allDocuments.length === 0 ? 'No settlement workflow documents yet' : 'No documents match the current filter'}
           </p>
           {allDocuments.length === 0 && (
-            <button onClick={() => { setShowSendModal(true); if (configured) loadTemplates(); }}
+            <button onClick={() => { setSendModalMode('upload'); setShowSendModal(true); if (configured) loadTemplates(); }}
               className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
               Send your first document →
             </button>
@@ -345,6 +351,7 @@ export default function ESignatures() {
 
       {showSendModal && (
         <SendSignatureModal
+          initialMode={sendModalMode}
           templates={templates}
           loadingTemplates={loadingTemplates}
           onClose={() => setShowSendModal(false)}
@@ -428,6 +435,7 @@ function SignatureDocumentRow({ document, onOpen, onView, onDownload, onDelete }
   const StatusIcon = status.icon;
   const isPending = PENDING_STATUSES.has(document.status);
   const isW9 = document.secure_only || document.provider === 'legalflow_w9';
+  const isViewOnly = Boolean(document.review_only) || document.document_type === 'credit_disclosure';
   const date = formattedDate(document.signed_at || document.sent_at || document.created_at);
 
   function openFromKeyboard(event) {
@@ -458,7 +466,7 @@ function SignatureDocumentRow({ document, onOpen, onView, onDownload, onDelete }
           className="rounded-lg p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700" title={isW9 ? 'Open secure W-9 record' : 'View document details'}>
           {isW9 ? <LockKeyhole className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
         </button>
-        {isPending && !isW9 && <ReminderBtn id={document.id} />}
+        {isPending && !isW9 && !isViewOnly && <ReminderBtn id={document.id} />}
         {document.has_signed_document && !isW9 && (
           <button type="button" onClick={() => onDownload(document)}
             className="rounded-lg p-2 text-blue-500 hover:bg-blue-50 hover:text-blue-700" title="Download signed PDF">
@@ -524,8 +532,9 @@ function ReminderBtn({ id }) {
 // Send Signature Modal
 // ---------------------------------------------------------------------------
 
-function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
-  const [mode, setMode] = useState('upload');
+function SendSignatureModal({ initialMode = 'upload', templates, loadingTemplates, onClose, onSent }) {
+  const [mode, setMode] = useState(initialMode);
+  const [confirmingOiseSend, setConfirmingOiseSend] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [uploadedFile, setUploadedFile] = useState(null);
   const [title, setTitle] = useState('');
@@ -547,6 +556,11 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
   useEffect(() => {
     loadClients();
   }, []);
+
+  useEffect(() => {
+    setMode(initialMode);
+    setConfirmingOiseSend(false);
+  }, [initialMode]);
 
   async function loadClients() {
     try {
@@ -597,8 +611,29 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
   }
 
   async function handleSend() {
-    if (!signerName || !signerEmail) { setError('Signer name and email required'); return; }
+    if (mode === 'oise_contract') {
+      if (!selectedClientId || !caseId) {
+        setError('Select the client and the case that should receive the Oise Law contract.');
+        return;
+      }
+      if (!confirmingOiseSend) {
+        setConfirmingOiseSend(true);
+        return;
+      }
+      setSending(true);
+      setError('');
+      try {
+        await sendOiseEngagementContract(caseId);
+        onSent();
+      } catch (err) {
+        setError(err.message || 'Could not send the Oise Law representation agreement.');
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
 
+    if (!signerName || !signerEmail) { setError('Signer name and email required'); return; }
     if (mode === 'upload' && !uploadedFile) { setError('Upload a document'); return; }
     if (mode === 'template' && !selectedTemplate) { setError('Select a template'); return; }
 
@@ -653,7 +688,10 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
     (c.email || '').toLowerCase().includes(clientSearch.toLowerCase())
   );
 
-  const canSend = signerName && signerEmail && (mode === 'upload' ? uploadedFile : selectedTemplate);
+  const selectedClient = clients.find((client) => String(client.id) === String(selectedClientId));
+  const canSend = mode === 'oise_contract'
+    ? Boolean(selectedClientId && caseId)
+    : signerName && signerEmail && (mode === 'upload' ? uploadedFile : selectedTemplate);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -666,22 +704,33 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
         <div className="p-5 space-y-4">
           {/* Mode toggle */}
           <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
-            <button onClick={() => setMode('upload')}
+            <button onClick={() => { setMode('upload'); setConfirmingOiseSend(false); }}
               className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition ${
                 mode === 'upload' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
               }`}>
               <Upload className="w-4 h-4" /> Upload Document
             </button>
-            <button onClick={() => setMode('template')}
+            <button onClick={() => { setMode('template'); setConfirmingOiseSend(false); }}
               className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition ${
                 mode === 'template' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
               }`}>
               <FileText className="w-4 h-4" /> Use Template
             </button>
+            <button onClick={() => { setMode('oise_contract'); setConfirmingOiseSend(false); }}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition ${
+                mode === 'oise_contract' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}>
+              <FileText className="w-4 h-4" /> Oise Contract
+            </button>
           </div>
 
-          {/* Upload or template selector */}
-          {mode === 'upload' ? (
+          {/* Upload, template, or fixed Oise contract selector */}
+          {mode === 'oise_contract' ? (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
+              <p className="font-semibold">Oise Law Group PC Representation Agreement</p>
+              <p className="mt-1 text-xs leading-5 text-indigo-800">LegalFlow will use the approved unsigned Oise contract template. The client will receive dedicated signature and date fields; the original template remains unchanged.</p>
+            </div>
+          ) : mode === 'upload' ? (
             <div>
               <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Document (PDF or DOCX) *</label>
               {uploadedFile ? (
@@ -728,13 +777,13 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
           )}
 
           {/* Document type */}
-          <div>
+          {mode !== 'oise_contract' && <div>
             <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Document Type</label>
             <select value={docType} onChange={(e) => setDocType(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               {DOC_TYPES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
             </select>
-          </div>
+          </div>}
 
           {/* Client picker */}
           <div>
@@ -780,8 +829,14 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
             </div>
           )}
 
+          {mode === 'oise_contract' && selectedClient && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              <strong>Selected client:</strong> {selectedClient.full_name || 'Client'} · {selectedClient.email || 'No email on file'}
+            </div>
+          )}
+
           {/* Signer details */}
-          <div className="grid grid-cols-2 gap-3">
+          {mode !== 'oise_contract' && <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Signer Name *</label>
               <input value={signerName} onChange={(e) => setSignerName(e.target.value)}
@@ -792,25 +847,34 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
               <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
-          </div>
+          </div>}
 
           {/* Title / Subject / Message */}
-          <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Title</label>
-            <input value={title} onChange={(e) => setTitle(e.target.value)}
-              placeholder="Auto-generated if empty"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Email Subject</label>
-            <input value={subject} onChange={(e) => setSubject(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Email Message</label>
-            <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
-          </div>
+          {mode !== 'oise_contract' && <>
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Title</label>
+              <input value={title} onChange={(e) => setTitle(e.target.value)}
+                placeholder="Auto-generated if empty"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Email Subject</label>
+              <input value={subject} onChange={(e) => setSubject(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Email Message</label>
+              <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
+            </div>
+          </>}
+
+          {mode === 'oise_contract' && confirmingOiseSend && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-semibold">Confirm contract delivery</p>
+              <p className="mt-1 text-xs leading-5">Selecting <strong>Send Contract for Signature</strong> will email the Oise Law representation agreement to this client. LegalFlow will then move the case to Doc Sent for Signature after the invitation is accepted for delivery.</p>
+            </div>
+          )}
 
           {error && (
             <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
@@ -823,7 +887,9 @@ function SendSignatureModal({ templates, loadingTemplates, onClose, onSent }) {
           <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600">Cancel</button>
           <button onClick={handleSend} disabled={sending || !canSend}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
-            {sending ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</> : <><Send className="w-4 h-4" /> Send for Signature</>}
+            {sending ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</> : mode === 'oise_contract' ? (
+              confirmingOiseSend ? <><Send className="w-4 h-4" /> Send Contract for Signature</> : <><FileText className="w-4 h-4" /> Review Contract Send</>
+            ) : <><Send className="w-4 h-4" /> Send for Signature</>}
           </button>
         </div>
       </div>

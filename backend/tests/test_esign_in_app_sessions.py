@@ -210,6 +210,7 @@ class _DashboardQuery:
         self.rows = [dict(row) for row in rows]
         self.filters = []
         self.in_filters = []
+        self.or_filters = []
 
     def select(self, _fields):
         return self
@@ -220,6 +221,13 @@ class _DashboardQuery:
 
     def in_(self, column, values):
         self.in_filters.append((column, {str(value) for value in values}))
+        return self
+
+    def or_(self, expression):
+        for clause in str(expression).split(','):
+            column, operator, value = clause.split('.', 2)
+            if operator == 'eq':
+                self.or_filters.append((column, value))
         return self
 
     def order(self, _column, desc=False):
@@ -234,6 +242,11 @@ class _DashboardQuery:
             rows = [row for row in rows if str(row.get(column)) == str(value)]
         for column, values in self.in_filters:
             rows = [row for row in rows if str(row.get(column)) in values]
+        if self.or_filters:
+            rows = [
+                row for row in rows
+                if any(str(row.get(column)) == value for column, value in self.or_filters)
+            ]
         return SimpleNamespace(data=rows)
 
 
@@ -267,8 +280,19 @@ class GroupedEsignDashboardTests(unittest.TestCase):
             "updated_at": "2026-08-02T14:01:45+00:00",
         }
 
-    def _supabase(self, *, include_legacy=False):
+    def _supabase(self, *, include_legacy=False, include_sender_owned_oise=False):
         sessions = [self.settlement]
+        if include_sender_owned_oise:
+            sessions.append({
+                **self.settlement,
+                "id": "oise-engagement-session",
+                "title": "Oise Law Group PC Representation Agreement",
+                "document_type": "oise_engagement_agreement",
+                "sent_by": "esther-oise-profile",
+                "notification_recipient_id": "attorney-1",
+                "status": "signed",
+                "signed_path": "signing/oise/signed_agreement.pdf",
+            })
         if include_legacy:
             sessions.append({
                 **self.settlement,
@@ -370,6 +394,18 @@ class GroupedEsignDashboardTests(unittest.TestCase):
         request_ids = [request["id"] for request in requests]
         self.assertEqual(request_ids.count("settlement-session"), 1)
         self.assertIn("closing-provider-request", request_ids)
+
+    def test_grouped_dashboard_includes_sender_owned_oise_agreement(self):
+        supabase = self._supabase(include_sender_owned_oise=True)
+        with patch.object(esign, "get_supabase", return_value=supabase), patch.object(
+            esign, "_get_current_user", _attorney_user
+        ):
+            dashboard = asyncio.run(esign.grouped_signature_dashboard(authorization="Bearer token"))
+
+        documents = dashboard["groups"][0]["documents"]
+        oise_document = next(document for document in documents if document["id"] == "oise-engagement-session")
+        self.assertEqual(oise_document["document_label"], "Oise Law Representation Agreement")
+        self.assertEqual(oise_document["status"], "signed")
 
     def test_grouped_dashboard_uses_signed_session_and_groups_workflow_documents(self):
         supabase = self._supabase()

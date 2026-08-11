@@ -241,6 +241,32 @@ def _load_dashboard_rows(query, case_id: Optional[str], client_id: Optional[str]
     return response.data or []
 
 
+def _load_user_dashboard_rows(
+    supabase,
+    table_name: str,
+    fields: str,
+    profile_id: str,
+    case_id: Optional[str],
+    client_id: Optional[str],
+) -> list[dict]:
+    """Load records sent by a user or explicitly owned by their activity inbox.
+
+    Oise Law agreements are associated with Esther Oise for contract purposes,
+    but their activity belongs in the E-Signatures workspace of the LegalFlow
+    user who confirmed the send.  Older rows without the recipient column still
+    remain visible through their original ``sent_by`` relationship.
+    """
+    query = supabase.table(table_name).select(fields)
+    ownership_filter = f"sent_by.eq.{profile_id},notification_recipient_id.eq.{profile_id}"
+    if hasattr(query, "or_"):
+        query = query.or_(ownership_filter)
+    else:
+        # Compatibility for minimal test doubles; production uses the combined
+        # PostgREST filter above.
+        query = query.eq("sent_by", profile_id)
+    return _load_dashboard_rows(query, case_id, client_id)
+
+
 def _dashboard_group_context(supabase, documents: list[dict]) -> tuple[dict, dict]:
     """Load only the client and case labels needed to render document groups."""
     case_ids = sorted({str(doc["case_id"]) for doc in documents if doc.get("case_id")})
@@ -371,10 +397,10 @@ async def _send_in_app_reminder(session: dict) -> bool:
 PENDING_REMINDER_STATUSES = ("awaiting_signature", "viewed", "awaiting_review")
 SESSION_REMINDER_FIELDS = (
     "id, token, title, document_type, signer_name, signer_email, case_id, client_id, "
-    "sent_by, status, created_at, viewed_at, reminder_count, last_reminder_at"
+    "sent_by, notification_recipient_id, status, created_at, viewed_at, reminder_count, last_reminder_at"
 )
 REQUEST_REMINDER_FIELDS = (
-    "id, title, document_type, signer_name, signer_email, case_id, client_id, sent_by, "
+    "id, title, document_type, signer_name, signer_email, case_id, client_id, sent_by, notification_recipient_id, "
     "status, sent_at, created_at, viewed_at, reminder_count, last_reminder_at"
 )
 
@@ -400,6 +426,11 @@ def _auto_reminder_is_due(record: dict[str, Any], preferences: dict[str, Any], n
     canceled, expired, and reviewed disclosures never receive another reminder.
     """
     if record.get("status") not in PENDING_REMINDER_STATUSES:
+        return False
+    # Credit disclosures are delivered for consumer review only. They never
+    # require a signature and must not trigger either manual or scheduled
+    # reminder emails.
+    if record.get("document_type") == "credit_disclosure":
         return False
 
     last_reminder_at = _parse_utc_timestamp(record.get("last_reminder_at"))
@@ -491,7 +522,9 @@ async def process_automatic_signature_reminders(
 
     for source_table, record, is_in_app in candidates:
         results["checked"] += 1
-        preferences, _attorney = await get_esign_preferences(supabase, record.get("sent_by"))
+        preferences, _attorney = await get_esign_preferences(
+            supabase, record.get("notification_recipient_id") or record.get("sent_by")
+        )
         if not preferences["esign_auto_reminders"] or not _auto_reminder_is_due(record, preferences, now):
             results["skipped"] += 1
             continue
@@ -909,21 +942,20 @@ async def list_signature_requests(
     _require_attorney(profile)
 
     supabase = get_supabase()
-    in_app_query = (
-        supabase.table("signing_sessions")
-        .select(IN_APP_SESSION_FIELDS)
-        .eq("sent_by", profile["id"])
+    in_app_sessions = _load_user_dashboard_rows(
+        supabase, "signing_sessions", IN_APP_SESSION_FIELDS, profile["id"], case_id, client_id
     )
-    in_app_sessions = _load_dashboard_rows(in_app_query, case_id, client_id)
     in_app_documents = [_in_app_dashboard_document(session) for session in in_app_sessions]
     in_app_ids = {str(session["id"]) for session in in_app_sessions}
 
-    provider_query = (
-        supabase.table("signature_requests")
-        .select("id,title,document_type,signer_name,signer_email,case_id,client_id,status,sent_at,signed_at,completed_at,created_at")
-        .eq("sent_by", profile["id"])
+    provider_rows = _load_user_dashboard_rows(
+        supabase,
+        "signature_requests",
+        "id,title,document_type,signer_name,signer_email,case_id,client_id,status,sent_at,signed_at,completed_at,created_at",
+        profile["id"],
+        case_id,
+        client_id,
     )
-    provider_rows = _load_dashboard_rows(provider_query, case_id, client_id)
     external_documents = [
         _external_dashboard_document(request)
         for request in provider_rows
@@ -962,21 +994,20 @@ async def grouped_signature_dashboard(
     _require_attorney(profile)
     supabase = get_supabase()
 
-    in_app_query = (
-        supabase.table("signing_sessions")
-        .select(IN_APP_SESSION_FIELDS)
-        .eq("sent_by", profile["id"])
+    in_app_sessions = _load_user_dashboard_rows(
+        supabase, "signing_sessions", IN_APP_SESSION_FIELDS, profile["id"], case_id, client_id
     )
-    in_app_sessions = _load_dashboard_rows(in_app_query, case_id, client_id)
     in_app_documents = [_in_app_dashboard_document(session) for session in in_app_sessions]
     in_app_ids = {str(session["id"]) for session in in_app_sessions}
 
-    provider_query = (
-        supabase.table("signature_requests")
-        .select("id,title,document_type,signer_name,signer_email,case_id,client_id,status,sent_at,signed_at,completed_at,created_at")
-        .eq("sent_by", profile["id"])
+    provider_rows = _load_user_dashboard_rows(
+        supabase,
+        "signature_requests",
+        "id,title,document_type,signer_name,signer_email,case_id,client_id,status,sent_at,signed_at,completed_at,created_at",
+        profile["id"],
+        case_id,
+        client_id,
     )
-    provider_rows = _load_dashboard_rows(provider_query, case_id, client_id)
     external_documents = [
         _external_dashboard_document(request)
         for request in provider_rows
@@ -1076,7 +1107,12 @@ async def remind_signer(
     in_app_session = _get_in_app_session(supabase, request_id)
     if in_app_session:
         is_view_only = in_app_session.get("document_type") == "credit_disclosure"
-        allowed_statuses = ("awaiting_review",) if is_view_only else ("awaiting_signature", "viewed")
+        if is_view_only:
+            raise HTTPException(
+                status_code=400,
+                detail="Credit disclosures are view-only and do not receive reminder emails.",
+            )
+        allowed_statuses = ("awaiting_signature", "viewed")
         if in_app_session.get("status") not in allowed_statuses:
             raise HTTPException(status_code=400, detail="Only pending in-app requests can be reminded.")
         try:

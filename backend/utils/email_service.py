@@ -6,11 +6,14 @@ fire-and-forget: failures are logged but never propagated so that
 the calling workflow is not interrupted by email issues.
 """
 
+import base64
 import logging
 import os
 import smtplib
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -44,18 +47,29 @@ async def send_email(
     body: str,
     *,
     idempotency_key: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Send one HTML email via Resend (primary) or SMTP (fallback).
 
     ``idempotency_key`` is forwarded only to Resend. Callers that can retry a
     delivery should supply a stable, per-message key so a recovered request
-    does not create a second invitation.
+    does not create a second invitation. Attachments use ``filename`` and
+    byte ``content`` values and are encoded only at the email-provider edge.
     """
     global _last_email_error
     _last_email_error = None
 
     resend_key = os.environ.get("RESEND_API_KEY", "")
     email_from = os.environ.get("EMAIL_FROM", SMTP_FROM_EMAIL or "onboarding@resend.dev")
+
+    normalized_attachments: list[dict[str, Any]] = []
+    for attachment in attachments or []:
+        filename = str(attachment.get("filename") or "document.pdf").replace("\r", "").replace("\n", "")
+        content = attachment.get("content")
+        if not isinstance(content, (bytes, bytearray)):
+            logger.warning("Skipping email attachment with invalid content type: %s", filename)
+            continue
+        normalized_attachments.append({"filename": filename, "content": bytes(content)})
 
     # Try Resend first
     if resend_key:
@@ -76,6 +90,15 @@ async def send_email(
                         "to": [to],
                         "subject": subject,
                         "html": body,
+                        **({
+                            "attachments": [
+                                {
+                                    "filename": attachment["filename"],
+                                    "content": base64.b64encode(attachment["content"]).decode("ascii"),
+                                }
+                                for attachment in normalized_attachments
+                            ]
+                        } if normalized_attachments else {}),
                     },
                 )
                 if resp.status_code in (200, 201):
@@ -99,11 +122,17 @@ async def send_email(
         return False
 
     try:
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart("mixed")
         msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
         msg["To"] = to
         msg["Subject"] = subject
-        msg.attach(MIMEText(body, "html", "utf-8"))
+        alternatives = MIMEMultipart("alternative")
+        alternatives.attach(MIMEText(body, "html", "utf-8"))
+        msg.attach(alternatives)
+        for attachment in normalized_attachments:
+            file_part = MIMEApplication(attachment["content"], Name=attachment["filename"])
+            file_part.add_header("Content-Disposition", "attachment", filename=attachment["filename"])
+            msg.attach(file_part)
 
         if SMTP_USE_TLS:
             server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)

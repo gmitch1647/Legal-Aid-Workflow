@@ -479,16 +479,43 @@ class SigningPdfNormalizationTests(unittest.TestCase):
 
         with patch.object(signing, "get_supabase", return_value=supabase), patch.object(
             signing, "notify_attorney_of_esign_event", new=AsyncMock(return_value=True)
-        ):
+        ), patch.object(signing, "_send_client_signed_copy", new=AsyncMock(return_value=True)) as signed_copy:
             result = asyncio.run(signing.complete_signing("engagement-token", _CompletionRequest()))
 
         self.assertEqual(result["status"], "signed")
+        signed_copy.assert_awaited_once()
         self.assertEqual(supabase.queries["cases"].update_payload["status"], "documents_signed")
         self.assertEqual(supabase.queries["cases"].eq_args, ("id", "case-1"))
         self.assertEqual(
             supabase.queries["case_documents"].insert_payloads[0]["document_category"],
             "signed_contract",
         )
+
+    def test_signed_client_copy_attaches_completed_pdf_once(self):
+        session = {
+            "id": "session-copy-1",
+            "title": "Oise Law Group PC Representation Agreement",
+            "document_type": signing.OISE_ENGAGEMENT_DOCUMENT_TYPE,
+            "signer_name": "Client Example",
+            "signer_email": "client@example.test",
+            "client_copy_sent_at": None,
+        }
+        supabase = _FakeSigningSupabase()
+        signed_pdf = b"%PDF-1.7\nsigned-agreement"
+
+        with patch("utils.email_service.send_email", new=AsyncMock(return_value=True)) as send_email:
+            delivered = asyncio.run(signing._send_client_signed_copy(
+                supabase,
+                session,
+                "signing/session-copy-1/signed_agreement.pdf",
+                signed_pdf,
+            ))
+
+        self.assertTrue(delivered)
+        self.assertEqual(send_email.await_args.kwargs["to"], "client@example.test")
+        self.assertEqual(send_email.await_args.kwargs["attachments"][0]["content"], signed_pdf)
+        self.assertTrue(send_email.await_args.kwargs["attachments"][0]["filename"].endswith(".pdf"))
+        self.assertIn("client_copy_sent_at", supabase.queries["signing_sessions"].update_payload)
 
     def test_date_style_tracks_nearby_times_style(self):
         document = fitz.open()

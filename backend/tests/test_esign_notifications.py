@@ -183,9 +183,15 @@ class FirstViewAndReminderTests(unittest.TestCase):
             "last_reminder_at": (now - timedelta(hours=5, minutes=59)).isoformat(),
         }
         completed_record = {**due_record, "status": "signed"}
+        credit_disclosure = {
+            **due_record,
+            "document_type": "credit_disclosure",
+            "status": "awaiting_review",
+        }
         self.assertTrue(esign._auto_reminder_is_due(due_record, preferences, now))
         self.assertFalse(esign._auto_reminder_is_due(recent_reminder, preferences, now))
         self.assertFalse(esign._auto_reminder_is_due(completed_record, preferences, now))
+        self.assertFalse(esign._auto_reminder_is_due(credit_disclosure, preferences, now))
 
     def test_automatic_reminder_updates_history_only_after_email_success(self):
         now = datetime(2026, 8, 5, 15, 0, tzinfo=timezone.utc)
