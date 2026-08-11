@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getCase, getDocumentRequests, getDocuments, uploadRequestedDocument, downloadComplaint, downloadMemo } from '../../lib/api';
+import { getCase, getDocumentRequests, getDocuments, uploadRequestedDocument, downloadComplaint, downloadMemo, getPayoutInformationRequests } from '../../lib/api';
 import { getCurrentUser } from '../../lib/supabase';
 import MessageThread from '../../components/MessageThread';
 import ProgressBar from '../../components/ProgressBar';
+import ClientPayoutInformationCard from '../../components/ClientPayoutInformationCard';
 import { ArrowLeft, FileText, Download, MessageSquare, Clock, User, Upload, CheckCircle2, Loader2 } from 'lucide-react';
 
 const STATUS_MESSAGES = {
@@ -23,6 +24,7 @@ export default function CaseDetail() {
   const [caseData, setCaseData] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [documentRequests, setDocumentRequests] = useState([]);
+  const [payoutInformationRequests, setPayoutInformationRequests] = useState([]);
   const [uploadingRequestId, setUploadingRequestId] = useState(null);
   const [requestError, setRequestError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -35,15 +37,17 @@ export default function CaseDetail() {
   async function loadData() {
     try {
       setLoading(true);
-      const [caseRes, docsRes, requestsRes, user] = await Promise.all([
+      const [caseRes, docsRes, requestsRes, payoutRequestsRes, user] = await Promise.all([
         getCase(id),
         getDocuments(id),
         getDocumentRequests(id),
+        getPayoutInformationRequests(id),
         getCurrentUser(),
       ]);
       setCaseData(caseRes);
       setDocuments(docsRes || []);
       setDocumentRequests(Array.isArray(requestsRes) ? requestsRes : []);
+      setPayoutInformationRequests(Array.isArray(payoutRequestsRes) ? payoutRequestsRes : []);
       setCurrentUserId(user?.id);
     } catch (err) {
       console.error('Failed to load case:', err);
@@ -94,6 +98,23 @@ export default function CaseDetail() {
     } finally {
       setUploadingRequestId(null);
     }
+  }
+
+  function handlePayoutInformationSubmitted(requestId, result) {
+    setPayoutInformationRequests((current) => current.map((item) => (
+      item.id === requestId
+        ? {
+            ...item,
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            submission: {
+              ...(item.submission || {}),
+              account_number_last4: result.account_number_last4,
+              submitted_at: new Date().toISOString(),
+            },
+          }
+        : item
+    )));
   }
 
   if (loading) {
@@ -206,6 +227,12 @@ export default function CaseDetail() {
               </div>
             )}
           </div>
+
+          {/* Secure Payout Information */}
+          <ClientPayoutInformationCard
+            requests={payoutInformationRequests}
+            onSubmitted={handlePayoutInformationSubmitted}
+          />
 
           {/* Your Uploaded Documents */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">

@@ -305,6 +305,40 @@ export async function recordSettlementPayout(ledgerId, data) {
 }
 
 // ---------------------------------------------------------------------------
+// Secure Client Payout Information
+// ---------------------------------------------------------------------------
+
+export async function getPayoutInformationRequests(caseId) {
+  return request(`/cases/${caseId}/payout-information-requests`);
+}
+
+export async function createPayoutInformationRequest(caseId, data = {}) {
+  return request(`/cases/${caseId}/payout-information-requests`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getPayoutInformationRequest(requestId) {
+  return request(`/payout-information-requests/${requestId}`);
+}
+
+export async function submitPayoutInformation(requestId, data) {
+  return request(`/payout-information-requests/${requestId}/submit`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function revealPayoutInformation(requestId) {
+  return request(`/payout-information-requests/${requestId}/reveal`, { method: 'POST' });
+}
+
+export async function cancelPayoutInformationRequest(requestId) {
+  return request(`/payout-information-requests/${requestId}/cancel`, { method: 'POST' });
+}
+
+// ---------------------------------------------------------------------------
 // Supporting Documents Library
 // ---------------------------------------------------------------------------
 
