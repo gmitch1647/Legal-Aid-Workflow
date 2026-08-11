@@ -223,10 +223,11 @@ export async function deleteDefendant(id) {
 // Documents
 // ---------------------------------------------------------------------------
 
-export async function uploadDocument(caseId, file, category) {
+export async function uploadDocument(caseId, file, category, parentDocumentId = null) {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('document_category', category);
+  if (parentDocumentId) formData.append('parent_document_id', parentDocumentId);
 
   return request(`/cases/${caseId}/documents`, {
     method: 'POST',
@@ -240,6 +241,19 @@ export async function getDocuments(caseId) {
 
 export async function getDocumentAccessUrl(caseId, docId) {
   return request(`/cases/${caseId}/documents/${docId}/access`);
+}
+
+export async function downloadUploadedComplaintWord(caseId, docId) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/cases/${caseId}/documents/${docId}/word-download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    let errorBody;
+    try { errorBody = await response.json(); } catch { errorBody = { detail: response.statusText }; }
+    throw new Error(apiErrorMessage(errorBody, `Word download failed: ${response.status}`));
+  }
+  return response.blob();
 }
 
 export async function deleteDocument(caseId, docId) {

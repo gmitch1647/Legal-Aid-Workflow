@@ -16,3 +16,4 @@ twilio>=8.0.0,<10.0.0
 reportlab>=4.0,<6.0.0
 PyMuPDF>=1.23.0,<2.0.0
 cryptography>=41.0.0,<44.0.0
+pdf2docx>=0.5.13,<0.6.0

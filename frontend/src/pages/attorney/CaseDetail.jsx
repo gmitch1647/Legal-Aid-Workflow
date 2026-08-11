@@ -54,6 +54,7 @@ import {
   getReferralPartners,
   assignReferral,
   uploadDocument,
+  downloadUploadedComplaintWord,
   deleteDocument,
 } from '../../lib/api';
 import AgentPipelineStatus from '../../components/AgentPipelineStatus';
@@ -213,13 +214,20 @@ function NotesModal({ title, placeholder, submitLabel, onSubmit, onCancel, loadi
 
 function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, editingComplaint, setEditingComplaint, documents, onRefresh, onDownload }) {
   const [uploading, setUploading] = useState(false);
+  const [exhibitUploadingFor, setExhibitUploadingFor] = useState(null);
+  const [draggingExhibitFor, setDraggingExhibitFor] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const fileInputRef = React.useRef(null);
+  const exhibitInputRefs = React.useRef({});
 
-  const complaintDocs = documents.filter(d =>
-    (d.document_category || d.category || '').toLowerCase() === 'complaint' ||
-    (d.file_name || '').toLowerCase().includes('complaint')
+  const complaintDocs = documents.filter(d => {
+    const category = (d.document_category || d.category || '').toLowerCase();
+    return category === 'complaint' || (category !== 'complaint_exhibit' && (d.file_name || '').toLowerCase().includes('complaint'));
+  });
+
+  const complaintExhibits = documents.filter(d =>
+    (d.document_category || d.category || '').toLowerCase() === 'complaint_exhibit'
   );
 
   const hasText = !!(caseData?.complaint_text || caseData?.complaint_draft);
@@ -241,6 +249,42 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
     setUploading(false);
     if (onRefresh) onRefresh();
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleComplaintWordDownload(doc) {
+    setUploadError('');
+    try {
+      const blob = await downloadUploadedComplaintWord(caseId, doc.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${(doc.file_name || 'complaint').replace(/\.[^.]+$/, '')}.docx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setUploadError(err.message || 'Could not download the Word complaint.');
+    }
+  }
+
+  async function handleExhibitUpload(complaintDoc, files) {
+    if (!files?.length) return;
+    setExhibitUploadingFor(complaintDoc.id);
+    setUploadError('');
+    for (const file of Array.from(files)) {
+      try {
+        await uploadDocument(caseId, file, 'complaint_exhibit', complaintDoc.id);
+      } catch (err) {
+        console.error('Complaint exhibit upload failed:', err);
+        setUploadError(err.message || 'Exhibit upload failed');
+      }
+    }
+    setExhibitUploadingFor(null);
+    setDraggingExhibitFor(null);
+    if (onRefresh) onRefresh();
+    const input = exhibitInputRefs.current[complaintDoc.id];
+    if (input) input.value = '';
   }
 
   async function handleSaveDraft() {
@@ -316,31 +360,92 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
         </div>
       )}
 
-      {/* Uploaded complaint documents */}
+      {/* Uploaded complaint documents and their linked exhibits */}
       {complaintDocs.length > 0 && (
         <div className="mt-4">
-          <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Uploaded Complaint Files</p>
-          <div className="space-y-2">
-            {complaintDocs.map(doc => (
-              <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-blue-200 bg-white p-3">
-                <FileText className="h-4 w-4 shrink-0 text-blue-500" />
-                <SecureDocumentLink
-                  caseId={caseId}
-                  document={doc}
-                  className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
-                  onError={setUploadError}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-slate-700">{doc.file_name || 'Document'}</span>
-                    <span className="block text-xs text-slate-400">{formatDate(doc.created_at)}</span>
-                  </span>
-                </SecureDocumentLink>
-                <button onClick={() => handleDeleteDoc(doc)}
-                  className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase text-slate-500">Uploaded Complaint Files</p>
+            <p className="text-[11px] text-slate-400">Complaint downloads are provided as Word documents.</p>
+          </div>
+          <div className="space-y-3">
+            {complaintDocs.map(doc => {
+              const exhibits = complaintExhibits.filter(exhibit => exhibit.parent_document_id === doc.id);
+              const uploadingExhibits = exhibitUploadingFor === doc.id;
+              const draggingExhibits = draggingExhibitFor === doc.id;
+              return (
+                <div key={doc.id} className="rounded-lg border border-blue-200 bg-white p-3">
+                  <div className="flex items-center gap-3">
+                    <FileText className="h-4 w-4 shrink-0 text-blue-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-slate-700">{doc.file_name || 'Complaint document'}</p>
+                      <p className="text-xs text-slate-400">Uploaded {formatDate(doc.created_at)}</p>
+                    </div>
+                    <button
+                      onClick={() => handleComplaintWordDownload(doc)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-2 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                    >
+                      <Download className="h-3.5 w-3.5" /> Word
+                    </button>
+                    <button onClick={() => handleDeleteDoc(doc)}
+                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition shrink-0">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="mt-3 border-t border-slate-100 pt-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-xs font-semibold text-slate-600">Exhibits {exhibits.length ? `(${exhibits.length})` : ''}</p>
+                      <button
+                        type="button"
+                        onClick={() => exhibitInputRefs.current[doc.id]?.click()}
+                        className="text-xs font-medium text-blue-700 hover:text-blue-800"
+                      >
+                        Add exhibit
+                      </button>
+                    </div>
+                    {exhibits.length > 0 && (
+                      <div className="mb-2 space-y-1.5">
+                        {exhibits.map(exhibit => (
+                          <div key={exhibit.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-2.5 py-2">
+                            <File className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                            <SecureDocumentLink
+                              caseId={caseId}
+                              document={exhibit}
+                              className="min-w-0 flex-1 truncate text-left text-xs font-medium text-slate-700 hover:text-blue-700"
+                              onError={setUploadError}
+                            >
+                              {exhibit.file_name || 'Exhibit'}
+                            </SecureDocumentLink>
+                            <button onClick={() => handleDeleteDoc(exhibit)} className="rounded p-1 text-slate-300 hover:bg-red-50 hover:text-red-500">
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div
+                      onDragOver={(event) => { event.preventDefault(); setDraggingExhibitFor(doc.id); }}
+                      onDragLeave={(event) => { event.preventDefault(); if (draggingExhibitFor === doc.id) setDraggingExhibitFor(null); }}
+                      onDrop={(event) => { event.preventDefault(); handleExhibitUpload(doc, event.dataTransfer.files); }}
+                      onClick={() => exhibitInputRefs.current[doc.id]?.click()}
+                      className={`cursor-pointer rounded-md border border-dashed px-3 py-3 text-center transition ${draggingExhibits ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50'}`}
+                    >
+                      <Upload className={`mx-auto mb-1 h-4 w-4 ${draggingExhibits ? 'text-blue-600' : 'text-slate-400'}`} />
+                      <p className="text-xs font-medium text-slate-600">{uploadingExhibits ? 'Uploading exhibit…' : 'Drag exhibits here or click to upload'}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">PDFs, Word files, images, credit reports, dispute letters, and responses</p>
+                    </div>
+                    <input
+                      ref={(element) => { exhibitInputRefs.current[doc.id] = element; }}
+                      type="file"
+                      multiple
+                      accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.tif,.tiff,.txt"
+                      className="hidden"
+                      onChange={(event) => handleExhibitUpload(doc, event.target.files)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1172,15 +1277,32 @@ export default function CaseDetail() {
 
   const handleDownload = async (type) => {
     try {
-      const blob = type === 'complaint' ? await downloadComplaint(id) : await downloadMemo(id);
+      if (type === 'complaint') {
+        const complaintDownload = await downloadComplaint(id);
+        if (!complaintDownload?.url) throw new Error('Complaint Word document is not available.');
+        const response = await fetch(complaintDownload.url);
+        if (!response.ok) throw new Error('Complaint Word document could not be retrieved.');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `complaint_${id}.docx`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      const blob = await downloadMemo(id);
       if (blob instanceof Blob) {
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${type}_${id}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `memo_${id}.docx`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
         URL.revokeObjectURL(url);
       }
     } catch (err) {

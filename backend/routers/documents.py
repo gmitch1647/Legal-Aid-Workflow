@@ -7,9 +7,11 @@ Handles file upload to Supabase Storage and metadata tracking in the
 
 import logging
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
+from fastapi.responses import Response
 
 from utils.supabase_client import get_supabase
 
@@ -64,6 +66,7 @@ async def upload_document(
     case_id: str,
     file: UploadFile = File(...),
     document_category: str = Form("other"),
+    parent_document_id: str | None = Form(None),
     authorization: str = Header(...),
 ):
     """Upload a document for a case.
@@ -76,6 +79,25 @@ async def upload_document(
     _fetch_case_with_access(case_id, profile)
 
     supabase = get_supabase()
+    category = str(document_category or "other").strip().lower()
+
+    if category == "complaint_exhibit":
+        if profile.get("role") not in ("attorney", "staff_attorney"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only attorneys can attach complaint exhibits.")
+        if not parent_document_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose the complaint this exhibit belongs to.")
+        parent_result = (
+            supabase.table("case_documents")
+            .select("id,case_id,document_category")
+            .eq("id", parent_document_id)
+            .eq("case_id", case_id)
+            .limit(1)
+            .execute()
+        )
+        if not parent_result.data or str(parent_result.data[0].get("document_category") or "").lower() != "complaint":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exhibits must be attached to an uploaded complaint in the same case.")
+    elif parent_document_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only complaint exhibits can have a parent complaint.")
 
     # Read file content
     file_content = await file.read()
@@ -83,8 +105,13 @@ async def upload_document(
     file_name = file.filename or "upload"
     file_type = file.content_type or "application/octet-stream"
 
-    # Determine storage path
-    storage_path = f"cases/{case_id}/{file_name}"
+    # Determine storage path.  Keep complaint exhibits under their parent
+    # complaint folder so related supporting material remains easy to audit.
+    storage_path = (
+        f"cases/{case_id}/complaints/{parent_document_id}/exhibits/{file_name}"
+        if category == "complaint_exhibit"
+        else f"cases/{case_id}/{file_name}"
+    )
 
     # Upload to Supabase Storage
     try:
@@ -100,7 +127,11 @@ async def upload_document(
             name_base, ext = os.path.splitext(file_name)
             ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             file_name = f"{name_base}_{ts}{ext}"
-            storage_path = f"cases/{case_id}/{file_name}"
+            storage_path = (
+                f"cases/{case_id}/complaints/{parent_document_id}/exhibits/{file_name}"
+                if category == "complaint_exhibit"
+                else f"cases/{case_id}/{file_name}"
+            )
             try:
                 supabase.storage.from_(STORAGE_BUCKET).upload(
                     path=storage_path,
@@ -120,6 +151,34 @@ async def upload_document(
                 detail=f"File upload failed: {exc}",
             )
 
+    # Uploaded PDF complaints retain their source PDF but get a separate
+    # editable DOCX derivative for all complaint downloads.
+    word_document_path = None
+    if category == "complaint" and Path(file_name).suffix.lower() == ".pdf":
+        try:
+            from utils.complaint_word_converter import complaint_word_file_name, pdf_bytes_to_docx
+
+            word_file_name = complaint_word_file_name(file_name)
+            word_document_path = str(Path(storage_path).with_name(word_file_name))
+            word_bytes = pdf_bytes_to_docx(file_content)
+            supabase.storage.from_(STORAGE_BUCKET).upload(
+                path=word_document_path,
+                file=word_bytes,
+                file_options={
+                    "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                },
+            )
+        except Exception as exc:
+            logger.exception("Could not create Word derivative for uploaded complaint %s", storage_path)
+            try:
+                supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+            except Exception:
+                logger.warning("Could not clean up complaint source PDF at %s", storage_path)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The complaint PDF could not be converted to a Word document. Upload a Word complaint or a readable PDF and try again.",
+            ) from exc
+
     # Create case_documents metadata record
     doc_payload = {
         "case_id": case_id,
@@ -127,7 +186,9 @@ async def upload_document(
         "file_type": file_type,
         "file_size": file_size,
         "storage_path": storage_path,
-        "document_category": document_category,
+        "word_document_path": word_document_path,
+        "document_category": category,
+        "parent_document_id": parent_document_id,
         "uploaded_by": profile["id"],
     }
 
@@ -138,9 +199,13 @@ async def upload_document(
         return doc_resp.data[0]
     except Exception as exc:
         logger.exception("Failed to create document record for case %s", case_id)
-        # Best-effort: remove the uploaded file
+        # Best-effort: remove both the uploaded source and a generated Word
+        # derivative, if present, so no orphaned complaint copy remains.
         try:
-            supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+            paths_to_remove = [storage_path]
+            if word_document_path:
+                paths_to_remove.append(word_document_path)
+            supabase.storage.from_(STORAGE_BUCKET).remove(paths_to_remove)
         except Exception:
             logger.warning("Could not clean up uploaded file at %s", storage_path)
         raise HTTPException(
@@ -254,6 +319,102 @@ async def get_document_access_url(
         "expires_in": expires_in,
         "file_name": doc.get("file_name") or "Document",
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /cases/{case_id}/documents/{doc_id}/word-download -- complaint DOCX
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cases/{case_id}/documents/{doc_id}/word-download")
+async def get_uploaded_complaint_word_download(
+    case_id: str,
+    doc_id: str,
+    authorization: str = Header(...),
+):
+    """Issue an authorized Word-document download for an uploaded complaint.
+
+    PDF complaint sources are converted once and retain their source PDF.  Existing
+    historic PDF uploads are converted lazily on first Word download so they gain
+    the same behavior without being re-uploaded.
+    """
+    profile = await _get_current_user(authorization)
+    _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+
+    doc_result = (
+        supabase.table("case_documents")
+        .select("id,case_id,file_name,file_type,storage_path,word_document_path,document_category")
+        .eq("id", doc_id)
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+    )
+    if not doc_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Complaint document not found.")
+
+    complaint = doc_result.data[0]
+    if str(complaint.get("document_category") or "").lower() != "complaint":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only uploaded complaint documents can be downloaded as Word files.")
+
+    source_path = complaint.get("storage_path")
+    source_name = complaint.get("file_name") or "complaint"
+    if not source_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The complaint source file is unavailable.")
+
+    source_extension = Path(source_name).suffix.lower()
+    word_path = complaint.get("word_document_path")
+    if source_extension in (".docx", ".doc"):
+        word_path = source_path
+    elif source_extension == ".pdf" and not word_path:
+        try:
+            from utils.complaint_word_converter import complaint_word_file_name, pdf_bytes_to_docx
+
+            source_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
+            word_name = complaint_word_file_name(source_name)
+            word_path = str(Path(source_path).with_name(word_name))
+            word_bytes = pdf_bytes_to_docx(source_bytes)
+            supabase.storage.from_(STORAGE_BUCKET).upload(
+                path=word_path,
+                file=word_bytes,
+                file_options={
+                    "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                },
+            )
+            supabase.table("case_documents").update({"word_document_path": word_path}).eq("id", doc_id).execute()
+        except Exception as exc:
+            logger.exception("Could not generate a Word download for complaint %s", doc_id)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A Word copy of this complaint could not be generated.",
+            ) from exc
+    elif source_extension != ".pdf":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Upload complaints as PDF or Word files to download a Word copy.",
+        )
+
+    if not word_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The Word complaint copy is unavailable.")
+
+    try:
+        word_bytes = supabase.storage.from_(STORAGE_BUCKET).download(word_path)
+    except Exception as exc:
+        logger.exception("Could not download complaint Word copy for %s", doc_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not prepare the Word complaint download.") from exc
+
+    is_legacy_doc = Path(word_path).suffix.lower() == ".doc"
+    download_name = Path(source_name).with_suffix(".doc" if is_legacy_doc else ".docx").name
+    media_type = (
+        "application/msword"
+        if is_legacy_doc
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    return Response(
+        content=word_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+    )
 
 
 # ---------------------------------------------------------------------------
