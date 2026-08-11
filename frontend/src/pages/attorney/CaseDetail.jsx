@@ -551,6 +551,13 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
     return cat !== 'pii' && cat !== 'complaint';
   });
 
+  const documentCategoryLabel = (doc) => {
+    const category = String(doc.document_category || doc.category || doc.type || 'File').toLowerCase();
+    if (category === 'signed_contract' || category === 'signed_engagement_agreement') return 'Signed Contract';
+    if (category === 'signed_closing_statement') return 'Signed Closing Statement';
+    return category.replace(/_/g, ' ');
+  };
+
   const categories = [
     { value: 'credit_report', label: 'Credit Report' },
     { value: 'dispute_letter', label: 'Dispute Letter' },
@@ -621,7 +628,7 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
                     {doc.file_name || doc.name || doc.filename || 'Document'}
                   </p>
                   <p className="text-xs text-slate-400">
-                    {(doc.document_category || doc.category || doc.type || 'File').replace(/_/g, ' ')} · {formatDate(doc.created_at || doc.uploaded_at)}
+                    {documentCategoryLabel(doc)} · {formatDate(doc.created_at || doc.uploaded_at)}
                   </p>
                 </div>
                 <ExternalLink className="h-4 w-4 shrink-0 text-slate-300" />

@@ -487,7 +487,7 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(supabase.queries["cases"].eq_args, ("id", "case-1"))
         self.assertEqual(
             supabase.queries["case_documents"].insert_payloads[0]["document_category"],
-            "signed_engagement_agreement",
+            "signed_contract",
         )
 
     def test_date_style_tracks_nearby_times_style(self):

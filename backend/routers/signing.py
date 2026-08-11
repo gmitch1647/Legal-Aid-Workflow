@@ -293,7 +293,7 @@ def _link_signed_pdf_to_case(
                 "signed_closing_statement"
                 if session.get("document_type") == "closing_statement"
                 else (
-                    "signed_engagement_agreement"
+                    "signed_contract"
                     if session.get("document_type") == OISE_ENGAGEMENT_DOCUMENT_TYPE
                     else "other"
                 )

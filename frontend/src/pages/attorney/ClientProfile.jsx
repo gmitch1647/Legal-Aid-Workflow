@@ -1429,6 +1429,13 @@ function DocumentsSection({ documents, clientCases, onUploadComplete, onDelete }
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+  const documentCategoryLabel = (doc) => {
+    const category = String(doc.document_category || doc.category || doc.type || 'File').toLowerCase();
+    if (category === 'signed_contract' || category === 'signed_engagement_agreement') return 'Signed Contract';
+    if (category === 'signed_closing_statement') return 'Signed Closing Statement';
+    return category.replace(/_/g, ' ');
+  };
+
   return (
     <div className="card">
       <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
@@ -1513,7 +1520,7 @@ function DocumentsSection({ documents, clientCases, onUploadComplete, onDelete }
                     {doc.file_name || doc.name || doc.filename || 'Document'}
                   </p>
                   <p className="text-xs text-slate-400">
-                    {doc.case_name || 'Case'} · {(doc.document_category || doc.category || doc.type || 'File').replace('_', ' ')}
+                    {doc.case_name || 'Case'} · {documentCategoryLabel(doc)}
                   </p>
                 </div>
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-300" />
