@@ -20,12 +20,14 @@ from utils.email_service import send_email
 logger = logging.getLogger(__name__)
 
 DEFAULT_ESIGN_PREFERENCES: dict[str, Any] = {
+    "esign_document_sent": True,
     "esign_document_viewed": True,
     "esign_document_signed": True,
     "esign_auto_reminders": True,
-    "esign_reminder_initial_days": 2,
-    "esign_reminder_interval_days": 3,
-    "esign_reminder_max_count": 3,
+    # LegalFlow checks pending sessions hourly and delivers the next reminder
+    # six hours after a successful invitation or reminder. Reminders continue
+    # until the request leaves a pending status.
+    "esign_reminder_interval_hours": 6,
 }
 
 
@@ -79,7 +81,12 @@ def normalize_esign_preferences(raw_preferences: object) -> dict[str, Any]:
             if key in raw_preferences:
                 preferences[key] = raw_preferences[key]
 
-    for key in ("esign_document_viewed", "esign_document_signed", "esign_auto_reminders"):
+    for key in (
+        "esign_document_sent",
+        "esign_document_viewed",
+        "esign_document_signed",
+        "esign_auto_reminders",
+    ):
         preferences[key] = bool(preferences[key])
 
     def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:
@@ -88,23 +95,14 @@ def normalize_esign_preferences(raw_preferences: object) -> dict[str, Any]:
         except (TypeError, ValueError):
             return default
 
-    preferences["esign_reminder_initial_days"] = _bounded_int(
-        preferences.get("esign_reminder_initial_days"),
-        DEFAULT_ESIGN_PREFERENCES["esign_reminder_initial_days"],
-        1,
-        30,
-    )
-    preferences["esign_reminder_interval_days"] = _bounded_int(
-        preferences.get("esign_reminder_interval_days"),
-        DEFAULT_ESIGN_PREFERENCES["esign_reminder_interval_days"],
-        1,
-        30,
-    )
-    preferences["esign_reminder_max_count"] = _bounded_int(
-        preferences.get("esign_reminder_max_count"),
-        DEFAULT_ESIGN_PREFERENCES["esign_reminder_max_count"],
-        0,
-        10,
+    # The six-hour cadence is intentionally fixed for this agreement workflow.
+    # Legacy day/count preferences are ignored so existing attorney profiles
+    # transition safely to the requested until-completion reminder behavior.
+    preferences["esign_reminder_interval_hours"] = _bounded_int(
+        preferences.get("esign_reminder_interval_hours"),
+        DEFAULT_ESIGN_PREFERENCES["esign_reminder_interval_hours"],
+        6,
+        6,
     )
     return preferences
 
@@ -136,20 +134,26 @@ async def notify_attorney_of_esign_event(
     event: str,
     source_table: str,
 ) -> bool:
-    """Email an attorney once when a signer first views or signs a document.
+    """Email an attorney once when a document is sent, first viewed, or signed.
 
     ``source_table`` must be either ``signing_sessions`` or
-    ``signature_requests``.  The event timestamp is persisted only after the
-    email service accepts the send, so temporary provider failures do not
+    ``signature_requests``. The event timestamp is persisted only after the
+    email service accepts delivery, so temporary provider failures do not
     permanently suppress a later notification attempt.
     """
-    if event not in {"viewed", "signed"}:
-        raise ValueError("E-Signature notification event must be viewed or signed.")
+    if event not in {"sent", "viewed", "signed"}:
+        raise ValueError("E-Signature notification event must be sent, viewed, or signed.")
 
-    notification_field = (
-        "view_notification_sent_at" if event == "viewed" else "signed_notification_sent_at"
-    )
-    preference_key = "esign_document_viewed" if event == "viewed" else "esign_document_signed"
+    notification_field = {
+        "sent": "sent_notification_sent_at",
+        "viewed": "view_notification_sent_at",
+        "signed": "signed_notification_sent_at",
+    }[event]
+    preference_key = {
+        "sent": "esign_document_sent",
+        "viewed": "esign_document_viewed",
+        "signed": "esign_document_signed",
+    }[event]
     if record.get(notification_field):
         return False
 
@@ -162,8 +166,16 @@ async def notify_attorney_of_esign_event(
 
     title = record.get("title") or document_type_label(record.get("document_type"))
     signer_name = record.get("signer_name") or "The client"
-    event_label = "viewed" if event == "viewed" else "signed"
-    heading = "Document Viewed" if event == "viewed" else "Document Signed"
+    event_label = {
+        "sent": "was sent to",
+        "viewed": "has viewed",
+        "signed": "has signed",
+    }[event]
+    heading = {
+        "sent": "Document Sent",
+        "viewed": "Document Viewed",
+        "signed": "Document Signed",
+    }[event]
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 
     sent = await send_email(
@@ -171,8 +183,8 @@ async def notify_attorney_of_esign_event(
         subject=f"{heading}: {title}",
         body=f"""
         <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;">
-          <h2 style="color:{'#2563eb' if event == 'viewed' else '#059669'};">{heading}</h2>
-          <p><strong>{escape(str(signer_name))}</strong> has {event_label} <strong>{escape(str(title))}</strong>.</p>
+          <h2 style="color:{'#2563eb' if event in {'sent', 'viewed'} else '#059669'};">{heading}</h2>
+          <p><strong>{escape(str(title))}</strong> {event_label} <strong>{escape(str(signer_name))}</strong>.</p>
           <p><strong>Document type:</strong> {escape(document_type_label(record.get('document_type')))}</p>
           <p><a href="{frontend_url}/attorney/esign" style="background:#2563eb;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">Open E-Signatures</a></p>
           <p style="font-size:12px;color:#64748b;">For privacy, this email does not include document contents.</p>

@@ -453,7 +453,7 @@ async def create_generated_pdf_signing_session(
     try:
         from html import escape
         from utils.email_service import send_email
-        await send_email(
+        delivered = await send_email(
             to=signer_email,
             subject=f"Signature Required: {title}",
             body=f"""
@@ -468,6 +468,13 @@ async def create_generated_pdf_signing_session(
             </div>
             """,
         )
+        if delivered:
+            await notify_attorney_of_esign_event(
+                supabase=supabase,
+                record=record,
+                event="sent",
+                source_table="signing_sessions",
+            )
     except Exception as exc:
         # The stored request remains actionable through LegalFlow even if email
         # delivery is temporarily unavailable.
@@ -630,7 +637,7 @@ async def create_signing_session(
     try:
         from html import escape
         from utils.email_service import send_email
-        await send_email(
+        delivered = await send_email(
             to=signer_email,
             subject=email_subject,
             body=f"""
@@ -652,7 +659,16 @@ async def create_signing_session(
             </div>
             """,
         )
-        logger.info("%s emailed to %s", delivery_kind.capitalize(), signer_email)
+        if delivered:
+            await notify_attorney_of_esign_event(
+                supabase=supabase,
+                record=record,
+                event="sent",
+                source_table="signing_sessions",
+            )
+            logger.info("%s emailed to %s", delivery_kind.capitalize(), signer_email)
+        else:
+            logger.warning("Email provider did not accept %s for %s", delivery_kind, signer_email)
     except Exception as e:
         logger.error("Failed to email %s to %s: %s", delivery_kind, signer_email, e)
 
@@ -850,6 +866,27 @@ async def send_oise_engagement_contract(
     if not delivered:
         detail = get_last_email_error() or "The email provider did not accept the invitation."
         raise HTTPException(status_code=502, detail=f"The agreement was prepared but could not be emailed: {detail}")
+
+    try:
+        session_response = (
+            supabase.table("signing_sessions")
+            .select("*")
+            .eq("id", session_id)
+            .limit(1)
+            .execute()
+        )
+        session_record = (session_response.data or [None])[0]
+        if session_record:
+            await notify_attorney_of_esign_event(
+                supabase=supabase,
+                record=session_record,
+                event="sent",
+                source_table="signing_sessions",
+            )
+    except Exception:
+        # The client invitation was accepted; an attorney-alert failure must not
+        # prevent the confirmed agreement send or stage transition.
+        logger.exception("Could not send Oise engagement sent-notification for %s", session_id)
 
     now = datetime.now(timezone.utc).isoformat()
     status_response = (

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from routers import esign, signing
 from utils.esign_notifications import (
     normalize_esign_preferences,
+    notify_attorney_of_esign_event,
     signed_document_filename,
 )
 
@@ -81,17 +82,55 @@ class SignedFilenameTests(unittest.TestCase):
             "A_Client_Test_Signed_Notice_Final_Review_v2.pdf",
         )
 
-    def test_preference_defaults_and_bounds_are_normalized(self):
+    def test_preference_defaults_include_sent_alert_and_fixed_six_hour_cadence(self):
         preferences = normalize_esign_preferences({
+            "esign_document_sent": False,
             "esign_document_viewed": False,
-            "esign_reminder_initial_days": 0,
-            "esign_reminder_interval_days": 100,
-            "esign_reminder_max_count": "3",
+            "esign_reminder_interval_hours": 48,
         })
+        self.assertFalse(preferences["esign_document_sent"])
         self.assertFalse(preferences["esign_document_viewed"])
-        self.assertEqual(preferences["esign_reminder_initial_days"], 1)
-        self.assertEqual(preferences["esign_reminder_interval_days"], 30)
-        self.assertEqual(preferences["esign_reminder_max_count"], 3)
+        self.assertTrue(preferences["esign_document_signed"])
+        self.assertEqual(preferences["esign_reminder_interval_hours"], 6)
+
+
+class SentNotificationTests(unittest.TestCase):
+    def test_attorney_sent_alert_is_recorded_once_after_delivery(self):
+        record = {
+            "id": "session-1",
+            "title": "Settlement Agreement",
+            "document_type": "settlement",
+            "signer_name": "Client Example",
+            "sent_by": "attorney-1",
+            "sent_notification_sent_at": None,
+        }
+        supabase = _Supabase({
+            "signing_sessions": [record],
+            "profiles": [{
+                "id": "attorney-1",
+                "email": "attorney@example.com",
+                "full_name": "Attorney Example",
+                "notification_preferences": {"esign_document_sent": True},
+            }],
+        })
+        with patch("utils.esign_notifications.send_email", new=AsyncMock(return_value=True)) as send_email:
+            first = asyncio.run(notify_attorney_of_esign_event(
+                supabase=supabase,
+                record=record,
+                event="sent",
+                source_table="signing_sessions",
+            ))
+            second = asyncio.run(notify_attorney_of_esign_event(
+                supabase=supabase,
+                record=record,
+                event="sent",
+                source_table="signing_sessions",
+            ))
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(send_email.await_count, 1)
+        self.assertIsNotNone(record["sent_notification_sent_at"])
 
 
 class FirstViewAndReminderTests(unittest.TestCase):
@@ -127,26 +166,23 @@ class FirstViewAndReminderTests(unittest.TestCase):
         notify.assert_awaited_once()
         self.assertEqual(notify.await_args.kwargs["event"], "viewed")
 
-    def test_reminder_becomes_due_after_initial_wait_and_stops_at_limit(self):
+    def test_reminder_becomes_due_every_six_hours_until_document_leaves_pending(self):
         now = datetime(2026, 8, 5, 15, 0, tzinfo=timezone.utc)
-        preferences = normalize_esign_preferences({
-            "esign_auto_reminders": True,
-            "esign_reminder_initial_days": 2,
-            "esign_reminder_interval_days": 3,
-            "esign_reminder_max_count": 3,
-        })
+        preferences = normalize_esign_preferences({"esign_auto_reminders": True})
         due_record = {
             "status": "awaiting_signature",
-            "created_at": (now - timedelta(days=2, minutes=1)).isoformat(),
+            "created_at": (now - timedelta(hours=6, minutes=1)).isoformat(),
             "last_reminder_at": None,
-            "reminder_count": 0,
+            "reminder_count": 99,
         }
-        exhausted_record = {
+        recent_reminder = {
             **due_record,
-            "reminder_count": 3,
+            "last_reminder_at": (now - timedelta(hours=5, minutes=59)).isoformat(),
         }
+        completed_record = {**due_record, "status": "signed"}
         self.assertTrue(esign._auto_reminder_is_due(due_record, preferences, now))
-        self.assertFalse(esign._auto_reminder_is_due(exhausted_record, preferences, now))
+        self.assertFalse(esign._auto_reminder_is_due(recent_reminder, preferences, now))
+        self.assertFalse(esign._auto_reminder_is_due(completed_record, preferences, now))
 
     def test_automatic_reminder_updates_history_only_after_email_success(self):
         now = datetime(2026, 8, 5, 15, 0, tzinfo=timezone.utc)
@@ -159,7 +195,7 @@ class FirstViewAndReminderTests(unittest.TestCase):
             "signer_email": "client@example.test",
             "status": "awaiting_signature",
             "sent_by": "attorney-1",
-            "created_at": (now - timedelta(days=2, minutes=1)).isoformat(),
+            "created_at": (now - timedelta(hours=6, minutes=1)).isoformat(),
             "viewed_at": None,
             "reminder_count": 0,
             "last_reminder_at": None,

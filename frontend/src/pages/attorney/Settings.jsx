@@ -586,12 +586,11 @@ function NotificationsTab() {
     client_message: true,
     pipeline_error: true,
     weekly_summary: false,
+    esign_document_sent: true,
     esign_document_viewed: true,
     esign_document_signed: true,
     esign_auto_reminders: true,
-    esign_reminder_initial_days: 2,
-    esign_reminder_interval_days: 3,
-    esign_reminder_max_count: 3,
+    esign_reminder_interval_hours: 6,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -646,6 +645,7 @@ function NotificationsTab() {
   ];
 
   const ESIGN_ALERT_OPTIONS = [
+    { key: 'esign_document_sent', label: 'Document Sent', description: 'Receive an email when LegalFlow successfully delivers a client signing invitation.' },
     { key: 'esign_document_viewed', label: 'Document Viewed', description: 'Receive an email when a client first opens a secure document link.' },
     { key: 'esign_document_signed', label: 'Document Signed', description: 'Receive an email when a client completes a signature.' },
   ];
@@ -737,7 +737,7 @@ function NotificationsTab() {
             <div>
               <p className="text-sm font-medium text-slate-900">Automatic pending-signature reminders</p>
               <p className="mt-0.5 text-xs text-slate-500">
-                Emails stop automatically once a document is signed, declined, canceled, or expires.
+                LegalFlow emails the client again every six hours while the agreement remains pending. Reminders stop automatically once it is signed, declined, canceled, or expires.
               </p>
             </div>
             <label className="relative shrink-0">
@@ -754,50 +754,9 @@ function NotificationsTab() {
           </div>
 
           {prefs.esign_auto_reminders && (
-            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <label className="text-xs font-medium text-slate-700">
-                First reminder after
-                <div className="mt-1 flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="1"
-                    max="30"
-                    value={prefs.esign_reminder_initial_days}
-                    onChange={handleNumberChange('esign_reminder_initial_days', 1, 30)}
-                    className="input h-9 w-20"
-                  />
-                  <span className="text-xs font-normal text-slate-500">days</span>
-                </div>
-              </label>
-              <label className="text-xs font-medium text-slate-700">
-                Repeat every
-                <div className="mt-1 flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="1"
-                    max="30"
-                    value={prefs.esign_reminder_interval_days}
-                    onChange={handleNumberChange('esign_reminder_interval_days', 1, 30)}
-                    className="input h-9 w-20"
-                  />
-                  <span className="text-xs font-normal text-slate-500">days</span>
-                </div>
-              </label>
-              <label className="text-xs font-medium text-slate-700">
-                Maximum reminders
-                <div className="mt-1 flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={prefs.esign_reminder_max_count}
-                    onChange={handleNumberChange('esign_reminder_max_count', 1, 10)}
-                    className="input h-9 w-20"
-                  />
-                  <span className="text-xs font-normal text-slate-500">emails</span>
-                </div>
-              </label>
-            </div>
+            <p className="mt-4 rounded-md border border-primary-100 bg-white px-3 py-2 text-xs text-slate-600">
+              <strong className="text-slate-800">Reminder cadence:</strong> every 6 hours until the document is completed or otherwise leaves the pending-signature workflow.
+            </p>
           )}
         </div>
       </section>

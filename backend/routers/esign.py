@@ -394,12 +394,12 @@ def _parse_utc_timestamp(value: object) -> datetime | None:
 
 
 def _auto_reminder_is_due(record: dict[str, Any], preferences: dict[str, Any], now: datetime) -> bool:
-    """Return whether one pending record is eligible for its next reminder."""
+    """Return whether a pending document is due for its next six-hour reminder.
+
+    The pending-status check is the completion stop condition: signed, declined,
+    canceled, expired, and reviewed disclosures never receive another reminder.
+    """
     if record.get("status") not in PENDING_REMINDER_STATUSES:
-        return False
-    reminder_count = int(record.get("reminder_count") or 0)
-    max_count = int(preferences["esign_reminder_max_count"])
-    if reminder_count >= max_count:
         return False
 
     last_reminder_at = _parse_utc_timestamp(record.get("last_reminder_at"))
@@ -408,12 +408,9 @@ def _auto_reminder_is_due(record: dict[str, Any], preferences: dict[str, Any], n
     if not anchor:
         return False
 
-    wait_days = (
-        int(preferences["esign_reminder_interval_days"])
-        if last_reminder_at
-        else int(preferences["esign_reminder_initial_days"])
+    return now >= anchor + timedelta(
+        hours=int(preferences["esign_reminder_interval_hours"])
     )
-    return now >= anchor + timedelta(days=wait_days)
 
 
 async def _send_external_reminder(request_record: dict[str, Any]) -> bool:
@@ -715,6 +712,18 @@ async def send_signature_request(
     except Exception as e:
         logger.warning(f"Could not save signature request to DB: {e}")
 
+    try:
+        await notify_attorney_of_esign_event(
+            supabase=supabase,
+            record=record,
+            event="sent",
+            source_table="signature_requests",
+        )
+    except Exception:
+        # Dropbox Sign already accepted the client invitation; do not turn an
+        # attorney-alert issue into a client delivery failure.
+        logger.exception("Could not send attorney sent-notification for %s", signature_request_id)
+
     return {
         "signature_request_id": signature_request_id,
         "title": payload.title,
@@ -853,6 +862,18 @@ async def send_document_for_signature(
         supabase.table("signature_requests").insert(record).execute()
     except Exception as e:
         logger.warning("Could not save signature request to DB: %s", e)
+
+    try:
+        await notify_attorney_of_esign_event(
+            supabase=supabase,
+            record=record,
+            event="sent",
+            source_table="signature_requests",
+        )
+    except Exception:
+        # The external provider has accepted the invitation already, so an
+        # attorney-alert failure must not invalidate that send.
+        logger.exception("Could not send attorney sent-notification for %s", signature_request_id)
 
     return {
         "signature_request_id": signature_request_id,
