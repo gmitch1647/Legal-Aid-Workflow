@@ -130,6 +130,42 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(file_name, "Settlement Agreement.pdf")
         self.assertEqual(content_type, "application/pdf")
 
+    def test_representation_agreement_client_name_is_added_to_separate_signing_copy(self):
+        source_doc = fitz.open()
+        page = source_doc.new_page(width=612, height=792)
+        page.insert_text(
+            fitz.Point(56, 185),
+            "This Agreement governs legal representation in Client's claims arising under the Fair",
+            fontsize=10,
+            fontname="helv",
+        )
+        page.insert_text(
+            fitz.Point(56, 200),
+            "Credit Reporting Act (“FCRA”), Fair Debt Collection Practices Act (“FDCPA”), and related state or federal consumer protection laws.",
+            fontsize=10,
+            fontname="helv",
+        )
+        source_pdf = source_doc.tobytes()
+        source_doc.close()
+        source_path = "signing/session-123/source_Oise Representation Agreement.pdf"
+        supabase = _FakeSigningSupabase({source_path: source_pdf})
+
+        signing_path = signing._ensure_session_pdf(supabase, {
+            "id": "session-123",
+            "original_path": source_path,
+            "signer_name": "Jordan Alexandra Smith",
+        })
+
+        self.assertEqual(source_pdf, supabase.bucket.downloads[source_path])
+        self.assertEqual(signing_path, "signing/session-123/client_named_Oise Representation Agreement.pdf")
+        personalized_upload = supabase.bucket.uploads[-1]
+        self.assertEqual(personalized_upload["path"], signing_path)
+        rendered_doc = fitz.open(stream=personalized_upload["file"], filetype="pdf")
+        rendered_text = rendered_doc[0].get_text()
+        rendered_doc.close()
+        self.assertIn("Client's Jordan Alexandra Smith claims", rendered_text)
+        self.assertNotIn("Client's claims", rendered_text)
+
     def test_docx_source_is_validated_without_conversion(self):
         docx_bytes = b"PK\x03\x04original-docx-content"
 

@@ -49,6 +49,10 @@ OISE_ENGAGEMENT_TEMPLATE_PATH = (
     / "contracts"
     / "oise_law_group_client_representation_agreement.pdf"
 )
+REPRESENTATION_INTRO_ANCHORS = (
+    "Client’s claims",
+    "Client's claims",
+)
 
 
 class EngagementContractSendRequest(BaseModel):
@@ -217,37 +221,140 @@ def _signed_pdf_path(pdf_path: str) -> str:
     return str(pdf.with_name(f"signed_{_source_stem(pdf_path)}.pdf"))
 
 
+def _client_named_pdf_path(pdf_path: str) -> str:
+    """Return the separate client-specific agreement copy used only for signing."""
+    pdf = Path(pdf_path)
+    return str(pdf.with_name(f"client_named_{_source_stem(pdf_path)}.pdf"))
+
+
+def _personalize_representation_intro(pdf_bytes: bytes, client_name: str) -> tuple[bytes, bool]:
+    """Insert the client name in the Oise representation-agreement introduction.
+
+    Only the client-specific signing derivative is modified. The original upload is
+    retained byte-for-byte in storage. The exact anchor avoids changing ordinary
+    settlement agreements that do not use this representation-agreement language.
+    """
+    clean_name = " ".join(str(client_name or "").split())
+    if not clean_name:
+        return pdf_bytes, False
+
+    import fitz  # PyMuPDF
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        changed = False
+        for page in doc:
+            anchor_rect = None
+            for anchor in REPRESENTATION_INTRO_ANCHORS:
+                matches = page.search_for(anchor)
+                if matches:
+                    anchor_rect = matches[0]
+                    break
+            if anchor_rect is None:
+                continue
+
+            # The supplied Oise agreement keeps the complete introductory
+            # paragraph in the two text rows containing the anchor. Redraw just
+            # those rows so longer client names flow cleanly while all other
+            # contract text and the execution page remain untouched.
+            paragraph_rect = fitz.Rect(54, anchor_rect.y0 - 3.0, page.rect.width - 54, anchor_rect.y1 + 22.0)
+            style = _nearby_text_style(page, anchor_rect)
+            intro_text = (
+                f"This Agreement governs legal representation in Client's {clean_name} claims arising under the Fair "
+                'Credit Reporting Act ("FCRA"), Fair Debt Collection Practices Act ("FDCPA"), and related state or '
+                "federal consumer protection laws."
+            )
+            # Keep the client name inside the original two-line paragraph.
+            # Try the surrounding PDF size first, then step down only as much as
+            # needed for a longer full name; this avoids pushing into the next
+            # section or covering any agreement text.
+            remaining = -1.0
+            for font_size, line_height in ((style["font_size"], 1.10), (9.25, 1.05), (8.5, 1.02), (8.0, 1.0), (7.5, 1.0)):
+                page.add_redact_annot(paragraph_rect, fill=(1, 1, 1))
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+                remaining = page.insert_textbox(
+                    paragraph_rect,
+                    intro_text,
+                    fontsize=font_size,
+                    fontname=style["insert_font"],
+                    color=(0, 0, 0),
+                    lineheight=line_height,
+                )
+                if remaining >= 0:
+                    break
+            if remaining < 0:
+                logger.warning("Client name could not fit in representation-agreement introduction")
+                doc.close()
+                return pdf_bytes, False
+            changed = True
+            break
+
+        output = doc.tobytes(deflate=True) if changed else pdf_bytes
+        doc.close()
+        return output, changed
+    except Exception as exc:
+        logger.warning("Could not personalize representation-agreement introduction: %s", exc)
+        return pdf_bytes, False
+
+
 def _ensure_session_pdf(supabase, session: dict) -> str:
     """Return a preview PDF while keeping the original session attachment unchanged."""
     source_path = session["original_path"]
     pdf_path = _signing_pdf_path(source_path)
-    if pdf_path == source_path:
-        return source_path
 
     try:
-        # Reuse an existing derivative where possible, without replacing its source.
-        try:
-            existing_pdf = supabase.storage.from_(STORAGE_BUCKET).download(pdf_path)
-            if existing_pdf and existing_pdf.startswith(b"%PDF"):
-                return pdf_path
-        except Exception:
-            pass
+        # PDF uploads remain immutable source files. Load them for a possible
+        # client-specific derivative; DOCX uploads retain their conversion path.
+        if pdf_path == source_path:
+            pdf_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
+            if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+                raise RuntimeError("The stored PDF could not be downloaded.")
+        else:
+            # Reuse an existing conversion derivative where possible, without
+            # replacing the attorney's source upload.
+            try:
+                existing_pdf = supabase.storage.from_(STORAGE_BUCKET).download(pdf_path)
+                if existing_pdf and existing_pdf.startswith(b"%PDF"):
+                    pdf_bytes = existing_pdf
+                else:
+                    pdf_bytes = None
+            except Exception:
+                pdf_bytes = None
 
-        docx_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
-        if not docx_bytes:
-            raise RuntimeError("The stored DOCX could not be downloaded.")
-        pdf_bytes = _convert_docx_to_pdf(docx_bytes)
+            if pdf_bytes is None:
+                docx_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
+                if not docx_bytes:
+                    raise RuntimeError("The stored DOCX could not be downloaded.")
+                pdf_bytes = _convert_docx_to_pdf(docx_bytes)
+                supabase.storage.from_(STORAGE_BUCKET).upload(
+                    path=pdf_path,
+                    file=pdf_bytes,
+                    file_options={"content-type": "application/pdf", "upsert": "true"},
+                )
+                logger.info(
+                    "Created separate signing PDF derivative for session %s without modifying %s",
+                    session["id"],
+                    source_path,
+                )
+
+        personalized_pdf, personalized = _personalize_representation_intro(
+            pdf_bytes,
+            session.get("signer_name", ""),
+        )
+        if not personalized:
+            return pdf_path
+
+        personalized_path = _client_named_pdf_path(pdf_path)
         supabase.storage.from_(STORAGE_BUCKET).upload(
-            path=pdf_path,
-            file=pdf_bytes,
+            path=personalized_path,
+            file=personalized_pdf,
             file_options={"content-type": "application/pdf", "upsert": "true"},
         )
         logger.info(
-            "Created separate signing PDF derivative for session %s without modifying %s",
+            "Created client-specific representation-agreement PDF for signing session %s",
             session["id"],
-            source_path,
         )
-        return pdf_path
+        return personalized_path
     except RuntimeError:
         raise
     except Exception as exc:
@@ -1054,7 +1161,7 @@ async def get_signing_session(token: str):
 async def get_signing_pdf(token: str):
     supabase = get_supabase()
 
-    resp = supabase.table("signing_sessions").select("id, original_path, status").eq("token", token).limit(1).execute()
+    resp = supabase.table("signing_sessions").select("id, original_path, signer_name, document_type, status").eq("token", token).limit(1).execute()
     if not resp.data:
         raise HTTPException(status_code=404, detail="Not found.")
 
