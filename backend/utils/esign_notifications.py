@@ -35,6 +35,7 @@ DOCUMENT_TYPE_LABELS = {
     "closing_statement": "Closing Statement",
     "w9": "Form W-9",
     "credit_disclosure": "Credit Disclosure",
+    "oise_engagement_agreement": "Oise Law Representation Agreement",
     "general": "Document",
 }
 

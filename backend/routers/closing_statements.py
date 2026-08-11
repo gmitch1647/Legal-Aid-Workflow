@@ -683,32 +683,58 @@ async def create_closing_statement(
 
     storage_path = f"cases/{case['id']}/closing-statements/{statement_id}/{statement_file_name}"
     supabase = get_supabase()
+
+    # Store the immutable PDF first. A saved Closing Statement is authoritative
+    # once its own record exists; the case_documents row is a convenience index
+    # and must not be allowed to turn a successful statement into an apparent
+    # failure if that secondary insert is temporarily unavailable.
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
             path=storage_path,
             file=pdf_bytes,
             file_options={"content-type": "application/pdf"},
         )
-        doc_response = supabase.table("case_documents").insert({
-            "case_id": case["id"],
-            "file_name": statement_file_name,
-            "file_type": "pdf",
-            "file_size": len(pdf_bytes),
-            "storage_path": storage_path,
-            "document_category": "closing_statement",
-            "uploaded_by": profile["id"],
-        }).execute()
-        if not doc_response.data:
-            raise RuntimeError("Closing statement case document could not be saved.")
-        record_response = supabase.table("closing_statements").insert({
+    except Exception as exc:
+        logger.exception("Could not store closing statement PDF for case %s", case["id"])
+        raise HTTPException(status_code=500, detail="Could not store the closing statement PDF.") from exc
+
+    uploaded_storage_paths = [storage_path]
+    saved_statement = None
+    saved_version = statement_version
+    record_error = None
+    for attempt in range(3):
+        candidate_version = statement_version + attempt
+        candidate_file_name = f"Closing_Statement_{client_filename}_v{candidate_version}.pdf"
+        candidate_storage_path = storage_path
+        if attempt:
+            candidate_storage_path = (
+                f"cases/{case['id']}/closing-statements/{statement_id}/{candidate_file_name}"
+            )
+            try:
+                supabase.storage.from_(STORAGE_BUCKET).upload(
+                    path=candidate_storage_path,
+                    file=pdf_bytes,
+                    file_options={"content-type": "application/pdf"},
+                )
+                uploaded_storage_paths.append(candidate_storage_path)
+            except Exception as exc:
+                record_error = exc
+                logger.exception(
+                    "Could not store recovered closing statement version %s for case %s",
+                    candidate_version,
+                    case["id"],
+                )
+                break
+        now = _now_iso()
+        record_payload = {
             "id": statement_id,
             "case_id": case["id"],
             "client_id": case["client_id"],
             "settlement_document_id": payload.settlement_document_id,
             "settlement_storage_path": verified_settlement_path,
-            "draft_storage_path": storage_path,
-            "statement_file_name": statement_file_name,
-            "version": statement_version,
+            "draft_storage_path": candidate_storage_path,
+            "statement_file_name": candidate_file_name,
+            "version": candidate_version,
             "case_number": statement_case_number,
             "adverse_party": payload.adverse_party,
             "account_reference": payload.account_reference,
@@ -728,20 +754,95 @@ async def create_closing_statement(
             "signer_email": signer_email,
             "status": "draft",
             "created_by": profile["id"],
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }).execute()
-        if not record_response.data:
-            raise RuntimeError("Closing statement record could not be saved.")
-    except Exception as exc:
+            "created_at": now,
+            "updated_at": now,
+        }
         try:
-            supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
-        except Exception:
-            logger.warning("Could not clean up failed closing statement PDF %s", storage_path)
-        logger.exception("Could not create closing statement for case %s", case["id"])
-        raise HTTPException(status_code=500, detail="Could not save the closing statement.") from exc
+            record_response = supabase.table("closing_statements").insert(record_payload).execute()
+            if record_response.data:
+                saved_statement = record_response.data[0]
+            else:
+                # Some database gateways acknowledge an insert with minimal
+                # return data. Re-read by immutable ID before declaring the
+                # statement unsaved or removing its stored PDF.
+                confirmed = (
+                    supabase.table("closing_statements")
+                    .select("*")
+                    .eq("id", statement_id)
+                    .limit(1)
+                    .execute()
+                )
+                saved_statement = (confirmed.data or [None])[0]
+            if saved_statement:
+                saved_version = candidate_version
+                storage_path = candidate_storage_path
+                # A failed initial version may already have stored a PDF. Keep
+                # only the source for the successfully saved statement.
+                superseded_paths = [path for path in uploaded_storage_paths if path != storage_path]
+                if superseded_paths:
+                    try:
+                        supabase.storage.from_(STORAGE_BUCKET).remove(superseded_paths)
+                    except Exception:
+                        logger.warning("Could not remove superseded closing statement PDFs for case %s", case["id"])
+                break
+            record_error = RuntimeError("Closing statement record could not be confirmed after save.")
+        except Exception as exc:
+            record_error = exc
+            duplicate_version = "duplicate key" in str(exc).lower() or "case_version" in str(exc).lower()
+            if duplicate_version and attempt < 2:
+                logger.info(
+                    "Closing statement version %s conflicted for case %s; retrying with the next version.",
+                    candidate_version,
+                    case["id"],
+                )
+                continue
+            break
 
-    return {"statement": record_response.data[0], "case_document": doc_response.data[0]}
+    if not saved_statement:
+        try:
+            supabase.storage.from_(STORAGE_BUCKET).remove(uploaded_storage_paths)
+        except Exception:
+            logger.warning("Could not clean up unsaved closing statement PDFs for case %s", case["id"])
+        logger.error(
+            "Could not create closing statement record for case %s: %s",
+            case["id"],
+            record_error,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="The closing statement PDF was created but its record could not be saved. Please try again; LegalFlow will create a new version safely.",
+        ) from record_error
+
+    case_document = None
+    try:
+        doc_response = supabase.table("case_documents").insert({
+            "case_id": case["id"],
+            "file_name": saved_statement.get("statement_file_name") or statement_file_name,
+            "file_type": "pdf",
+            "file_size": len(pdf_bytes),
+            "storage_path": storage_path,
+            "document_category": "closing_statement",
+            "uploaded_by": profile["id"],
+        }).execute()
+        case_document = (doc_response.data or [None])[0]
+    except Exception as exc:
+        # The durable closing_statements row and PDF remain available through
+        # Closing Statements even if this optional case-document index retries
+        # later. Do not report a saved statement as a failed generation.
+        logger.warning(
+            "Closing statement %s was saved but could not be indexed in case documents: %s",
+            saved_statement.get("id"),
+            exc,
+        )
+
+    if saved_version != statement_version:
+        logger.info(
+            "Closing statement %s saved as recovered version %s for case %s",
+            saved_statement.get("id"),
+            saved_version,
+            case["id"],
+        )
+    return {"statement": saved_statement, "case_document": case_document}
 
 
 @router.get("")

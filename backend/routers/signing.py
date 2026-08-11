@@ -41,6 +41,21 @@ STORAGE_BUCKET = "documents"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 VIEW_ONLY_DOCUMENT_TYPES = {"credit_disclosure"}
+OISE_ENGAGEMENT_DOCUMENT_TYPE = "oise_engagement_agreement"
+OISE_ENGAGEMENT_ATTORNEY_NAME = "Esther Oise"
+OISE_ENGAGEMENT_TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "assets"
+    / "contracts"
+    / "oise_law_group_client_representation_agreement.pdf"
+)
+
+
+class EngagementContractSendRequest(BaseModel):
+    """Explicit confirmation payload for the Oise engagement-contract workflow."""
+
+    case_id: str
+    confirmed: bool = False
 
 
 def _is_view_only_document(document_type: str | None) -> bool:
@@ -277,7 +292,11 @@ def _link_signed_pdf_to_case(
             "document_category": (
                 "signed_closing_statement"
                 if session.get("document_type") == "closing_statement"
-                else "other"
+                else (
+                    "signed_engagement_agreement"
+                    if session.get("document_type") == OISE_ENGAGEMENT_DOCUMENT_TYPE
+                    else "other"
+                )
             ),
             "uploaded_by": session.get("sent_by"),
         }).execute()
@@ -648,6 +667,214 @@ async def create_signing_session(
 
 
 # ---------------------------------------------------------------------------
+# POST /engagement-contract/send — confirmed Oise Law pipeline automation
+# ---------------------------------------------------------------------------
+
+@router.post("/engagement-contract/send")
+async def send_oise_engagement_contract(
+    body: EngagementContractSendRequest,
+    authorization: str = Header(default=None),
+):
+    """Create or recover Esther Oise's client-engagement signing request.
+
+    This endpoint is intentionally confirmation-gated and server-side. A browser
+    drag alone cannot email a client, and a case cannot enter the send stage
+    until the invitation is accepted for delivery by LegalFlow's email service.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    if not body.confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm the engagement-contract send before LegalFlow emails the client.",
+        )
+
+    supabase = get_supabase()
+    case_response = (
+        supabase.table("cases")
+        .select("id, client_id, plaintiff_name, status")
+        .eq("id", body.case_id)
+        .limit(1)
+        .execute()
+    )
+    if not case_response.data:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    case = case_response.data[0]
+    if not case.get("client_id"):
+        raise HTTPException(status_code=400, detail="This case is not linked to a client profile.")
+
+    client_response = (
+        supabase.table("profiles")
+        .select("id, full_name, email, assigned_attorney_id")
+        .eq("id", case["client_id"])
+        .limit(1)
+        .execute()
+    )
+    if not client_response.data:
+        raise HTTPException(status_code=400, detail="The linked client profile could not be found.")
+    client = client_response.data[0]
+    if not client.get("email"):
+        raise HTTPException(
+            status_code=400,
+            detail="Add the client's email address before sending the representation agreement.",
+        )
+
+    assigned_attorney_id = client.get("assigned_attorney_id")
+    if not assigned_attorney_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Assign Esther Oise to the client before sending this representation agreement.",
+        )
+    attorney_response = (
+        supabase.table("profiles")
+        .select("id, full_name, email, role, firm_name")
+        .eq("id", assigned_attorney_id)
+        .limit(1)
+        .execute()
+    )
+    if not attorney_response.data:
+        raise HTTPException(status_code=400, detail="The assigned attorney profile could not be found.")
+    contract_attorney = attorney_response.data[0]
+    if (contract_attorney.get("full_name") or "").strip().casefold() != OISE_ENGAGEMENT_ATTORNEY_NAME.casefold():
+        raise HTTPException(
+            status_code=400,
+            detail="The Oise Law representation agreement can only be sent for a client assigned to Esther Oise.",
+        )
+
+    signer_name = client.get("full_name") or case.get("plaintiff_name") or "Client"
+    pending_session = None
+    existing_response = (
+        supabase.table("signing_sessions")
+        .select("id, token, status, original_path")
+        .eq("case_id", case["id"])
+        .eq("document_type", OISE_ENGAGEMENT_DOCUMENT_TYPE)
+        .limit(10)
+        .execute()
+    )
+    for existing in existing_response.data or []:
+        if existing.get("status") in {"awaiting_signature", "viewed"}:
+            pending_session = existing
+            break
+        if existing.get("status") in {"signed", "complete"}:
+            raise HTTPException(status_code=409, detail="This case already has a signed Oise Law representation agreement.")
+
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    created = False
+    if pending_session:
+        session_id = pending_session["id"]
+        token = pending_session["token"]
+        original_path = pending_session.get("original_path")
+    else:
+        if not OISE_ENGAGEMENT_TEMPLATE_PATH.is_file():
+            logger.error("Oise engagement template is missing at %s", OISE_ENGAGEMENT_TEMPLATE_PATH)
+            raise HTTPException(status_code=500, detail="The Oise Law agreement template is not available.")
+        template_pdf = OISE_ENGAGEMENT_TEMPLATE_PATH.read_bytes()
+        if not template_pdf.startswith(b"%PDF"):
+            raise HTTPException(status_code=500, detail="The Oise Law agreement template is invalid.")
+
+        session_id = str(uuid.uuid4())
+        token = _generate_token()
+        filename = "Oise_Law_Group_Client_Representation_Agreement.pdf"
+        original_path = f"signing/{session_id}/source_{filename}"
+        try:
+            supabase.storage.from_(STORAGE_BUCKET).upload(
+                path=original_path,
+                file=template_pdf,
+                file_options={"content-type": "application/pdf"},
+            )
+        except Exception as exc:
+            logger.exception("Could not store Oise engagement agreement source")
+            raise HTTPException(status_code=500, detail="Could not prepare the representation agreement.") from exc
+
+        record = {
+            "id": session_id,
+            "token": token,
+            "title": "Oise Law Group PC Representation Agreement",
+            "document_type": OISE_ENGAGEMENT_DOCUMENT_TYPE,
+            "original_path": original_path,
+            "signer_name": signer_name,
+            "signer_email": client["email"],
+            "case_id": case["id"],
+            "client_id": case["client_id"],
+            # The agreement and its signature alerts are owned by the attorney
+            # named in the approved contract, not by an incidental staff user.
+            "sent_by": contract_attorney["id"],
+            "attorney_name": contract_attorney.get("full_name") or OISE_ENGAGEMENT_ATTORNEY_NAME,
+            "message": "Please review and sign your Oise Law Group PC representation agreement.",
+            "status": "awaiting_signature",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            supabase.table("signing_sessions").insert(record).execute()
+            supabase.table("signature_requests").insert({
+                "id": session_id,
+                "title": record["title"],
+                "document_type": OISE_ENGAGEMENT_DOCUMENT_TYPE,
+                "signer_name": signer_name,
+                "signer_email": client["email"],
+                "case_id": case["id"],
+                "client_id": case["client_id"],
+                "sent_by": contract_attorney["id"],
+                "status": "awaiting_signature",
+                "sent_at": record["created_at"],
+                "created_at": record["created_at"],
+            }).execute()
+        except Exception as exc:
+            logger.exception("Could not create Oise engagement signing session")
+            try:
+                supabase.storage.from_(STORAGE_BUCKET).remove([original_path])
+            except Exception:
+                logger.warning("Could not clean up failed Oise engagement source upload")
+            raise HTTPException(status_code=500, detail="Could not create the representation agreement request.") from exc
+        created = True
+
+    signing_url = f"{frontend_url}/sign/{token}"
+    from html import escape
+    from utils.email_service import send_email, get_last_email_error
+    delivered = await send_email(
+        to=client["email"],
+        subject="Signature Required: Oise Law Group PC Representation Agreement",
+        body=f"""
+        <div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;\">
+          <h2 style=\"color:#1e40af;\">Representation Agreement Signature Required</h2>
+          <p>Hello {escape(str(signer_name))},</p>
+          <p>Esther Oise has asked you to review and sign your Oise Law Group PC representation agreement.</p>
+          <p><strong>Document:</strong> Oise Law Group PC Representation Agreement</p>
+          <p><strong>From:</strong> {escape(str(contract_attorney.get('full_name') or OISE_ENGAGEMENT_ATTORNEY_NAME))}</p>
+          <p><a href=\"{signing_url}\" style=\"background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;\">Review &amp; Sign Agreement</a></p>
+          <p style=\"font-size:12px;color:#64748b;\">For your security, do not forward this link.</p>
+        </div>
+        """,
+        idempotency_key=f"oise-engagement-{session_id}",
+    )
+    if not delivered:
+        detail = get_last_email_error() or "The email provider did not accept the invitation."
+        raise HTTPException(status_code=502, detail=f"The agreement was prepared but could not be emailed: {detail}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    status_response = (
+        supabase.table("cases")
+        .update({"status": "doc_sent_for_signature", "updated_at": now})
+        .eq("id", case["id"])
+        .execute()
+    )
+    if not status_response.data:
+        raise HTTPException(
+            status_code=500,
+            detail="The agreement was emailed, but LegalFlow could not update the case stage. Please refresh and contact support if it remains unchanged.",
+        )
+
+    return {
+        "session_id": session_id,
+        "status": "awaiting_signature",
+        "case_status": "doc_sent_for_signature",
+        "signing_url": signing_url,
+        "reused": not created,
+        "message": "The Oise Law representation agreement was sent to the client for signature.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /{token} — public endpoint, returns session info + PDF URL
 # ---------------------------------------------------------------------------
 
@@ -878,6 +1105,21 @@ async def complete_signing(token: str, request: Request):
         except Exception:
             logger.exception(
                 "Signed closing statement %s could not be marked complete", session["id"]
+            )
+
+    # A completed Oise Law client-engagement agreement advances the linked case
+    # only after the signed PDF and signing audit have been safely recorded.
+    if session.get("document_type") == OISE_ENGAGEMENT_DOCUMENT_TYPE and session.get("case_id"):
+        try:
+            supabase.table("cases").update({
+                "status": "documents_signed",
+                "updated_at": now,
+            }).eq("id", session["case_id"]).execute()
+        except Exception:
+            logger.exception(
+                "Oise engagement agreement %s was signed but case %s could not be moved to Documents Signed",
+                session["id"],
+                session["case_id"],
             )
 
     # Update the unified signature_requests table too
@@ -1152,6 +1394,46 @@ def _execution_block_placement(doc) -> Optional[dict]:
     followed by exhibits, while excluding the document-header area.
     """
     import fitz  # PyMuPDF
+
+    # Attorney-managed engagement templates use an explicit client execution
+    # block. Prefer it ahead of generic By:/Date: detection so signatures stay
+    # within the dedicated client line and never fall back elsewhere in the PDF.
+    for page in reversed(doc):
+        client_signature_labels = page.search_for("Client Signature:")
+        date_labels = page.search_for("Date:")
+        for signature_label in client_signature_labels:
+            paired_dates = [
+                date_label for date_label in date_labels
+                if date_label.x0 > signature_label.x1 + 45
+                and abs(date_label.y0 - signature_label.y0) <= 12
+            ]
+            if not paired_dates:
+                continue
+            date_label = min(
+                paired_dates,
+                key=lambda rect: (abs(rect.y0 - signature_label.y0), rect.x0),
+            )
+            field_left = signature_label.x1 + 10
+            field_right = date_label.x0 - 14
+            signature_top = max(signature_label.y0 - 18, 36)
+            signature_bottom = signature_label.y1 - 2
+            if field_right - field_left < 80 or signature_bottom - signature_top < 12:
+                continue
+            signature_rect = fitz.Rect(field_left, signature_top, field_right, signature_bottom)
+            return {
+                "strategy": "explicit_client_execution_block",
+                "layout": "horizontal",
+                "page": page.number,
+                "signature_rect": [
+                    round(signature_rect.x0, 2), round(signature_rect.y0, 2),
+                    round(signature_rect.x1, 2), round(signature_rect.y1, 2),
+                ],
+                "date_origin": [round(date_label.x1 + 10, 2), round(date_label.y1 - 2, 2)],
+                "date_label_rect": [
+                    round(date_label.x0, 2), round(date_label.y0, 2),
+                    round(date_label.x1, 2), round(date_label.y1, 2),
+                ],
+            }
 
     for page in reversed(doc):
         page_rect = page.rect

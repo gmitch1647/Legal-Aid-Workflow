@@ -38,8 +38,19 @@ def get_last_email_error() -> str | None:
     return _last_email_error
 
 
-async def send_email(to: str, subject: str, body: str) -> bool:
-    """Send a single HTML email via Resend (primary) or SMTP (fallback)."""
+async def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    idempotency_key: str | None = None,
+) -> bool:
+    """Send one HTML email via Resend (primary) or SMTP (fallback).
+
+    ``idempotency_key`` is forwarded only to Resend. Callers that can retry a
+    delivery should supply a stable, per-message key so a recovered request
+    does not create a second invitation.
+    """
     global _last_email_error
     _last_email_error = None
 
@@ -58,6 +69,7 @@ async def send_email(to: str, subject: str, body: str) -> bool:
                     headers={
                         "Authorization": f"Bearer {resend_key}",
                         "Content-Type": "application/json",
+                        **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
                     },
                     json={
                         "from": from_header,

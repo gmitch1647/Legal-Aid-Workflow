@@ -1,6 +1,7 @@
 """Regression tests for immutable source attachments and signing-PDF derivatives."""
 
 import asyncio
+import base64
 import io
 import os
 import tempfile
@@ -54,6 +55,10 @@ class _FakeSigningQuery:
         self.filters = []
 
     def select(self, _fields):
+        # Supabase creates a new query chain for every table select. Reset the
+        # local filters so sequential lookups of client and attorney rows are
+        # independent in this focused fixture.
+        self.filters = []
         return self
 
     def update(self, payload):
@@ -80,12 +85,18 @@ class _FakeSigningQuery:
 
 
 class _FakeSigningSupabase:
-    def __init__(self, downloads=None, existing_session=None):
+    def __init__(self, downloads=None, existing_session=None, table_rows=None):
         self.bucket = _FakeSigningBucket(downloads)
         self.storage = _FakeSigningStorage(self.bucket)
+        table_rows = table_rows or {}
         self.queries = {
-            "signing_sessions": _FakeSigningQuery([existing_session] if existing_session else []),
-            "signature_requests": _FakeSigningQuery(),
+            "signing_sessions": _FakeSigningQuery(
+                table_rows.get("signing_sessions", [existing_session] if existing_session else [])
+            ),
+            "signature_requests": _FakeSigningQuery(table_rows.get("signature_requests")),
+            "case_documents": _FakeSigningQuery(table_rows.get("case_documents")),
+            "cases": _FakeSigningQuery(table_rows.get("cases")),
+            "profiles": _FakeSigningQuery(table_rows.get("profiles")),
         }
 
     def table(self, table_name):
@@ -379,6 +390,105 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertLessEqual(fitted_rect.x1, field.x1)
         self.assertLessEqual(fitted_rect.y1, field.y1)
         self.assertGreater(fitted_rect.height, 20)
+
+    def test_confirmed_oise_engagement_send_links_esther_and_updates_stage(self):
+        supabase = _FakeSigningSupabase(table_rows={
+            "cases": [{
+                "id": "case-1",
+                "client_id": "client-1",
+                "plaintiff_name": "Client Example",
+                "status": "attorney_review",
+            }],
+            "profiles": [
+                {
+                    "id": "client-1",
+                    "full_name": "Client Example",
+                    "email": "client@example.test",
+                    "assigned_attorney_id": "esther-1",
+                },
+                {
+                    "id": "esther-1",
+                    "full_name": "Esther Oise",
+                    "email": "oiselaw@example.test",
+                    "role": "staff_attorney",
+                    "firm_name": "Oise Law Group PC",
+                },
+            ],
+        })
+
+        with patch.object(signing, "get_supabase", return_value=supabase), patch.object(
+            signing, "_get_current_user", _attorney_user
+        ), patch.object(signing, "_generate_token", return_value="oise-token"), patch.object(
+            signing.uuid, "uuid4", return_value="oise-session"
+        ), patch("utils.email_service.send_email", new=AsyncMock(return_value=True)) as send_email:
+            result = asyncio.run(
+                signing.send_oise_engagement_contract(
+                    signing.EngagementContractSendRequest(case_id="case-1", confirmed=True),
+                    authorization="Bearer token",
+                )
+            )
+
+        self.assertEqual(result["case_status"], "doc_sent_for_signature")
+        self.assertFalse(result["reused"])
+        session_record = supabase.queries["signing_sessions"].insert_payloads[0]
+        self.assertEqual(session_record["sent_by"], "esther-1")
+        self.assertEqual(session_record["attorney_name"], "Esther Oise")
+        self.assertEqual(session_record["document_type"], signing.OISE_ENGAGEMENT_DOCUMENT_TYPE)
+        self.assertEqual(supabase.queries["cases"].update_payload["status"], "doc_sent_for_signature")
+        self.assertEqual(supabase.bucket.uploads[0]["file"], signing.OISE_ENGAGEMENT_TEMPLATE_PATH.read_bytes())
+        self.assertEqual(send_email.await_count, 1)
+
+    def test_oise_engagement_template_uses_explicit_client_execution_fields(self):
+        template_bytes = signing.OISE_ENGAGEMENT_TEMPLATE_PATH.read_bytes()
+        document = fitz.open(stream=template_bytes, filetype="pdf")
+        placement = signing._execution_block_placement(document)
+        document.close()
+
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement["strategy"], "explicit_client_execution_block")
+        self.assertEqual(placement["page"], 3)
+        self.assertEqual(placement["layout"], "horizontal")
+        self.assertLess(placement["signature_rect"][2], placement["date_origin"][0])
+
+    def test_completed_oise_engagement_moves_case_to_documents_signed(self):
+        source_path = "signing/engagement-session/source_Oise_Law_Group_Client_Representation_Agreement.pdf"
+        session = {
+            "id": "engagement-session",
+            "token": "engagement-token",
+            "status": "awaiting_signature",
+            "original_path": source_path,
+            "signer_name": "Client Example",
+            "signer_email": "client@example.test",
+            "document_type": signing.OISE_ENGAGEMENT_DOCUMENT_TYPE,
+            "case_id": "case-1",
+            "client_id": "client-1",
+            "sent_by": "attorney-1",
+        }
+        supabase = _FakeSigningSupabase(
+            downloads={source_path: signing.OISE_ENGAGEMENT_TEMPLATE_PATH.read_bytes()},
+            existing_session=session,
+        )
+
+        class _CompletionRequest:
+            headers = {"x-forwarded-for": "198.51.100.50", "user-agent": "LegalFlow test"}
+            client = SimpleNamespace(host="10.0.0.5")
+
+            async def json(self):
+                encoded = base64.b64encode(SigningPdfNormalizationTests()._signature_png()).decode("ascii")
+                return {"signature": f"data:image/png;base64,{encoded}", "typed_name": "Client Example"}
+
+        with patch.object(signing, "get_supabase", return_value=supabase), patch.object(
+            signing, "notify_attorney_of_esign_event", new=AsyncMock(return_value=True)
+        ):
+            result = asyncio.run(signing.complete_signing("engagement-token", _CompletionRequest()))
+
+        self.assertEqual(result["status"], "signed")
+        self.assertEqual(supabase.queries["cases"].update_payload["status"], "documents_signed")
+        self.assertEqual(supabase.queries["cases"].eq_args, ("id", "case-1"))
+        self.assertEqual(
+            supabase.queries["case_documents"].insert_payloads[0]["document_category"],
+            "signed_engagement_agreement",
+        )
 
     def test_date_style_tracks_nearby_times_style(self):
         document = fitz.open()

@@ -19,7 +19,7 @@ import {
   User,
   Save,
 } from 'lucide-react';
-import { getCases, updateCaseStatus, getPipelineStages, updatePipelineStage, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase, getStaffAttorneys } from '../../lib/api';
+import { getCases, updateCaseStatus, getPipelineStages, updatePipelineStage, getPipelines, createPipelineStage, deletePipelineStage, createPipeline, reorderPipelineStages, deleteCase, getStaffAttorneys, sendOiseEngagementContract } from '../../lib/api';
 import CaseCard from '../../components/CaseCard';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +81,11 @@ export default function CasePipeline() {
   const [staffAttorneyList, setStaffAttorneyList] = useState([]);
   const [notifyMessage, setNotifyMessage] = useState('');
 
+  // Oise Law engagement-contract stage automation. This modal is separate from
+  // generic stage notifications because it creates a secure signature session.
+  const [engagementSendModal, setEngagementSendModal] = useState(null);
+  const [sendingEngagement, setSendingEngagement] = useState(false);
+
   async function handleDeleteCase(caseId, caseName) {
     if (!window.confirm(`Delete case "${caseName}"? This cannot be undone.`)) return;
     try {
@@ -116,10 +121,12 @@ export default function CasePipeline() {
     }
   }
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async ({ silent = false } = {}) => {
     try {
-      setLoading(true);
-      setError(null);
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
 
       // Load pipelines, stages, and cases in parallel
       const [pipelinesData, stagesData, casesData, staffData] = await Promise.all([
@@ -164,12 +171,24 @@ export default function CasePipeline() {
       console.error('Pipeline fetch error:', err);
       setError(err.message || 'Failed to load cases');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [activePipeline]);
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // A completed signature happens on the client's secure signing page. Refresh
+  // the active board while visible so the server-side Documents Signed update is
+  // reflected without requiring the attorney to reload LegalFlow.
+  useEffect(() => {
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchData({ silent: true });
+      }
+    }, 30000);
+    return () => window.clearInterval(refreshTimer);
   }, [fetchData]);
 
   async function handleAddPipeline() {
@@ -254,6 +273,27 @@ export default function CasePipeline() {
       setError(`Failed to move case: ${err.message}`);
       setTimeout(() => setError(null), 5000);
     } finally {
+      setUpdating(null);
+    }
+  }
+
+  async function handleConfirmEngagementSend() {
+    if (!engagementSendModal || sendingEngagement) return;
+    setSendingEngagement(true);
+    setUpdating(engagementSendModal.caseId);
+    try {
+      const result = await sendOiseEngagementContract(engagementSendModal.caseId);
+      setCases((prev) => prev.map((caseItem) => (
+        caseItem.id === engagementSendModal.caseId
+          ? { ...caseItem, status: result.case_status || 'doc_sent_for_signature', updated_at: new Date().toISOString() }
+          : caseItem
+      )));
+      setEngagementSendModal(null);
+    } catch (err) {
+      setError(err.message || 'Could not send the Oise Law representation agreement.');
+      setTimeout(() => setError(null), 7000);
+    } finally {
+      setSendingEngagement(false);
       setUpdating(null);
     }
   }
@@ -411,6 +451,27 @@ export default function CasePipeline() {
       const caseId = draggableId;
       const newStatus = destination.droppableId;
       const oldStatus = source.droppableId;
+
+      // A representation agreement can only be sent after an explicit
+      // confirmation. The server validates that the client is assigned to
+      // Esther Oise and does not move the case until delivery is accepted.
+      if (newStatus === 'doc_sent_for_signature') {
+        const caseData = cases.find(c => c.id === caseId);
+        setEngagementSendModal({
+          caseId,
+          caseName: caseData?.plaintiff_name || caseData?.client_name || 'this client',
+          oldStatus,
+        });
+        return;
+      }
+
+      // This stage is exclusively the result of a completed engagement
+      // signature, preventing a manual move from being mistaken for consent.
+      if (newStatus === 'documents_signed') {
+        setError('Documents Signed is updated automatically when the client completes the representation agreement.');
+        setTimeout(() => setError(null), 6000);
+        return;
+      }
 
       // Check if destination stage has notifications enabled
       const destStage = columns.find(c => c.key === newStatus);
@@ -851,6 +912,46 @@ export default function CasePipeline() {
           )}
         </Droppable>
       </DragDropContext>
+
+      {/* Oise Law engagement-contract confirmation */}
+      {engagementSendModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-xl">
+            <div className="p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">Send Representation Agreement?</h2>
+              <p className="text-sm text-slate-600 mt-2">
+                LegalFlow will email <strong>{engagementSendModal.caseName}</strong> the Oise Law Group PC representation agreement for electronic signature and date.
+              </p>
+            </div>
+            <div className="p-5 space-y-3 text-sm text-slate-700">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="font-medium text-amber-900">Attorney: Esther Oise</p>
+                <p className="mt-1 text-amber-800">The case will move to <strong>Doc Sent for Signature</strong> only after the signing invitation is accepted for delivery.</p>
+              </div>
+              <p>After the client signs, LegalFlow will save the signed agreement to the case and automatically move the case to <strong>Documents Signed</strong>.</p>
+            </div>
+            <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={sendingEngagement}
+                onClick={() => setEngagementSendModal(null)}
+                className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={sendingEngagement}
+                onClick={handleConfirmEngagementSend}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 inline-flex items-center gap-2"
+              >
+                {sendingEngagement && <Loader2 className="w-4 h-4 animate-spin" />}
+                {sendingEngagement ? 'Sending Contract…' : 'Send Contract for Signature'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Notification Modal */}
       {notifyModal && (
