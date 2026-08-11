@@ -1557,8 +1557,21 @@ def _fit_signature_image(sig_image_bytes: bytes, target_rect):
             field_rect.x0 + (field_rect.width + render_width) / 2,
             field_rect.y0 + (field_rect.height + render_height) / 2,
         )
+        # A browser signature canvas can be much smaller than its final PDF
+        # field. Upscale the cropped mark to a 300-DPI-equivalent raster before
+        # PDF embedding so its ink remains crisp when the PDF viewer renders or
+        # prints the execution page. The geometry stays in `rendered_rect`.
+        target_pixels_per_point = 300 / 72
+        target_pixel_width = max(image.width, round(render_width * target_pixels_per_point))
+        target_pixel_height = max(image.height, round(render_height * target_pixels_per_point))
+        if target_pixel_width > image.width or target_pixel_height > image.height:
+            resampling = getattr(Image, "Resampling", Image).LANCZOS
+            image = image.resize((target_pixel_width, target_pixel_height), resample=resampling)
+            from PIL import ImageFilter
+            image = image.filter(ImageFilter.UnsharpMask(radius=0.8, percent=115, threshold=2))
+
         output = io.BytesIO()
-        image.save(output, format="PNG")
+        image.save(output, format="PNG", optimize=True)
         return output.getvalue(), rendered_rect
     except Exception as exc:
         logger.warning("Could not trim and fit signature image: %s", exc)

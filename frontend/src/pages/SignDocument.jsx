@@ -45,9 +45,12 @@ export default function SignDocument() {
   const initSignaturePad = useCallback((node) => {
     if (node && !sigPadRef.current) {
       canvasRef.current = node;
-      const ratio = Math.max(window.devicePixelRatio || 1, 1);
-      node.width = node.offsetWidth * ratio;
-      node.height = node.offsetHeight * ratio;
+      // Capture at a minimum 2× density even on standard desktop displays.
+      // This preserves pen detail when the signature is reduced into a PDF
+      // execution field and remains bounded on high-density devices.
+      const ratio = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3);
+      node.width = Math.round(node.offsetWidth * ratio);
+      node.height = Math.round(node.offsetHeight * ratio);
       node.getContext('2d').scale(ratio, ratio);
       sigPadRef.current = new SignaturePad(node, {
         backgroundColor: 'rgb(255, 255, 255)',
@@ -121,14 +124,16 @@ export default function SignDocument() {
       }
       // Generate a signature image from typed name
       const canvas = document.createElement('canvas');
-      canvas.width = 500;
-      canvas.height = 100;
+      // Keep a high-density typed signature asset; the server fits it into the
+      // final execution field without relying on a low-resolution bitmap.
+      canvas.width = 1500;
+      canvas.height = 300;
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, 500, 100);
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = 'black';
-      ctx.font = 'italic 36px "Times New Roman", serif';
-      ctx.fillText(typedName.trim(), 20, 60);
+      ctx.font = 'italic 108px "Times New Roman", serif';
+      ctx.fillText(typedName.trim(), 60, 180);
       signatureData = canvas.toDataURL('image/png');
     }
 

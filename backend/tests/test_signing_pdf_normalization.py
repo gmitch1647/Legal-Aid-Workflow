@@ -479,6 +479,22 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertLessEqual(rendered_rect.y1, client_name.y0 - 2)
         self.assertLessEqual(rendered_rect.height, 25)
 
+    def test_low_resolution_signature_is_upscaled_for_crisp_pdf_embedding(self):
+        image = Image.new("RGBA", (42, 12), "white")
+        for x in range(4, 38):
+            image.putpixel((x, 4 + (x % 5)), (0, 0, 0, 255))
+        payload = io.BytesIO()
+        image.save(payload, format="PNG")
+        field = fitz.Rect(72, 500, 252, 528)
+
+        fitted_png, fitted_rect = signing._fit_signature_image(payload.getvalue(), field)
+        fitted_image = Image.open(io.BytesIO(fitted_png))
+
+        self.assertGreaterEqual(fitted_image.width, round(fitted_rect.width * (300 / 72)))
+        self.assertGreaterEqual(fitted_image.height, round(fitted_rect.height * (300 / 72)))
+        self.assertGreaterEqual(fitted_rect.x0, field.x0)
+        self.assertLessEqual(fitted_rect.x1, field.x1)
+
     def test_signature_image_is_trimmed_and_fitted_inside_execution_field(self):
         image = Image.new("RGBA", (300, 100), "white")
         # Simulate a signer drawing close to the canvas edges, including a
