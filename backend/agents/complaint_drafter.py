@@ -1,11 +1,6 @@
-"""
-Complaint Drafter Agent.
+"""Complaint drafting agent with deterministic safety and source-grounding controls."""
 
-Drafts a complete federal complaint in the Northern District of Georgia
-style using all prior agent outputs. Loads reference cases directly from
-the reference_cases/ folder for style matching, plus RAG retrieval from
-pgvector when available.
-"""
+from __future__ import annotations
 
 import json
 import logging
@@ -14,6 +9,13 @@ from pathlib import Path
 
 import anthropic
 
+from utils.complaint_safeguards import (
+    ComplaintValidationError,
+    assert_complaint_safe,
+    audit_credit_report,
+    build_drafting_context,
+    findings_for_prompt,
+)
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -21,236 +23,141 @@ logger = logging.getLogger(__name__)
 AGENT_NAME = "complaint_drafter"
 MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 8192
+MAX_VALIDATION_REWRITES = 2
 
 SYSTEM_PROMPT = """\
-You are a specialized legal drafter inside the LegalFlow platform, generating FCRA complaints for filing in the United States District Court for the Northern District of Georgia, Atlanta Division. Every complaint you produce must be court-ready: properly captioned, structurally complete, statutorily precise, and formatted to the canonical specification below. Shallow or template-style output is unacceptable.
+You are LegalFlow's complaint-drafting assistant. Produce a working draft for a
+licensed attorney's review before filing. The system will mechanically block a
+noncompliant draft, so follow every instruction precisely.
 
-You draft on behalf of a Georgia consumer protection attorney whose practice is concentrated in FCRA, FDCPA, and TCPA cases. Your output must match the depth, precision, and statutory grounding of attorney-drafted reference complaints loaded as context. Do not invent facts. Do not guess at entity names or addresses.
+SOURCE DISCIPLINE — NON-NEGOTIABLE
+- Treat the redacted fact sheet, classification, research packet, damages
+  analysis, credit-report audit, and supplied venue context as the only factual
+  record. Do not infer, fill gaps, or silently reconcile conflicting facts.
+- Never put a full SSN, full date of birth, full CRA file number, full account
+  number, financial-account number, or a minor's full name in the pleading.
+  Use a last-four reference only where necessary. Do not add any PII that is
+  absent from the redacted source record.
+- Do not invent a residence, county, venue fact, event date, legal entity,
+  registered agent, dollar amount, credit denial, higher interest rate, reduced
+  credit limit, adverse action, or factual allegation. Use a bracketed attorney
+  note where a required fact is missing. A registered agent must be marked
+  [VERIFY VIA GEORGIA SOS eCORP] unless the supplied fact sheet includes a dated
+  verification.
+- If VENUE CONTEXT says there is a conflict, include its bracketed attorney note
+  verbatim in the venue section. Plead venue generally under 28 U.S.C. § 1391(b)
+  and, for an entity CRA defendant, use § 1391(c)(2) as the primary residence
+  theory. Never manufacture a county to make venue work.
 
-ABSOLUTE PROHIBITIONS:
-1. Never produce two captions. Exactly ONE caption at the top.
-2. Never list a party in the caption who is not defined in Parties AND named in at least one count.
-3. Never use placeholder text in a final draft.
-4. Never guess at a defendant's legal entity name or address.
-5. Never omit standalone narrative sections (REINSERTION, CONSUMER STATEMENT, FULL FILE DISCLOSURE) when those facts are present.
+OUTPUT AND FORMAT
+- Return plain text only. The DOCX renderer creates the ONE court header and
+  caption table. Do not emit a court header, caption, markdown, or duplicate
+  title. Paragraphs must be consecutively numbered.
+- Use the sections: NATURE OF ACTION; JURISDICTION AND VENUE; PARTIES;
+  FACTUAL ALLEGATIONS; ARTICLE III STANDING AND CONCRETE INJURY; any required
+  1681g disclosure narrative; COUNTS; JURY DEMAND AND PRAYER FOR RELIEF;
+  SIGNATURE BLOCK.
+- For each tradeline with audit findings, use one centered bold-italic
+  subheading bearing the tradeline name. Follow it with a paragraph containing
+  literal report fields and one numbered paragraph per finding. Include the
+  finding ID (for example C-01 or IMPOSSIBLE_DOFD) and at least one literal
+  report field/month/value. Do not substitute generic “inconsistencies” prose.
+- Never present a statutory paraphrase in quotation marks. Cite the subsection
+  and describe the sourced conduct accurately.
 
-PROPER PARTY NAMES:
-- Equifax Information Services LLC (NEVER "Equifax, Inc.")
-- Experian Information Solutions, Inc. (NEVER "Experian" alone)
-- Trans Union LLC (two words)
-- Truist Bank (NEVER "Truist Financial")
-- Edfinancial Services LLC (one word "Edfinancial")
-- LVNV Funding, LLC
-- ChexSystems, Inc.
+COUNTS AND RELIEF
+- For CRA defendants, plead FCRA counts only. Do not add any state-law count
+  unless the supplied source contains an explicit state_law_claim object with a
+  satisfied pre-suit notice date. If a state-law count is not live, omit § 1367,
+  its relief request, and all state-law fee references.
+- Every FCRA statutory section must appear as a count pair: first a willful
+  count citing the section and § 1681n; immediately after, a negligent count
+  citing the same section and § 1681o. The negligent count must open
+  “Pleaded in the alternative to Count [previous count]” and may seek actual
+  damages, fees, and costs only — never statutory or punitive damages.
+- Pair § 1681i(a)(1)(A) with § 1681i(a)(5)(A) when the facts support a
+  reinvestigation theory. Include § 1681i(a)(4) only when source facts support
+  it. Do not use count condensation to merge willful and negligent theories.
+- When the report is a Trans Union § 1681g disclosure, include a separate
+  pre-count disclosure narrative and a § 1681g(a)(1) willful/negligent pair if
+  adverse tradelines lack first-delinquency/removal information as supplied.
+- The Prayer may cite only statutes used in a live count. Each count must
+  incorporate factual paragraphs 1 through the computed final factual paragraph
+  number, consistently across counts.
 
-FORMATTING REQUIREMENTS — NON-NEGOTIABLE:
-- Times New Roman 12pt throughout
-- Double line spacing (480 twips / WD_LINE_SPACING.EXACTLY at Pt(24))
-- Pt(12) space before AND after every single paragraph
-- 1-inch margins all four sides
-- US Letter page size (8.5 x 11 inches)
-- Every paragraph numbered sequentially from 1 through end with no gaps
+STANDING, EXHIBITS, AND SIGNATURE
+- Plead Article III injury in this order when sourced: third-party
+  dissemination, post-dispute dissemination, reputational harm, informational
+  injury, time and effort, and emotional distress. Distinguish Regular hard
+  inquiries from Promotional or Account Review inquiries. If a heading cannot
+  be reliably classified, use an attorney-verification note.
+- Do not plead an adverse credit action unless the supplied source specifically
+  contains an adverse-action document.
+- Cross-reference exhibits only when present: A file disclosure; B written
+  dispute; B-1 proof of mailing; C online-dispute confirmation.
+- Leave the date line blank: “____ day of ____________, 2026”. The signature
+  block must include “Georgia Bar No. [______]”. Flag a 30039/30078 zip conflict
+  if it appears in supplied data.
+- Use “Trans Union, LLC” exactly and consistently if that defendant is present.
 
-CAPTION TABLE:
-Two-column table with single black borders.
-Left column: [Plaintiff Full Name] / Plaintiff, / v. / [Defendant Name(s)] / Defendants.
-Right column: CASE NO. _____________________ / Complaint for a civil case / Jury Trial: ☒ Yes ☐ No
-
-SECTIONS IN THIS EXACT ORDER:
-1. Introduction
-2. Jurisdiction
-3. Parties
-4. Introduction (FCRA congressional findings paragraph)
-5. Factual Allegations
-6. Counts (I, II, III... in Roman numerals)
-7. Jury Demand and Prayer for Relief
-8. Signature Block
-
-INTRODUCTION PARAGRAPH — USE THIS EXACT LANGUAGE:
-"This is a civil action for actual, statutory damages and cost brought by [Plaintiff] ("Plaintiff") an individual consumer, against defendant(s), [Defendants] for violations of the [Statute(s)] et seq. (hereinafter "[Short Name]")."
-
-JURISDICTION PARAGRAPH — USE THIS EXACT LANGUAGE:
-"Jurisdiction of this court arises under 15 U.S.C § 1681(P), 15 U.S.C § 1692 K(d) and 28 U.S.C § 1391 B(2) because a substantial part of the events, omissions, or conduct giving rise to plaintiff claim occurred in this judicial district. Defendant(s) transact business in Atlanta, Fulton County, Georgia. The court has supplemental jurisdiction of any state law pursuant to 28 U.S.C § 1367."
-
-PARTIES SECTION:
-- Plaintiff: "[Name] is a natural person and consumer as defined by 15 U.S.C § 1681 a(c), residing in [County], Georgia."
-- CRA defendants: "Upon information and belief, Defendant, [Name] is a Consumer Reporting Agency with a principal address at [Address]. [Name] has a registered agent by the name of [Agent] located at [Agent Address]. Upon information and belief, [Name] is a consumer reporting agency, as defined in 15 U.S.C. § 1681a(f). Upon information and belief, [Name] is regularly engaged in the business of assembling, evaluating, and disbursing information concerning consumers for the purpose of furnishing consumer reports, as defined in 15 U.S.C. § 1681a(d) to third parties."
-- Debt collector defendants: define under 15 U.S.C § 1692a(6)
-- Furnisher defendants: define as furnisher of information subject to 15 U.S.C § 1681s-2
-- End parties with: "The acts as described in this complaint were performed by defendants or on defendants behalf by their owners, officers, agents, and/or employees acting within the scope of their actual or apparent authority. As such, all references to defendants include their owners, agents, and/or employees."
-
-FCRA FINDINGS PARAGRAPH — USE THIS EXACT LANGUAGE:
-"According to 15 USC §1681a of the Fair Credit Reporting Act (FCRA), The banking system is dependent upon fair and accurate credit reporting. Inaccurate credit reports directly impair the efficiency of the banking system, and unfair credit reporting methods undermine the public confidence which is essential to the continued functioning of the banking system."
-
-COUNT HEADER FORMAT — THREE BOLD CENTERED LINES:
-Line 1: "Count [Roman Numeral] Violation of the Fair Credit Reporting Act"
-Line 2: "[Statute and Section]"
-Line 3: "([Defendant Name(s)])"
-
-COUNT CONDENSING RULE — CRITICAL:
-If multiple defendants committed the same violation, plead them in ONE count naming all defendants together. Do NOT repeat the same count for each defendant separately. This is the single most important structural rule.
-
-EVERY COUNT MUST OPEN WITH:
-"[Plaintiff last name] realleges and incorporates all other factual allegations set forth in this complaint."
-
-REQUIRED DAMAGES LANGUAGE — USE VERBATIM IN EVERY COUNT:
-"As a result of each Defendant's violations of [section], [Plaintiff] suffered actual damages, including but not limited to: loss of credit, denial of credit, loss of ability to purchase or benefit from credit, loss of time due to learning how to defend against the Defendant's violation of his/her rights, damage to reputation from brandishing an inaccurate consumer report to third parties which in turn led to humiliation and embarrassment, anxiety and other mental, physical, and emotional distress."
-
-REQUIRED WILLFUL/NEGLIGENT CLOSING — USE VERBATIM IN EVERY FCRA COUNT:
-"The violations by each defendant were willful rendering the Defendant liable for punitive damages in an amount to be determined by the court pursuant to 15 U.S.C § 1681n. In the alternative, each defendant was negligent, which entitles [Plaintiff] to recovery under 15 U.S.C § 1681o. [Plaintiff] is entitled to recover actual damages, statutory damages, cost and attorney's fees from each defendant in an amount to be determined by the court pursuant to 15 U.S.C §§ 1681n and 1681o."
-
-FDCPA COUNT CLOSING — USE VERBATIM:
-"As a result of the above violations of the FDCPA, Defendant is liable to the Plaintiff for: actual damages pursuant to 15 U.S.C § 1692k(a)(1); statutory damages pursuant to 15 U.S.C § 1692k(a)(2); costs pursuant to 15 U.S.C § 1692k(a)(3); and such other and further relief as the Court may deem just and proper."
-
-STANDARD FCRA COUNT BATTERY — INCLUDE ALL THAT APPLY:
-- § 1681e(b) — failure to assure maximum possible accuracy
-- § 1681i(a)(1)(A) — failure to conduct reasonable reinvestigation
-- § 1681i(a)(2)(A) — failure to provide furnisher with all relevant dispute information
-- § 1681i(a)(4) — failure to review and consider all relevant information submitted
-- § 1681i(a)(5)(A) — failure to promptly delete or modify inaccurate information
-- § 1681g — failure to provide full file disclosure
-- § 1681i(c) — failure to add consumer statement
-- § 1681i(a)(6)(B)(iii) — failure to provide description of reinvestigation procedure
-- § 1681i(a)(5)(B)(i)(ii)(iii) and (C) combined — unlawful reinsertion of previously deleted information (one consolidated count covering all four subsections)
-- § 1681s-2(b) — furnisher failure to investigate and correct
-
-STANDARD FDCPA COUNT BATTERY:
-- § 1692c(c) — failure to cease communication after written refusal to pay
-- § 1692e — false, deceptive, or misleading representations
-- § 1692f — unfair or unconscionable means to collect
-
-GEORGIA FBPA — Include O.C.G.A. § 10-1-390 et seq. when conduct is willful or deceptive. Entitles plaintiff to treble damages under O.C.G.A. § 10-1-399.
-
-PRAYER FOR RELIEF — USE THIS EXACT STRUCTURE:
-"WHEREFORE, Plaintiff, [Name], respectfully requests that judgment be entered in his/her favor against Defendant(s) [Names], jointly and severally where applicable, for the following:"
-Then bold label + normal text for each item:
-- Declaratory Relief: [text]
-- Actual Damages: [text]
-- Statutory Damages: [text]
-- Punitive Damages: [text]
-- Treble Damages: [text — only if FBPA applicable]
-- Attorney's Fees and Costs: [text]
-- Other Relief: Such other and further relief as this Court deems just and proper.
-
-END WITH THESE EXACT LINES:
-"TRIAL BY JURY IS DEMANDED." — centered, bold
-
-Signature block:
-Date: _______________________________
-Plaintiff: [Name]
-Address: ____________________________________________
-Phone: ______________________________________________
-Email: _______________________________________________
-
-Return the COMPLETE complaint text as PLAIN TEXT. No markdown. No ## headers. No --- dividers. No ** bold markers.\
+DRAFT — FOR ATTORNEY REVIEW BEFORE FILING.
 """
 
 
-# ---------------------------------------------------------------------------
-# Reference case loader — reads .docx files directly from folder
-# ---------------------------------------------------------------------------
-
 def load_reference_cases() -> str:
-    """Read up to 4 .docx reference cases from the reference_cases/ folder
-    and return their text for style matching."""
-
-    check_paths = [
+    """Read style references only; case facts must still come from supplied sources."""
+    paths = [
         Path(__file__).resolve().parent.parent / "reference_cases",
         Path.cwd() / "reference_cases",
         Path.cwd() / "backend" / "reference_cases",
         Path("/app") / "reference_cases",
         Path("/app") / "backend" / "reference_cases",
     ]
-
-    ref_dir = None
-    for d in check_paths:
-        if d.exists() and any(d.glob("*.docx")):
-            ref_dir = d
-            break
-
+    ref_dir = next((path for path in paths if path.exists() and any(path.glob("*.docx"))), None)
     if not ref_dir:
-        logger.info("No reference_cases directory found")
         return ""
-
-    reference_text = ""
     try:
         from docx import Document as DocxDocument
     except ImportError:
-        logger.warning("python-docx not available — skipping reference cases")
         return ""
 
-    files = sorted([f for f in ref_dir.iterdir()
-                    if f.suffix == '.docx' and not f.name.startswith('~$')])[:4]
-
-    for filepath in files:
+    snippets: list[str] = []
+    for filepath in sorted(path for path in ref_dir.glob("*.docx") if not path.name.startswith("~$"))[:3]:
         try:
             doc = DocxDocument(str(filepath))
-            text = '\n'.join([p.text for p in doc.paragraphs if p.text.strip()])
-            reference_text += f"\n\n--- REFERENCE CASE: {filepath.name} ---\n{text[:3000]}"
-            logger.info(f"Loaded reference case: {filepath.name}")
-        except Exception as e:
-            logger.warning(f"Could not read reference case {filepath.name}: {e}")
-            continue
+            text = "\n".join(paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip())
+            snippets.append(f"--- STYLE REFERENCE: {filepath.name} ---\n{text[:1800]}")
+        except Exception as exc:
+            logger.warning("Could not read reference case %s: %s", filepath.name, exc)
+    return "\n\n".join(snippets)
 
-    return reference_text
-
-
-# ---------------------------------------------------------------------------
-# RAG retrieval (optional — enhances direct file loading)
-# ---------------------------------------------------------------------------
 
 def _retrieve_rag_context(fact_sheet: dict, classification: dict, damages: dict) -> str:
-    """Query pgvector for the most relevant reference chunks."""
     try:
-        from utils.rag_retrieval import retrieve_relevant_chunks, format_retrieved_context
         from utils.embeddings import is_configured
-    except Exception as e:
-        logger.warning(f"RAG imports failed: {e}")
+        from utils.rag_retrieval import format_retrieved_context, retrieve_relevant_chunks
+    except Exception:
         return ""
-
     if not is_configured():
         return ""
-
-    query_parts = []
-    if isinstance(fact_sheet, dict):
-        facts = fact_sheet.get("facts") or fact_sheet.get("narrative") or ""
-        if isinstance(facts, list):
-            facts = " ".join(str(f) for f in facts)
-        query_parts.append(str(facts))
-        defendants = fact_sheet.get("defendants") or []
-        if isinstance(defendants, list):
-            names = [d.get("name", "") if isinstance(d, dict) else str(d) for d in defendants]
-            query_parts.append("Defendants: " + ", ".join(n for n in names if n))
-    if isinstance(classification, dict):
-        statutes = classification.get("statutes") or classification.get("violations") or []
-        if isinstance(statutes, list):
-            query_parts.append(" ".join(
-                s.get("statute", "") if isinstance(s, dict) else str(s) for s in statutes
-            ))
-
-    query = "\n".join(p for p in query_parts if p).strip()
+    facts = fact_sheet.get("facts") or fact_sheet.get("narrative") or ""
+    statutes = classification.get("statutes") or classification.get("violations") or []
+    query = f"{facts}\n{statutes}".strip()
     if not query:
         return ""
-
     try:
-        chunks = retrieve_relevant_chunks(query_text=query, top_k=8, document_type="complaint")
-        if chunks:
-            logger.info(f"RAG retrieved {len(chunks)} chunks for drafter")
-            return format_retrieved_context(chunks)
-    except Exception as e:
-        logger.warning(f"RAG retrieval failed: {e}")
-    return ""
+        chunks = retrieve_relevant_chunks(query_text=query, top_k=6, document_type="complaint")
+        return format_retrieved_context(chunks) if chunks else ""
+    except Exception as exc:
+        logger.warning("Complaint RAG retrieval failed: %s", exc)
+        return ""
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _parse_json_response(text: str) -> dict:
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        first_newline = cleaned.index("\n")
-        cleaned = cleaned[first_newline + 1:]
+        newline = cleaned.find("\n")
+        cleaned = cleaned[newline + 1:] if newline >= 0 else cleaned
         if cleaned.endswith("```"):
             cleaned = cleaned[:-3].strip()
     try:
@@ -263,9 +170,67 @@ def _update_agent_output(supabase, output_id: str, **fields) -> None:
     supabase.table("agent_outputs").update(fields).eq("id", output_id).execute()
 
 
-# ---------------------------------------------------------------------------
-# Main run function
-# ---------------------------------------------------------------------------
+def _create_or_reopen_output(supabase, case_id: str, now: str) -> str:
+    existing = (
+        supabase.table("agent_outputs").select("id").eq("case_id", case_id)
+        .eq("agent_name", AGENT_NAME).order("started_at", desc=True).limit(1).execute()
+    )
+    if existing.data:
+        output_id = existing.data[0]["id"]
+        _update_agent_output(supabase, output_id, status="running", started_at=now, error_message=None)
+        return output_id
+    inserted = supabase.table("agent_outputs").insert({
+        "case_id": case_id, "agent_name": AGENT_NAME, "status": "running", "started_at": now,
+    }).execute()
+    return inserted.data[0]["id"]
+
+
+def _draft_message(
+    context: dict,
+    classification: dict,
+    research: dict,
+    damages: dict,
+    findings: list[dict],
+    reference_context: str,
+    rag_context: str,
+    revision_notes: str | None,
+    validator_issues: list[str] | None,
+) -> str:
+    requirements = "\n".join(f"- {issue}" for issue in (validator_issues or [])) or "None."
+    return f"""Draft a complete source-grounded federal complaint.
+
+REDACTED FACT SHEET:
+{json.dumps(context['redacted_fact_sheet'], indent=2)}
+
+CASE CLASSIFICATION:
+{json.dumps(classification, indent=2)}
+
+RESEARCH PACKET:
+{json.dumps(research, indent=2)}
+
+DAMAGES ANALYSIS:
+{json.dumps(damages, indent=2)}
+
+VENUE CONTEXT:
+{json.dumps({key: context[key] for key in ('filing_state', 'report_state', 'venue_conflict', 'venue_note')}, indent=2)}
+
+CREDIT-REPORT AUDIT FINDINGS:
+{findings_for_prompt(findings)}
+
+PRIOR REVISION NOTES:
+{revision_notes or 'None.'}
+
+HARD-VALIDATOR ISSUES FROM THE PRIOR ATTEMPT:
+{requirements}
+
+STYLE REFERENCES — use only for formatting tone, never as factual support:
+{reference_context}
+
+OPTIONAL RETRIEVED RESEARCH:
+{rag_context}
+
+Return the complete draft now. The final answer must be plain text and must obey every system rule."""
+
 
 async def run(
     case_id: str,
@@ -273,134 +238,68 @@ async def run(
     classification: dict,
     research: dict,
     damages: dict,
-    revision_notes: str = None,
+    revision_notes: str | None = None,
 ) -> dict:
-    """Run the complaint drafter agent."""
+    """Draft a complaint, retry deterministic validation failures, and never persist a failed draft."""
     supabase = get_supabase()
     client = anthropic.Anthropic()
     now = datetime.now(timezone.utc).isoformat()
-
-    # Create / locate agent_output record
-    existing = (
-        supabase.table("agent_outputs")
-        .select("id")
-        .eq("case_id", case_id)
-        .eq("agent_name", AGENT_NAME)
-        .order("started_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    if existing.data:
-        output_id = existing.data[0]["id"]
-        _update_agent_output(supabase, output_id, status="running",
-                             started_at=now, error_message=None)
-    else:
-        insert = supabase.table("agent_outputs").insert({
-            "case_id": case_id, "agent_name": AGENT_NAME,
-            "status": "running", "started_at": now,
-        }).execute()
-        output_id = insert.data[0]["id"]
+    output_id = _create_or_reopen_output(supabase, case_id, now)
 
     try:
-        # Load reference cases directly from files
+        drafting_context = build_drafting_context(fact_sheet or {}, classification or {})
+        findings = audit_credit_report(fact_sheet or {})
         reference_context = load_reference_cases()
+        rag_context = _retrieve_rag_context(drafting_context["redacted_fact_sheet"], classification or {}, damages or {})
+        validator_issues: list[str] = []
+        result: dict = {}
 
-        # Also try RAG retrieval for additional context
-        rag_context = _retrieve_rag_context(fact_sheet, classification, damages)
-
-        # Build user message with case details AND reference cases
-        case_details = (
-            f"FACT SHEET:\n{json.dumps(fact_sheet, indent=2)}\n\n"
-            f"CASE CLASSIFICATION:\n{json.dumps(classification, indent=2)}\n\n"
-            f"RESEARCH PACKET:\n{json.dumps(research, indent=2)}\n\n"
-            f"DAMAGES ANALYSIS:\n{json.dumps(damages, indent=2)}"
-        )
-
-        if revision_notes:
-            case_details += f"\n\nREVISION NOTES (fix these issues):\n{revision_notes}"
-
-        user_message = f"""Draft a complete complaint using the following case details.
-Match the style exactly as shown in the reference cases below.
-
-CASE DETAILS:
-{case_details}
-
-REFERENCE CASES FOR STYLE MATCHING:
-{reference_context}
-
-{rag_context}
-
-Draft the complete complaint now. Every count must contain the exact verbatim damages language and willful/negligent closing specified in your instructions. Number all paragraphs sequentially. Condense counts — same violation by multiple defendants goes in one count naming all defendants."""
-
-        # Build system blocks with caching
-        system_blocks = [
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
-
-        # Call Claude
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_blocks,
-            messages=[{"role": "user", "content": user_message}],
-        )
-
-        # Log cache performance
-        usage = getattr(response, "usage", None)
-        if usage:
-            logger.info(
-                "Drafter tokens — input: %s, cache_creation: %s, cache_read: %s, output: %s",
-                getattr(usage, "input_tokens", 0),
-                getattr(usage, "cache_creation_input_tokens", 0),
-                getattr(usage, "cache_read_input_tokens", 0),
-                getattr(usage, "output_tokens", 0),
+        for attempt in range(MAX_VALIDATION_REWRITES + 1):
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": _draft_message(
+                    drafting_context, classification or {}, research or {}, damages or {}, findings,
+                    reference_context, rag_context, revision_notes, validator_issues,
+                )}],
             )
+            raw_text = response.content[0].text
+            result = _parse_json_response(raw_text)
+            complaint_text = str(result.get("complaint_text") or raw_text).strip()
+            try:
+                assert_complaint_safe(complaint_text, context=drafting_context, findings=findings)
+                result["complaint_text"] = complaint_text
+                result["validation"] = {"approved": True, "attempt": attempt + 1, "findings": findings}
+                break
+            except ComplaintValidationError as exc:
+                validator_issues = exc.issues
+                logger.warning("Complaint draft validation failed for case %s (attempt %s): %s", case_id, attempt + 1, validator_issues)
+        else:
+            raise ComplaintValidationError(validator_issues)
 
-        raw_text = response.content[0].text
-        result = _parse_json_response(raw_text)
-
-        if "complaint_text" not in result:
-            result["complaint_text"] = raw_text.strip()
-
-        # Save to complaints table
         version_query = (
-            supabase.table("complaints")
-            .select("version")
-            .eq("case_id", case_id)
-            .order("version", desc=True)
-            .limit(1)
-            .execute()
+            supabase.table("complaints").select("version").eq("case_id", case_id)
+            .order("version", desc=True).limit(1).execute()
         )
-        next_version = 1
+        next_version = (version_query.data[0]["version"] + 1) if version_query.data else 1
         if version_query.data:
-            next_version = version_query.data[0]["version"] + 1
-            supabase.table("complaints").update(
-                {"is_current": False}
-            ).eq("case_id", case_id).execute()
-
+            supabase.table("complaints").update({"is_current": False}).eq("case_id", case_id).execute()
         supabase.table("complaints").insert({
-            "case_id": case_id,
-            "complaint_text": result["complaint_text"],
-            "version": next_version,
-            "is_current": True,
+            "case_id": case_id, "complaint_text": result["complaint_text"],
+            "version": next_version, "is_current": True,
         }).execute()
 
-        completed_at = datetime.now(timezone.utc).isoformat()
-        _update_agent_output(supabase, output_id, status="complete",
-                             output_data=result, completed_at=completed_at)
-
-        logger.info("Complaint drafter completed for case %s (version %d)",
-                     case_id, next_version)
+        _update_agent_output(
+            supabase, output_id, status="complete", output_data=result,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        logger.info("Complaint drafter completed for case %s (version %d)", case_id, next_version)
         return result
-
     except Exception as exc:
-        error_msg = f"{type(exc).__name__}: {exc}"
+        _update_agent_output(
+            supabase, output_id, status="error", error_message=f"{type(exc).__name__}: {exc}",
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
         logger.exception("Complaint drafter failed for case %s", case_id)
-        _update_agent_output(supabase, output_id, status="error",
-                             error_message=error_msg,
-                             completed_at=datetime.now(timezone.utc).isoformat())
         raise

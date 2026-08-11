@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 import anthropic
 
+from utils.complaint_safeguards import validate_complaint_text
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -22,24 +23,14 @@ MODEL = "claude-haiku-4-5"
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = (
-    "You are a quality assurance reviewer for legal complaints. Review the "
-    "drafted complaint against this checklist and return a structured review "
-    "result: "
-    "(1) Does the court and venue match the classification? "
-    "(2) Is there a count for every identified violation? "
-    "(3) Are all statutory citations accurate and complete? "
-    "(4) Are paragraph numbers sequential with no gaps? "
-    "(5) Does every count contain the required damages language? "
-    "(6) Does every count contain the willful/negligent closing? "
-    "(7) Are all defendants properly defined in the Parties section with "
-    "addresses? "
-    "(8) Is the Georgia FBPA count included where the classification "
-    "identified willful conduct? "
-    "(9) Is the caption table correct? "
-    "(10) Is the prayer for relief complete? "
-    "If any check fails, return: approved: false, issues: [list of specific "
-    "issues]. If all checks pass, return: approved: true. Be specific about "
-    "what needs to be fixed."
+    "You are a quality reviewer for a draft federal consumer-reporting complaint. "
+    "The draft is for attorney review before filing. Return JSON with approved (boolean) "
+    "and issues (array). Check factual sourcing, venue conflicts, accurate statutory "
+    "citations, sequential paragraph numbering, per-section willful/negligent FCRA "
+    "count pairs, negligent-damages limits, Article III standing support, absence of "
+    "unsupported adverse-action allegations, party-name consistency, prayer/count "
+    "consistency, exhibit references, and formatting instructions. Never ask for a "
+    "Georgia FBPA count merely because conduct is willful. Identify concrete defects."
 )
 
 
@@ -134,6 +125,9 @@ async def run(case_id: str, complaint_text: str, classification: dict) -> dict:
         raw_text = response.content[0].text
         review_result = _parse_json_response(raw_text)
 
+        # Deterministic checks are non-advisory and override any model approval.
+        deterministic_issues = validate_complaint_text(complaint_text)
+
         # Normalise the result structure
         if "approved" not in review_result:
             # If Claude returned a different structure, try to infer
@@ -143,9 +137,13 @@ async def run(case_id: str, complaint_text: str, classification: dict) -> dict:
                     "QA review returned an unexpected format; manual review required."
                 ]
 
-        # Ensure issues is always a list when not approved
-        if not review_result.get("approved") and "issues" not in review_result:
+        # Ensure issues is always a list when not approved, then merge the
+        # non-negotiable deterministic findings.
+        if not isinstance(review_result.get("issues"), list):
             review_result["issues"] = []
+        if deterministic_issues:
+            review_result["approved"] = False
+            review_result["issues"] = list(dict.fromkeys(review_result["issues"] + deterministic_issues))
 
         # ── Persist success ──────────────────────────────────────────────
         completed_at = datetime.now(timezone.utc).isoformat()

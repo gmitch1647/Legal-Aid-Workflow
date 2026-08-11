@@ -387,11 +387,16 @@ async def run_pipeline(case_id: str) -> dict:
 
         if not qa_result.get("approved"):
             logger.warning(
-                "QA still not approved after %d revisions for case %s — "
-                "proceeding to draft_ready for manual review",
+                "QA still not approved after %d revisions for case %s — blocking DOCX generation pending attorney review",
                 revision_count,
                 case_id,
             )
+            _update_case_status(supabase, case_id, "attorney_review")
+            pipeline_result["final_status"] = "attorney_review"
+            pipeline_result["docx_generated"] = False
+            pipeline_result["validation_issues"] = qa_result.get("issues", [])
+            pipeline_result["completed_at"] = datetime.now(timezone.utc).isoformat()
+            return pipeline_result
 
         # ── 6. Generate DOCX files ───────────────────────────────────────
         agent_outputs_for_memo = {
@@ -409,6 +414,7 @@ async def run_pipeline(case_id: str) -> dict:
             case_data.get("defendants", []),
             agent_outputs_for_memo,
         )
+        pipeline_result["docx_generated"] = True
 
         # ── 7. Update case status to draft_ready ─────────────────────────
         _update_case_status(supabase, case_id, "draft_ready")

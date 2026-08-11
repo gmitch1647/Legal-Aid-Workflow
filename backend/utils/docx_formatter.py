@@ -1,15 +1,15 @@
 """
 Legal Document Formatter — generates court-ready .docx files.
 
-Canonical specifications (from attorney reference document):
-- Times New Roman 12pt on every run
+Canonical specifications:
+- District-specific font module: Northern District of Georgia uses Times New Roman 14pt
 - 480-twip line spacing (true double, LineRuleType.AUTO)
 - Pt(12) space before AND after every paragraph (240 twips each)
 - 1-inch margins, US Letter page size
 - Caption: two-column table with single black borders
 - Section headers: bold + centered + underlined
 - Count headers: three centered bold underlined lines
-- Numbered paragraphs with tab, justified
+- Numbered paragraphs with tab, justified and never fully bold/underlined
 - Court header: centered bold, single copy only
 """
 
@@ -23,6 +23,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+
+from utils.complaint_safeguards import assert_docx_safe
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +69,10 @@ def _format_paragraph(p, bold=False, centered=False, justified=False,
     return p
 
 
-def _add_run(paragraph, text, bold=False, underline=False):
+def _add_run(paragraph, text, bold=False, underline=False, font_size=12):
     run = paragraph.add_run(text)
     run.font.name = "Times New Roman"
-    run.font.size = Pt(12)
+    run.font.size = Pt(font_size)
     run.font.color.rgb = RGBColor(0, 0, 0)
     run.bold = bold
     run.underline = underline
@@ -103,7 +105,7 @@ def _set_cell_width(cell, width_dxa):
     tcPr.append(tcW)
 
 
-def _add_cell_paragraph(cell, text, bold=False):
+def _add_cell_paragraph(cell, text, bold=False, font_size=12):
     if len(cell.paragraphs) == 1 and not cell.paragraphs[0].text:
         p = cell.paragraphs[0]
     else:
@@ -115,7 +117,7 @@ def _add_cell_paragraph(cell, text, bold=False):
 
     run = p.add_run(text)
     run.font.name = "Times New Roman"
-    run.font.size = Pt(12)
+    run.font.size = Pt(font_size)
     run.font.color.rgb = RGBColor(0, 0, 0)
     run.bold = bold
     return p
@@ -131,6 +133,22 @@ def generate_complaint_docx(
     if defendant_names is None:
         defendant_names = []
 
+    # The drafter returns plaintext only.  Remove any legacy court-header text
+    # so the renderer remains the single caption authority.
+    complaint_text = re.sub(
+        r"(?im)^\s*(?:IN THE UNITED STATES DISTRICT COURT|FOR THE NORTHERN DISTRICT OF GEORGIA|ATLANTA DIVISION)\s*$\n?",
+        "",
+        complaint_text or "",
+    )
+    is_ndga = "NORTHERN DISTRICT OF GEORGIA" in (court or "").upper()
+    font_size = 14 if is_ndga else 12
+    canonical_names = {
+        "transunion": "Trans Union, LLC",
+        "transunion llc": "Trans Union, LLC",
+        "trans union llc": "Trans Union, LLC",
+    }
+    defendant_names = [canonical_names.get(str(name).strip().lower(), str(name).strip()) for name in defendant_names if str(name).strip()]
+
     doc = Document()
 
     # Page setup
@@ -145,7 +163,7 @@ def generate_complaint_docx(
     # Default style
     style = doc.styles["Normal"]
     style.font.name = "Times New Roman"
-    style.font.size = Pt(12)
+    style.font.size = Pt(font_size)
     style.font.color.rgb = RGBColor(0, 0, 0)
 
     # Court header — centered bold, SINGLE COPY
@@ -154,7 +172,7 @@ def generate_complaint_docx(
                  "ATLANTA DIVISION"]:
         p = doc.add_paragraph()
         _format_paragraph(p, centered=True)
-        _add_run(p, line, bold=True)
+        _add_run(p, line, bold=True, font_size=font_size)
 
     # Caption table
     if plaintiff_name or defendant_names:
@@ -182,26 +200,26 @@ def generate_complaint_docx(
 
         # Left: parties
         pname = plaintiff_name.upper() if plaintiff_name else "PLAINTIFF"
-        _add_cell_paragraph(left_cell, f"{pname},", bold=True)
-        _add_cell_paragraph(left_cell, "")
-        _add_cell_paragraph(left_cell, "Plaintiff,")
-        _add_cell_paragraph(left_cell, "")
-        _add_cell_paragraph(left_cell, "v.")
-        _add_cell_paragraph(left_cell, "")
+        _add_cell_paragraph(left_cell, f"{pname},", bold=True, font_size=font_size)
+        _add_cell_paragraph(left_cell, "", font_size=font_size)
+        _add_cell_paragraph(left_cell, "Plaintiff,", font_size=font_size)
+        _add_cell_paragraph(left_cell, "", font_size=font_size)
+        _add_cell_paragraph(left_cell, "v.", font_size=font_size)
+        _add_cell_paragraph(left_cell, "", font_size=font_size)
         for dname in defendant_names:
-            _add_cell_paragraph(left_cell, f"{dname.upper()},", bold=True)
+            _add_cell_paragraph(left_cell, f"{dname.upper()},", bold=True, font_size=font_size)
         suffix = "Defendants." if len(defendant_names) != 1 else "Defendant."
-        _add_cell_paragraph(left_cell, "")
-        _add_cell_paragraph(left_cell, suffix)
+        _add_cell_paragraph(left_cell, "", font_size=font_size)
+        _add_cell_paragraph(left_cell, suffix, font_size=font_size)
 
         # Right: case info
-        _add_cell_paragraph(right_cell, "CIVIL ACTION NO.")
-        _add_cell_paragraph(right_cell, "")
-        _add_cell_paragraph(right_cell, "____________________________")
-        _add_cell_paragraph(right_cell, "")
-        _add_cell_paragraph(right_cell, "")
+        _add_cell_paragraph(right_cell, "CIVIL ACTION NO.", font_size=font_size)
+        _add_cell_paragraph(right_cell, "", font_size=font_size)
+        _add_cell_paragraph(right_cell, "____________________________", font_size=font_size)
+        _add_cell_paragraph(right_cell, "", font_size=font_size)
+        _add_cell_paragraph(right_cell, "", font_size=font_size)
         if jury_demand:
-            _add_cell_paragraph(right_cell, "JURY TRIAL DEMANDED", bold=True)
+            _add_cell_paragraph(right_cell, "JURY TRIAL DEMANDED", bold=True, font_size=font_size)
 
     # Parse complaint text
     lines = complaint_text.split("\n")
@@ -220,27 +238,27 @@ def generate_complaint_docx(
                 "VALIDATION", "MINI-MIRANDA"])):
             p = doc.add_paragraph()
             _format_paragraph(p, centered=True)
-            _add_run(p, stripped, bold=True, underline=True)
+            _add_run(p, stripped, bold=True, underline=True, font_size=font_size)
             continue
 
         # Count headers — bold centered underlined
         if upper.startswith("COUNT ") and len(stripped) < 30:
             p = doc.add_paragraph()
             _format_paragraph(p, centered=True)
-            _add_run(p, stripped, bold=True, underline=True)
+            _add_run(p, stripped, bold=True, underline=True, font_size=font_size)
             continue
 
         if "VIOLATION OF" in upper and len(stripped) < 150:
             p = doc.add_paragraph()
             _format_paragraph(p, centered=True)
-            _add_run(p, stripped, bold=True, underline=True)
+            _add_run(p, stripped, bold=True, underline=True, font_size=font_size)
             continue
 
         # Defendant line in count header — bold centered, NO underline
         if stripped.startswith("(") and stripped.endswith(")") and len(stripped) < 200:
             p = doc.add_paragraph()
             _format_paragraph(p, centered=True)
-            _add_run(p, stripped, bold=True)
+            _add_run(p, stripped, bold=True, font_size=font_size)
             continue
 
         # Numbered paragraphs — justified with tab
@@ -250,7 +268,7 @@ def generate_complaint_docx(
             text = numbered_match.group(2)
             p = doc.add_paragraph()
             _format_paragraph(p, justified=True)
-            _add_run(p, f"{num}.\t{text}")
+            _add_run(p, f"{num}.\t{text}", font_size=font_size)
             continue
 
         # Lettered prayer items (A., B., C.)
@@ -260,28 +278,28 @@ def generate_complaint_docx(
             text = letter_match.group(2)
             p = doc.add_paragraph()
             _format_paragraph(p, justified=True, indent_left=Inches(0.5))
-            _add_run(p, f"{letter}.\t{text}")
+            _add_run(p, f"{letter}.\t{text}", font_size=font_size)
             continue
 
         # WHEREFORE
         if upper.startswith("WHEREFORE"):
             p = doc.add_paragraph()
             _format_paragraph(p, justified=True)
-            _add_run(p, stripped)
+            _add_run(p, stripped, font_size=font_size)
             continue
 
         # COMES NOW
         if upper.startswith("COMES NOW"):
             p = doc.add_paragraph()
             _format_paragraph(p, justified=True)
-            _add_run(p, stripped)
+            _add_run(p, stripped, font_size=font_size)
             continue
 
         # Respectfully submitted
         if "respectfully submitted" in stripped.lower():
             p = doc.add_paragraph()
             _format_paragraph(p, justified=True)
-            _add_run(p, stripped)
+            _add_run(p, stripped, font_size=font_size)
             continue
 
         # Signature block lines
@@ -289,13 +307,23 @@ def generate_complaint_docx(
            stripped.startswith("Attorney for") or stripped.startswith("["):
             p = doc.add_paragraph()
             _format_paragraph(p, justified=True)
-            _add_run(p, stripped)
+            _add_run(p, stripped, font_size=font_size)
             continue
 
         # Regular body paragraph — justified
         p = doc.add_paragraph()
         _format_paragraph(p, justified=True)
-        _add_run(p, stripped)
+        _add_run(p, stripped, font_size=font_size)
+
+    # Ensure that a usable attorney signature block carries the required bar number.
+    if "georgia bar no." not in complaint_text.lower():
+        p = doc.add_paragraph()
+        _format_paragraph(p, justified=True)
+        _add_run(p, "Georgia Bar No. [______]", font_size=font_size)
+
+    # The structure validator checks court-header uniqueness and prevents heading
+    # formatting from being applied to a whole numbered body paragraph.
+    assert_docx_safe(doc)
 
     # Save
     buffer = io.BytesIO()
