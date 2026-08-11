@@ -430,6 +430,31 @@ class SigningPdfNormalizationTests(unittest.TestCase):
                 return_placement=True,
             )
 
+    def test_vertical_plaintiff_settlement_uses_signature_and_date_lines(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((72, 420), '“Plaintiff”', fontsize=11)
+        page.insert_text((72, 530), 'Alysha F. Davis', fontsize=11)
+        page.insert_text((72, 572), 'Date', fontsize=11)
+        source_pdf = document.tobytes()
+        document.close()
+
+        _, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            'Alysha Davis',
+            'Alysha Davis',
+            document_type='settlement',
+            return_placement=True,
+        )
+
+        self.assertEqual(placement['strategy'], 'vertical_plaintiff_execution_block')
+        self.assertEqual(placement['page'], 0)
+        self.assertEqual(placement['layout'], 'vertical')
+        self.assertLess(placement['signature_rect'][3], 530)
+        self.assertGreater(placement['signature_rect'][1], 430)
+        self.assertLess(placement['date_origin'][1], 572)
+
     def test_horizontal_settlement_signature_stays_in_compact_text_safe_band(self):
         source_pdf = self._horizontal_settlement_execution_pdf()
         source = fitz.open(stream=source_pdf, filetype="pdf")

@@ -1775,6 +1775,70 @@ def _execution_block_placement(doc) -> Optional[dict]:
                 round(date_rect.x1, 2), round(date_rect.y1, 2),
             ],
         }
+    # Some settlements use a vertical plaintiff execution block instead of a
+    # horizontal By:/Date: row. The plaintiff label sits above a blank signature
+    # line and printed client name, followed by a separate blank line labelled
+    # Date. Detect that structure before considering generic closing statements.
+    for page in reversed(doc):
+        page_rect = page.rect
+        plaintiff_labels = [
+            rect for rect in _execution_label_rects(page, "Plaintiff")
+            if rect.y0 >= page_rect.height * 0.40
+        ]
+        date_labels = [
+            rect for rect in _execution_label_rects(page, "Date")
+            if rect.y0 >= page_rect.height * 0.45
+        ]
+        if not plaintiff_labels or not date_labels:
+            continue
+        text_spans = []
+        for block in page.get_text("dict").get("blocks", []):
+            for line in block.get("lines", []):
+                text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                if text:
+                    text_spans.append((text, fitz.Rect(line["bbox"])))
+        for plaintiff_rect in plaintiff_labels:
+            matching_dates = [
+                date_rect for date_rect in date_labels
+                if date_rect.y0 > plaintiff_rect.y1 + 55
+                and date_rect.y0 - plaintiff_rect.y0 <= 230
+                and abs(date_rect.x0 - plaintiff_rect.x0) <= 36
+            ]
+            if not matching_dates:
+                continue
+            date_rect = min(matching_dates, key=lambda rect: rect.y0)
+            name_candidates = [
+                (text, rect) for text, rect in text_spans
+                if rect.y1 < date_rect.y0 - 12
+                and rect.y0 > plaintiff_rect.y1 + 35
+                and date_rect.y0 - rect.y0 <= 95
+                and abs(rect.x0 - plaintiff_rect.x0) <= 36
+                and text.lower() not in ("plaintiff", "date")
+            ]
+            if not name_candidates:
+                continue
+            _, name_rect = max(name_candidates, key=lambda candidate: candidate[1].y0)
+            field_left = max(36.0, name_rect.x0)
+            field_right = min(field_left + 180, page_rect.width - 54)
+            signature_bottom = name_rect.y0 - 2.0
+            signature_top = max(plaintiff_rect.y1 + 10.0, signature_bottom - 28.0)
+            if field_right - field_left < 80 or signature_bottom - signature_top < 14:
+                continue
+            return {
+                "strategy": "vertical_plaintiff_execution_block",
+                "layout": "vertical",
+                "page": page.number,
+                "signature_rect": [
+                    round(field_left, 2), round(signature_top, 2),
+                    round(field_right, 2), round(signature_bottom, 2),
+                ],
+                "date_origin": [round(field_left + 2, 2), round(date_rect.y0 - 3.0, 2)],
+                "date_label_rect": [
+                    round(date_rect.x0, 2), round(date_rect.y0, 2),
+                    round(date_rect.x1, 2), round(date_rect.y1, 2),
+                ],
+            }
+
     # Closing statements use the supplied reference style: an “APPROVED AND
     # ACCEPTED” heading, an unlabeled signature line, the printed client name,
     # and then a separate Date line. Preserve that visual format while locating
