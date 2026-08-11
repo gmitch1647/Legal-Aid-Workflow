@@ -939,12 +939,11 @@ async def deliver_completed_settlement_package(
     payload: SettlementPackageDeliveryPayload,
     authorization: str = Header(default=None),
 ):
-    """Email a selected attorney the signed settlement agreement and secure W-9 link.
+    """Email a selected attorney the signed settlement agreement and completed W-9.
 
-    A completed W-9 contains a taxpayer ID. It deliberately remains in LegalFlow's
-    protected records and is never attached to email. The signed settlement PDF is
-    attached for the attorney's records, and the same email contains an authenticated
-    LegalFlow link to the completed W-9.
+    Both completed PDF records are attached only after the sender explicitly confirms
+    delivery and LegalFlow has verified the selected attorney and case readiness.
+    The signed originals and delivery audit remain stored in LegalFlow.
     """
     if not payload.confirmed:
         raise HTTPException(status_code=400, detail="Confirm delivery before sending completed settlement records.")
@@ -1063,18 +1062,20 @@ async def deliver_completed_settlement_package(
 
     try:
         settlement_pdf = supabase.storage.from_("documents").download(settlement["signed_path"])
+        w9_pdf = supabase.storage.from_("documents").download(submission_result.data[0]["completed_pdf_path"])
     except Exception as exc:
-        logger.exception("Could not download signed settlement agreement for delivery")
-        raise HTTPException(status_code=500, detail="Could not retrieve the signed settlement agreement.") from exc
+        logger.exception("Could not download completed settlement package PDFs for delivery")
+        raise HTTPException(status_code=500, detail="Could not retrieve the completed settlement documents.") from exc
 
     from html import escape
     from utils.email_service import send_email
 
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
-    w9_url = f"{frontend_url}/attorney/w9?request_id={quote(str(w9_request['id']))}"
-    client_name = escape(str(settlement.get("signer_name") or "the client"))
+    raw_client_name = str(settlement.get("signer_name") or "Client").strip() or "Client"
+    client_name = escape(raw_client_name)
     case_label = escape(str(case_row.get("case_number") or f"Case {payload.case_id[:8]}"))
     settlement_filename = signed_document_filename(settlement)
+    safe_client_name = "".join(char if char.isalnum() or char in (" ", "-", "_") else "" for char in raw_client_name)
+    w9_filename = f"{safe_client_name.strip().replace(' ', '_') or 'Client'}_Completed_W-9.pdf"
     delivered = await send_email(
         to=recipient["email"],
         subject=f"Completed Settlement Documents: {client_name}",
@@ -1085,13 +1086,15 @@ async def deliver_completed_settlement_package(
           <p>The completed settlement package for <strong>{client_name}</strong> is ready for <strong>{case_label}</strong>.</p>
           <ul>
             <li><strong>Signed settlement agreement:</strong> attached to this email.</li>
-            <li><strong>Completed Form W-9:</strong> available through LegalFlow's protected records link below.</li>
+            <li><strong>Completed Form W-9:</strong> attached to this email.</li>
           </ul>
-          <p><a href="{w9_url}" style="background:#1e40af;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:600;display:inline-block;">Open Completed W-9 Securely</a></p>
-          <p style="font-size:12px;color:#64748b;">The W-9 is not attached because it contains sensitive taxpayer information. Please sign in to LegalFlow before accessing it, and do not forward this email.</p>
+          <p style="font-size:12px;color:#64748b;">The completed W-9 contains sensitive taxpayer information. Please store both attachments securely and do not forward this email outside the authorized matter team.</p>
         </div>
         """,
-        attachments=[{"filename": settlement_filename, "content": settlement_pdf}],
+        attachments=[
+            {"filename": settlement_filename, "content": settlement_pdf},
+            {"filename": w9_filename, "content": w9_pdf},
+        ],
         idempotency_key=f"settlement-package-{delivery_id}",
     )
     if not delivered:
@@ -1110,7 +1113,7 @@ async def deliver_completed_settlement_package(
         "sent_at": sent_at,
         "recipient_name": recipient.get("full_name") or recipient["email"],
         "recipient_email": recipient["email"],
-        "message": "The selected attorney received the signed settlement agreement and secure W-9 access link.",
+        "message": "The selected attorney received the signed settlement agreement and completed W-9 attachments.",
     }
 
 

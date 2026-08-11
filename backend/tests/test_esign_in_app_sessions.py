@@ -294,18 +294,19 @@ class _PackageQuery:
 
 
 class _PackageBucket:
-    def __init__(self, settlement_pdf):
+    def __init__(self, settlement_pdf, w9_pdf):
         self.settlement_pdf = settlement_pdf
+        self.w9_pdf = w9_pdf
         self.downloaded = []
 
     def download(self, path):
         self.downloaded.append(path)
-        return self.settlement_pdf
+        return self.w9_pdf if str(path).startswith("w9/") else self.settlement_pdf
 
 
 class _PackageStorage:
-    def __init__(self, settlement_pdf):
-        self.bucket = _PackageBucket(settlement_pdf)
+    def __init__(self, settlement_pdf, w9_pdf):
+        self.bucket = _PackageBucket(settlement_pdf, w9_pdf)
 
     def from_(self, bucket):
         if bucket != "documents":
@@ -330,14 +331,17 @@ class _PackageSupabase:
             "w9_submissions": _PackageQuery([{"id": "submission-123", "request_id": "w9-123", "completed_pdf_path": "w9/w9-123/completed_form_w9.pdf"}]),
             "settlement_document_deliveries": _PackageQuery([]),
         }
-        self.storage = _PackageStorage(b"%PDF-1.7\\nsigned settlement")
+        self.storage = _PackageStorage(
+            b"%PDF-1.7\\nsigned settlement",
+            b"%PDF-1.7\\ncompleted w9",
+        )
 
     def table(self, table_name):
         return self.queries[table_name]
 
 
 class SettlementPackageDeliveryTests(unittest.TestCase):
-    def test_completed_package_attaches_settlement_and_securely_links_w9(self):
+    def test_completed_package_attaches_settlement_and_completed_w9(self):
         supabase = _PackageSupabase()
         payload = esign.SettlementPackageDeliveryPayload(
             case_id="case-123", attorney_profile_id="attorney-2", confirmed=True,
@@ -350,9 +354,13 @@ class SettlementPackageDeliveryTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "sent")
         self.assertEqual(send_email.await_args.kwargs["to"], "selected@example.test")
-        self.assertEqual(send_email.await_args.kwargs["attachments"][0]["content"], b"%PDF-1.7\\nsigned settlement")
-        self.assertIn("attorney/w9?request_id=w9-123", send_email.await_args.kwargs["body"])
-        self.assertIn("not attached", send_email.await_args.kwargs["body"])
+        attachments = send_email.await_args.kwargs["attachments"]
+        self.assertEqual(len(attachments), 2)
+        self.assertEqual(attachments[0]["content"], b"%PDF-1.7\\nsigned settlement")
+        self.assertEqual(attachments[1]["content"], b"%PDF-1.7\\ncompleted w9")
+        self.assertEqual(attachments[1]["filename"], "Client_Example_Completed_W-9.pdf")
+        self.assertNotIn("attorney/w9?request_id=w9-123", send_email.await_args.kwargs["body"])
+        self.assertNotIn("not attached", send_email.await_args.kwargs["body"])
         delivery_query = supabase.queries["settlement_document_deliveries"]
         self.assertEqual(delivery_query.upsert_payloads[0][0]["recipient_profile_id"], "attorney-2")
         self.assertEqual(delivery_query.update_payloads[-1]["status"], "sent")
