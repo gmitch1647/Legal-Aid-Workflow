@@ -1852,6 +1852,74 @@ def _execution_block_placement(doc) -> Optional[dict]:
                 ],
             }
 
+    # Some settlement templates split the plaintiff execution block across a
+    # page break: the Plaintiff caption, blank signature line, and printed
+    # client name appear at the end of one page, while the Date line begins the
+    # next page. This is a real execution layout, not a footer fallback. Keep
+    # the signature in the blank band above the printed name and write the date
+    # only on the labelled next page.
+    for page_index in range(len(doc) - 2, -1, -1):
+        page = doc[page_index]
+        next_page = doc[page_index + 1]
+        page_rect = page.rect
+        plaintiff_labels = [
+            rect for rect in _execution_label_rects(page, "Plaintiff")
+            if rect.y0 >= page_rect.height * 0.60
+        ]
+        next_page_dates = [
+            rect for rect in _execution_label_rects(next_page, "Date")
+            if rect.y0 <= min(160.0, next_page.rect.height * 0.25)
+        ]
+        if not plaintiff_labels or not next_page_dates:
+            continue
+
+        text_spans = []
+        for block in page.get_text("dict").get("blocks", []):
+            for line in block.get("lines", []):
+                text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                if text:
+                    text_spans.append((text, fitz.Rect(line["bbox"])))
+
+        for plaintiff_rect in plaintiff_labels:
+            matching_dates = [
+                date_rect for date_rect in next_page_dates
+                if abs(date_rect.x0 - plaintiff_rect.x0) <= 48
+            ]
+            if not matching_dates:
+                continue
+            date_rect = min(matching_dates, key=lambda rect: rect.y0)
+            name_candidates = [
+                (text, rect) for text, rect in text_spans
+                if rect.y0 > plaintiff_rect.y1 + 42
+                and rect.y1 < page_rect.height - 54
+                and abs(rect.x0 - plaintiff_rect.x0) <= 48
+                and text.lower() not in ("plaintiff", "date")
+            ]
+            if not name_candidates:
+                continue
+            _, name_rect = max(name_candidates, key=lambda candidate: candidate[1].y0)
+            field_left = max(36.0, name_rect.x0)
+            field_right = min(field_left + 180, page_rect.width - 54)
+            signature_bottom = name_rect.y0 - 2.0
+            signature_top = max(plaintiff_rect.y1 + 10.0, signature_bottom - 30.0)
+            if field_right - field_left < 80 or signature_bottom - signature_top < 14:
+                continue
+            return {
+                "strategy": "split_page_plaintiff_execution_block",
+                "layout": "vertical_split_page",
+                "page": page.number,
+                "date_page": next_page.number,
+                "signature_rect": [
+                    round(field_left, 2), round(signature_top, 2),
+                    round(field_right, 2), round(signature_bottom, 2),
+                ],
+                "date_origin": [round(date_rect.x1 + 10, 2), round(date_rect.y1 - 2, 2)],
+                "date_label_rect": [
+                    round(date_rect.x0, 2), round(date_rect.y0, 2),
+                    round(date_rect.x1, 2), round(date_rect.y1, 2),
+                ],
+            }
+
     # Closing statements use the supplied reference style: an “APPROVED AND
     # ACCEPTED” heading, an unlabeled signature line, the printed client name,
     # and then a separate Date line. Preserve that visual format while locating
@@ -1946,10 +2014,11 @@ def _embed_signature(
         )
 
     page = doc[placement["page"]]
+    date_page = doc[placement.get("date_page", placement["page"])]
     sig_rect = fitz.Rect(placement["signature_rect"])
     date_x, date_y = placement["date_origin"]
     date_label_rect = fitz.Rect(placement.get("date_label_rect", [date_x, date_y - 10, date_x + 1, date_y]))
-    date_style = _nearby_text_style(page, date_label_rect)
+    date_style = _nearby_text_style(date_page, date_label_rect)
     fitted_signature_bytes, rendered_sig_rect = _fit_signature_image(sig_image_bytes, sig_rect)
     placement["rendered_signature_rect"] = [
         round(rendered_sig_rect.x0, 2), round(rendered_sig_rect.y0, 2),
@@ -1970,7 +2039,7 @@ def _embed_signature(
         )
 
     if placement["strategy"] != "fallback_last_page":
-        page.insert_text(
+        date_page.insert_text(
             fitz.Point(date_x, date_y),
             date_str,
             fontsize=date_style["font_size"],

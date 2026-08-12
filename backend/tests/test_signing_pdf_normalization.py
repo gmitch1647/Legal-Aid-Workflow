@@ -6,6 +6,7 @@ import io
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -454,6 +455,42 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertLess(placement['signature_rect'][3], 530)
         self.assertGreater(placement['signature_rect'][1], 430)
         self.assertLess(placement['date_origin'][1], 572)
+
+    def test_split_page_plaintiff_settlement_uses_execution_line_and_next_page_date(self):
+        document = fitz.open()
+        execution_page = document.new_page(width=612, height=792)
+        execution_page.insert_text((72, 525), "AGREED AND ENTERED INTO AS OF THE EARLIEST DATE INDICATED BELOW.", fontsize=11)
+        execution_page.insert_text((72, 570), '“Plaintiff”', fontsize=11)
+        execution_page.insert_text((72, 680), 'Channetta Jamela Owens', fontsize=11)
+        date_page = document.new_page(width=612, height=792)
+        date_page.insert_text((72, 100), "Date", fontsize=11)
+        trailing_page = document.new_page(width=612, height=792)
+        trailing_page.insert_text((72, 90), "EXHIBIT A", fontsize=11)
+        source_pdf = document.tobytes()
+        document.close()
+
+        signed_pdf, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            "Channetta Owens",
+            "Channetta Owens",
+            document_type="settlement",
+            return_placement=True,
+        )
+
+        self.assertTrue(signed_pdf.startswith(b"%PDF"))
+        self.assertEqual(placement["strategy"], "split_page_plaintiff_execution_block")
+        self.assertEqual(placement["page"], 0)
+        self.assertEqual(placement["date_page"], 1)
+        self.assertEqual(placement["layout"], "vertical_split_page")
+        self.assertGreater(placement["signature_rect"][1], 570)
+        self.assertLess(placement["signature_rect"][3], 680)
+        self.assertLessEqual(placement["date_origin"][1], 102)
+
+        signed_document = fitz.open(stream=signed_pdf, filetype="pdf")
+        self.assertIn(datetime.now(timezone.utc).strftime("%m/%d/%Y"), signed_document[1].get_text())
+        self.assertNotIn(datetime.now(timezone.utc).strftime("%m/%d/%Y"), signed_document[0].get_text())
+        signed_document.close()
 
     def test_horizontal_settlement_signature_stays_in_compact_text_safe_band(self):
         source_pdf = self._horizontal_settlement_execution_pdf()
