@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { submitCase, uploadDocument, registerClient } from '../../lib/api';
 import { X, Plus, FileText, Loader2, CheckCircle2, AlertCircle, ArrowLeft } from 'lucide-react';
+import AddressAutocomplete from '../../components/AddressAutocomplete';
 
 const US_STATES = [
   'Alabama','Alaska','Arizona','Arkansas','California','Colorado','Connecticut',
@@ -357,9 +358,19 @@ export default function CaseSubmission() {
             </div>
             <div className="md:col-span-2">
               <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Street Address</label>
-              <input value={consumer.street_address} onChange={e => updateConsumer('street_address', e.target.value)}
-                placeholder="e.g. 123 Main St"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <AddressAutocomplete
+                value={consumer.street_address}
+                onChange={(value) => updateConsumer('street_address', value)}
+                onSelect={(address) => setConsumer((current) => ({
+                  ...current,
+                  street_address: address.line1,
+                  city: address.city || current.city,
+                  state: address.state || current.state,
+                  zip_code: address.zip_code || current.zip_code,
+                }))}
+                placeholder="Start typing your street address"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
             <div>
               <label className="block text-xs font-bold uppercase text-slate-600 mb-1">City</label>

@@ -24,6 +24,7 @@ import {
   FolderOpen,
 } from 'lucide-react';
 import { useAuth } from '../../App';
+import AddressAutocomplete from '../../components/AddressAutocomplete';
 import {
   getDefendants,
   createDefendant,
@@ -195,11 +196,11 @@ function ProfileTab() {
         </div>
         <div className="sm:col-span-2">
           <label className="label">Address</label>
-          <input
-            type="text"
+          <AddressAutocomplete
             value={form.address}
-            onChange={handleChange('address')}
-            placeholder="123 Law Street, Suite 100, City, State ZIP"
+            onChange={(value) => setForm((current) => ({ ...current, address: value }))}
+            onSelect={(address) => setForm((current) => ({ ...current, address: address.display_name }))}
+            placeholder="Start typing the firm address"
             className="input"
           />
         </div>
@@ -284,11 +285,11 @@ function DefendantForm({ initial, onSubmit, onCancel, loading }) {
         </div>
         <div className="sm:col-span-2">
           <label className="label">Address</label>
-          <input
-            type="text"
+          <AddressAutocomplete
             value={form.address}
-            onChange={handleChange('address')}
-            placeholder="1550 Peachtree St NE, Atlanta, GA 30309"
+            onChange={(value) => setForm((current) => ({ ...current, address: value }))}
+            onSelect={(address) => setForm((current) => ({ ...current, address: address.display_name }))}
+            placeholder="Start typing the defendant address"
             className="input"
           />
         </div>
