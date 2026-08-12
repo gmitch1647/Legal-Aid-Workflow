@@ -20,6 +20,7 @@ export default function ClientPayoutInformationCard({ requests, onSubmitted }) {
   function currentForm(requestId) {
     return formByRequest[requestId] || {
       account_holder_name: '',
+      account_ownership: '',
       account_type: 'checking',
       bank_name: '',
       routing_number: '',
@@ -41,6 +42,14 @@ export default function ClientPayoutInformationCard({ requests, onSubmitted }) {
     const form = currentForm(payoutRequest.id);
     setError('');
     setSuccess('');
+    if (!form.account_holder_name.trim()) {
+      setError('Enter the name shown on the bank account.');
+      return;
+    }
+    if (!form.account_ownership) {
+      setError('Please select whether this is a personal or business account.');
+      return;
+    }
     if (form.account_number !== form.confirm_account_number) {
       setError('The account numbers do not match. Please review them before submitting.');
       return;
@@ -94,8 +103,11 @@ export default function ClientPayoutInformationCard({ requests, onSubmitted }) {
                   <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Your payment information has been submitted securely{request.submission?.account_number_last4 ? ` for the account ending in ${request.submission.account_number_last4}` : ''}. Contact your legal team if anything changes.</span></div>
                 ) : (
                   <form onSubmit={(event) => submit(event, request)} className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2" autoComplete="off">
-                    <label className="sm:col-span-2 text-sm font-medium text-slate-700">Name on bank account
-                      <input required value={form.account_holder_name} onChange={(event) => update(request.id, 'account_holder_name', event.target.value)} autoComplete="name" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                    <label className="sm:col-span-2 text-sm font-medium text-slate-700">Name shown on bank account <span className="text-red-600">*</span>
+                      <input required value={form.account_holder_name} onChange={(event) => update(request.id, 'account_holder_name', event.target.value)} autoComplete="name" placeholder="Full legal name or business name" className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600" />
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">Is this a personal or business account? <span className="text-red-600">*</span>
+                      <select required value={form.account_ownership} onChange={(event) => update(request.id, 'account_ownership', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-600"><option value="" disabled>Select account ownership</option><option value="personal">Personal account</option><option value="business">Business account</option></select>
                     </label>
                     <label className="text-sm font-medium text-slate-700">Account type
                       <select value={form.account_type} onChange={(event) => update(request.id, 'account_type', event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"><option value="checking">Checking</option><option value="savings">Savings</option></select>
@@ -114,7 +126,7 @@ export default function ClientPayoutInformationCard({ requests, onSubmitted }) {
                     </label>
                     <label className="sm:col-span-2 flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-600"><input type="checkbox" checked={showNumbers} onChange={(event) => setShowNumbersByRequest((current) => ({ ...current, [request.id]: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600" />{showNumbers ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />} {showNumbers ? 'Hide' : 'Show'} routing and account numbers while typing</label>
                     <label className="sm:col-span-2 flex cursor-pointer items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-700"><input required type="checkbox" checked={form.authorized} onChange={(event) => update(request.id, 'authorized', event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600" /><span>I confirm that this payment information is correct and authorize the attorney to use it solely to send my client payout.</span></label>
-                    <div className="sm:col-span-2 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="flex max-w-xl items-start gap-2 text-xs leading-5 text-slate-500"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />Your routing and account numbers are encrypted before storage. Do not enter this information in messages or email.</p><button disabled={submittingId === request.id || !form.authorized} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{submittingId === request.id && <Loader2 className="h-4 w-4 animate-spin" />}{submittingId === request.id ? 'Submitting securely…' : 'Submit securely'}</button></div>
+                    <div className="sm:col-span-2 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="flex max-w-xl items-start gap-2 text-xs leading-5 text-slate-500"><LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />Your routing and account numbers are encrypted before storage. Do not enter this information in messages or email.</p><button disabled={submittingId === request.id || !form.authorized || !form.account_holder_name.trim() || !form.account_ownership} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{submittingId === request.id && <Loader2 className="h-4 w-4 animate-spin" />}{submittingId === request.id ? 'Submitting securely…' : 'Submit securely'}</button></div>
                   </form>
                 )}
               </div>

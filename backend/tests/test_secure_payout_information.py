@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
+from pydantic import ValidationError
 from starlette.requests import Request
 
 from routers import payout_information
@@ -109,6 +110,7 @@ class SecurePayoutInformationTests(unittest.TestCase):
     def _submit_body(self):
         return payout_information.PayoutInformationSubmission(
             account_holder_name="Alex Client",
+            account_ownership="personal",
             account_type="checking",
             bank_name="Example Bank",
             routing_number="021000021",
@@ -134,12 +136,32 @@ class SecurePayoutInformationTests(unittest.TestCase):
         stored = supabase.tables["client_payout_information_submissions"].inserted[0]
         self.assertEqual(result["status"], "completed")
         self.assertEqual(stored["account_number_last4"], "9012")
+        self.assertEqual(stored["account_holder_name"], "Alex Client")
+        self.assertEqual(stored["account_ownership"], "personal")
         self.assertNotEqual(stored["routing_number_encrypted"], "021000021")
         self.assertNotEqual(stored["account_number_encrypted"], "123456789012")
         self.assertNotIn("routing_number", stored)
         self.assertNotIn("account_number", stored)
         self.assertEqual(supabase.tables["client_payout_information_requests"].rows[0]["status"], "completed")
         self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[0]["action"], "submitted")
+
+    def test_account_holder_and_account_ownership_are_required(self):
+        with self.assertRaises(ValidationError):
+            payout_information.PayoutInformationSubmission(
+                account_holder_name="   ",
+                account_type="checking",
+                routing_number="021000021",
+                account_number="123456789012",
+                authorized=True,
+            )
+        with self.assertRaises(ValidationError):
+            payout_information.PayoutInformationSubmission(
+                account_holder_name="Alex Client",
+                account_type="checking",
+                routing_number="021000021",
+                account_number="123456789012",
+                authorized=True,
+            )
 
     def test_authorized_attorney_reveal_decrypts_values_and_creates_audit_row(self):
         supabase = _Supabase()
@@ -151,6 +173,7 @@ class SecurePayoutInformationTests(unittest.TestCase):
         with get_supabase, current_profile, encryption:
             revealed = asyncio.run(payout_information.reveal_payout_information("request-1", _request(), "Bearer attorney"))
 
+        self.assertEqual(revealed["account_ownership"], "personal")
         self.assertEqual(revealed["routing_number"], "021000021")
         self.assertEqual(revealed["account_number"], "123456789012")
         self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[-1]["action"], "revealed")
@@ -184,6 +207,7 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertIsNone(supabase.tables["payout_information_access_audit"].inserted[0]["actor_id"])
         self.assertNotEqual(stored["routing_number_encrypted"], "021000021")
         self.assertNotEqual(stored["account_number_encrypted"], "123456789012")
+        self.assertEqual(stored["account_ownership"], "personal")
 
     def test_expired_public_token_cannot_load_or_submit(self):
         supabase = _Supabase()

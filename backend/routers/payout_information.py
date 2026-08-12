@@ -201,6 +201,7 @@ def _safe_summary(payout_request: dict, submission: Optional[dict] = None) -> di
         summary["submission"] = {
             "account_holder_name": submission.get("account_holder_name"),
             "account_type": submission.get("account_type"),
+            "account_ownership": submission.get("account_ownership"),
             "bank_name": submission.get("bank_name"),
             "account_number_last4": submission.get("account_number_last4"),
             "submitted_at": submission.get("submitted_at"),
@@ -228,8 +229,17 @@ class PayoutInformationRequestCreate(BaseModel):
 
 class PayoutInformationSubmission(BaseModel):
     account_holder_name: str = Field(min_length=2, max_length=160)
+    account_ownership: Literal["personal", "business"]
     account_type: Literal["checking", "savings"]
     bank_name: Optional[str] = Field(default=None, max_length=160)
+
+    @field_validator("account_holder_name")
+    @classmethod
+    def validate_account_holder_name(cls, value: str) -> str:
+        name = value.strip()
+        if len(name) < 2:
+            raise ValueError("Enter the name shown on the bank account.")
+        return name
     routing_number: str = Field(min_length=9, max_length=32)
     account_number: str = Field(min_length=4, max_length=32)
     authorized: bool
@@ -391,7 +401,8 @@ async def submit_public_payout_information(
     submission_payload = {
         "id": str(uuid.uuid4()),
         "request_id": payout_request["id"],
-        "account_holder_name": body.account_holder_name.strip(),
+        "account_holder_name": body.account_holder_name,
+        "account_ownership": body.account_ownership,
         "account_type": body.account_type,
         "bank_name": (body.bank_name or "").strip() or None,
         "routing_number_encrypted": _encrypt(body.routing_number),
@@ -459,7 +470,8 @@ async def submit_payout_information(
     submission_payload = {
         "id": str(uuid.uuid4()),
         "request_id": payout_request_id,
-        "account_holder_name": body.account_holder_name.strip(),
+        "account_holder_name": body.account_holder_name,
+        "account_ownership": body.account_ownership,
         "account_type": body.account_type,
         "bank_name": (body.bank_name or "").strip() or None,
         "routing_number_encrypted": _encrypt(body.routing_number),
@@ -542,6 +554,7 @@ async def reveal_payout_information(
 
     return {
         "account_holder_name": submission.get("account_holder_name"),
+        "account_ownership": submission.get("account_ownership"),
         "account_type": submission.get("account_type"),
         "bank_name": submission.get("bank_name"),
         "routing_number": _decrypt(submission["routing_number_encrypted"]),
