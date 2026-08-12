@@ -20,9 +20,11 @@ import {
   getSignatureRequests,
   listW9Requests,
   getAttorneys,
+  getPayoutInformationRequests,
   sendCompletedSettlementPackage,
 } from '../../lib/api';
 import SettlementAgreementModal, { SettlementAgreementStatusModal } from './SettlementAgreementModal';
+import PayoutInformationRequestModal from '../../components/PayoutInformationRequestModal';
 
 function asRows(value, fallbackKeys = []) {
   if (Array.isArray(value)) return value;
@@ -139,10 +141,12 @@ export default function SettlementCenter() {
   const [creditDisclosureRequests, setCreditDisclosureRequests] = useState([]);
   const [w9Requests, setW9Requests] = useState([]);
   const [closingStatements, setClosingStatements] = useState([]);
+  const [payoutInformationRequests, setPayoutInformationRequests] = useState([]);
   const [loadingCases, setLoadingCases] = useState(true);
   const [loadingWorkflow, setLoadingWorkflow] = useState(false);
   const [agreementPanel, setAgreementPanel] = useState(null);
   const [showAttorneyDelivery, setShowAttorneyDelivery] = useState(false);
+  const [showPayoutRequest, setShowPayoutRequest] = useState(false);
   const [deliveryAttorneys, setDeliveryAttorneys] = useState([]);
   const [loadingDeliveryAttorneys, setLoadingDeliveryAttorneys] = useState(false);
   const [notice, setNotice] = useState('');
@@ -180,15 +184,17 @@ export default function SettlementCenter() {
       setCreditDisclosureRequests([]);
       setW9Requests([]);
       setClosingStatements([]);
+      setPayoutInformationRequests([]);
       return;
     }
     setLoadingWorkflow(true);
     setError('');
     try {
-      const [signatureRows, w9Rows, statementRows] = await Promise.all([
+      const [signatureRows, w9Rows, statementRows, payoutRows] = await Promise.all([
         getSignatureRequests(caseId),
         listW9Requests(caseId),
         getClosingStatements(),
+        getPayoutInformationRequests(caseId),
       ]);
       const signatureRequests = asRows(signatureRows, ['requests', 'data']);
       setAgreementRequests(signatureRequests.filter((row) => ['settlement', 'settlement_agreement'].includes(row.document_type)));
@@ -197,6 +203,7 @@ export default function SettlementCenter() {
       setClosingStatements(
         asRows(statementRows, ['statements', 'data']).filter((row) => String(row.case_id) === String(caseId)),
       );
+      setPayoutInformationRequests(asRows(payoutRows, ['requests', 'data']));
     } catch (err) {
       setError(err.message || 'Unable to load the settlement checklist for this case.');
     } finally {
@@ -211,10 +218,12 @@ export default function SettlementCenter() {
   const creditDisclosure = creditDisclosureRequests[0] || null;
   const w9 = w9Requests[0] || null;
   const closingStatement = closingStatements[0] || null;
+  const payoutInformationRequest = payoutInformationRequests.find((row) => row.status !== 'cancelled') || null;
   const agreementKind = requestStatus(agreement);
   const creditDisclosureKind = requestStatus(creditDisclosure);
   const w9Kind = requestStatus(w9);
   const closingKind = closingStatus(closingStatement);
+  const payoutKind = payoutInformationRequest?.status === 'completed' ? 'complete' : payoutInformationRequest?.status === 'requested' ? 'pending' : 'not_started';
   const completedSettlementPackageReady = agreementKind === 'complete' && w9Kind === 'complete';
 
   const returnTo = selectedCaseId
@@ -240,6 +249,12 @@ export default function SettlementCenter() {
   const openCreditDisclosurePanel = () => {
     setNotice('');
     setAgreementPanel(creditDisclosureNeedsReplacement ? 'disclosure-send' : 'disclosure-status');
+  };
+
+  const handlePayoutRequestSent = (request) => {
+    setPayoutInformationRequests((current) => [request, ...current]);
+    setShowPayoutRequest(false);
+    setNotice('Secure payout-information request sent. The client received a portal link and must submit their ACH details from their authenticated LegalFlow case page.');
   };
 
   const openAttorneyDelivery = async () => {
@@ -372,7 +387,7 @@ export default function SettlementCenter() {
                 </section>
               )}
 
-              <section className="grid gap-4 lg:grid-cols-3">
+              <section className="grid gap-4 lg:grid-cols-4">
                 <StepCard
                   number="1"
                   title="Settlement agreement"
@@ -405,12 +420,30 @@ export default function SettlementCenter() {
                   actionLabel={closingStatement ? 'Open statement' : 'Prepare statement'}
                   onAction={() => openStep('/attorney/closing-statements')}
                 />
+                <StepCard
+                  number="4"
+                  title="Client payout information"
+                  description="Send the client an authenticated portal form for ACH payout information. Routing and account numbers are encrypted and only available through audited attorney access."
+                  icon={FileKey}
+                  kind={payoutKind}
+                  detail={payoutInformationRequest ? (payoutInformationRequest.status === 'completed' ? `Client submitted ${payoutInformationRequest.submission?.account_type || 'bank'} information${payoutInformationRequest.submission?.account_number_last4 ? ` for the account ending in ${payoutInformationRequest.submission.account_number_last4}` : ''}.` : 'Secure ACH form sent; waiting for the client to submit it from their case portal.') : 'No secure client payout-information request has been sent yet.'}
+                  actionLabel={payoutInformationRequest?.status === 'requested' ? 'Send another secure form' : 'Request payout information'}
+                  onAction={() => { setNotice(''); setShowPayoutRequest(true); }}
+                />
               </section>
 
               <p className="px-1 text-xs leading-5 text-slate-500">The optional credit disclosure can be sent from Step 1 only when that case requires it. It is delivered for client review only—no signature is collected. The W-9 can be sent while the agreement is awaiting signature. The final settlement agreement is automatically attached to the closing-statement step, where you still review and approve the distribution.</p>
             </>
           )}
         </>
+      )}
+      {showPayoutRequest && selectedCase && (
+        <PayoutInformationRequestModal
+          caseId={selectedCase.id}
+          caseLabel={caseLabel(selectedCase)}
+          onClose={() => setShowPayoutRequest(false)}
+          onSent={handlePayoutRequestSent}
+        />
       )}
       {showAttorneyDelivery && selectedCase && (
         <CompletedSettlementDeliveryModal

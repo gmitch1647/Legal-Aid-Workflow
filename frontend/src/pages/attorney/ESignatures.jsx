@@ -4,7 +4,7 @@ import {
   PenLine, Send, Download, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
   ChevronDown, ChevronRight, X, Search, User, Upload, Trash2,
-  FolderOpen, LockKeyhole, ExternalLink,
+  FolderOpen, LockKeyhole, ExternalLink, CreditCard,
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
@@ -15,6 +15,7 @@ import {
   sendOiseEngagementContract,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
+import PayoutInformationRequestModal from '../../components/PayoutInformationRequestModal';
 
 const STATUS_MAP = {
   awaiting_signature: { label: 'Awaiting Signature', color: 'text-amber-600 bg-amber-50 border-amber-200', icon: Clock },
@@ -66,6 +67,8 @@ export default function ESignatures() {
   const [searchTerm, setSearchTerm] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [payoutCase, setPayoutCase] = useState(null);
+  const [payoutNotice, setPayoutNotice] = useState('');
 
   useEffect(() => {
     loadData();
@@ -264,6 +267,11 @@ export default function ESignatures() {
           <AlertCircle className="mr-2 inline h-4 w-4" /> {loadError}
         </div>
       )}
+      {payoutNotice && (
+        <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+          <CheckCircle2 className="mr-2 inline h-4 w-4" /> {payoutNotice}
+        </div>
+      )}
 
       <div className="mb-4 flex items-center gap-3">
         <button onClick={async () => {
@@ -335,6 +343,11 @@ export default function ESignatures() {
                 }
               }}
               onDownload={(document) => handleDownload(document.id)}
+              onRequestPayout={() => {
+                if (!group.case?.id) return;
+                setPayoutNotice('');
+                setPayoutCase({ id: group.case.id, label: `${group.client?.name || 'Client'} — ${group.case?.label || group.case?.case_number || 'Case'}` });
+              }}
               onDelete={async (document) => {
                 if (!window.confirm(`Delete "${document.title}"? This cannot be undone.`)) return;
                 try {
@@ -347,6 +360,18 @@ export default function ESignatures() {
             />
           ))}
         </div>
+      )}
+
+      {payoutCase && (
+        <PayoutInformationRequestModal
+          caseId={payoutCase.id}
+          caseLabel={payoutCase.label}
+          onClose={() => setPayoutCase(null)}
+          onSent={() => {
+            setPayoutCase(null);
+            setPayoutNotice('Secure payout-information request sent. The client received a protected link to complete ACH details from their LegalFlow case portal.');
+          }}
+        />
       )}
 
       {showSendModal && (
@@ -388,7 +413,7 @@ export default function ESignatures() {
   );
 }
 
-function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onDelete }) {
+function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onRequestPayout, onDelete }) {
   const counts = group.document_counts || {};
   const clientName = group.client?.name || 'Unassigned client';
   const caseLabel = group.case?.label || 'Unassigned case';
@@ -414,6 +439,12 @@ function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload
 
       {expanded && (
         <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 p-3">
+          {group.case?.id && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2.5">
+              <p className="text-xs leading-5 text-emerald-950">Need to prepare this client for payout? Send their encrypted ACH form directly from this case group.</p>
+              <button type="button" onClick={onRequestPayout} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"><CreditCard className="h-3.5 w-3.5" />Request payout information</button>
+            </div>
+          )}
           {group.documents.map((document) => (
             <SignatureDocumentRow
               key={`${document.provider}-${document.id}`}
