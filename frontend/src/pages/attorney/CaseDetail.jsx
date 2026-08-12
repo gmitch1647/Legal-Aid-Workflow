@@ -233,6 +233,11 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   const [selectedLibraryIds, setSelectedLibraryIds] = useState([]);
   const [openingSupportingId, setOpeningSupportingId] = useState('');
   const [libraryMessage, setLibraryMessage] = useState('');
+  const [clientDocumentsOpen, setClientDocumentsOpen] = useState(false);
+  const [clientDocumentsAttaching, setClientDocumentsAttaching] = useState(false);
+  const [selectedClientDocumentIds, setSelectedClientDocumentIds] = useState([]);
+  const [clientExhibitTargetId, setClientExhibitTargetId] = useState('');
+  const [clientDocumentsMessage, setClientDocumentsMessage] = useState('');
   const fileInputRef = React.useRef(null);
   const exhibitInputRefs = React.useRef({});
 
@@ -249,6 +254,17 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
   const status = caseData?.status;
   const isApproved = status === 'approved' || status === 'filed' || status === 'closed';
   const attachedLibraryIds = new Set(attachedLibraryDocuments.map((item) => item.supporting_document_id));
+  const activeClientExhibitTargetId = complaintDocs.some((doc) => doc.id === clientExhibitTargetId)
+    ? clientExhibitTargetId
+    : complaintDocs[0]?.id || '';
+  const clientDocumentCandidates = documents.filter((document) => {
+    const category = String(document.document_category || document.category || '').toLowerCase();
+    return Boolean(document.id)
+      && category !== 'complaint'
+      && category !== 'complaint_exhibit'
+      && category !== 'pii'
+      && !document.parent_document_id;
+  });
 
   async function loadSupportingLibrary() {
     setLibraryLoading(true);
@@ -301,6 +317,44 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
       setUploadError(err.message || 'Could not attach the selected supporting documents.');
     } finally {
       setLibraryAttaching(false);
+    }
+  }
+
+  async function handleClientDocumentsToggle() {
+    const willOpen = !clientDocumentsOpen;
+    setClientDocumentsOpen(willOpen);
+    setClientDocumentsMessage('');
+    if (willOpen) {
+      setSelectedClientDocumentIds([]);
+      setClientExhibitTargetId(complaintDocs[0]?.id || '');
+    }
+  }
+
+  function toggleClientDocumentSelection(documentId) {
+    setSelectedClientDocumentIds((current) => (
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
+    ));
+  }
+
+  async function handleAttachClientDocumentsAsExhibits() {
+    if (!activeClientExhibitTargetId || !selectedClientDocumentIds.length) return;
+    setClientDocumentsAttaching(true);
+    setUploadError('');
+    setClientDocumentsMessage('');
+    try {
+      for (const documentId of selectedClientDocumentIds) {
+        await attachExistingDocumentAsComplaintExhibit(caseId, activeClientExhibitTargetId, documentId);
+      }
+      const count = selectedClientDocumentIds.length;
+      setSelectedClientDocumentIds([]);
+      setClientDocumentsMessage(`${count} client ${count === 1 ? 'document is' : 'documents are'} now attached as complaint exhibits.`);
+      if (onRefresh) await onRefresh();
+    } catch (err) {
+      setUploadError(err.message || 'Could not attach the selected client documents as exhibits.');
+    } finally {
+      setClientDocumentsAttaching(false);
     }
   }
 
@@ -662,8 +716,82 @@ function ComplaintSection({ caseId, caseData, complaintText, setComplaintText, e
               </div>
             )}
           </div>
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={handleClientDocumentsToggle}
+              disabled={!complaintDocs.length || clientDocumentsAttaching}
+              aria-expanded={clientDocumentsOpen}
+              title={!complaintDocs.length ? 'Upload a complaint document before adding exhibits.' : undefined}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <File className="h-3.5 w-3.5 text-blue-600" />
+              Add Client Documents as Exhibits
+              <ChevronDown className={`h-3.5 w-3.5 transition ${clientDocumentsOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {clientDocumentsOpen && (
+              <div className="absolute left-0 z-30 mt-2 w-[min(24rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <p className="text-sm font-semibold text-slate-800">Add client documents as exhibits</p>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-500">Select one or more documents already attached to this case. LegalFlow links them to the complaint without creating additional storage copies.</p>
+                  {complaintDocs.length > 1 && (
+                    <label className="mt-3 block text-xs font-semibold text-slate-600">
+                      Add exhibits to
+                      <select
+                        value={activeClientExhibitTargetId}
+                        onChange={(event) => setClientExhibitTargetId(event.target.value)}
+                        disabled={clientDocumentsAttaching}
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      >
+                        {complaintDocs.map((complaint) => <option key={complaint.id} value={complaint.id}>{complaint.file_name || 'Complaint document'}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </div>
+                <div className="max-h-64 overflow-y-auto p-2">
+                  {clientDocumentCandidates.length === 0 ? (
+                    <p className="px-3 py-6 text-center text-xs leading-5 text-slate-500">No unattached client documents are available. Upload or request a document first, or use the supporting-document library.</p>
+                  ) : (
+                    clientDocumentCandidates.map((document) => {
+                      const selected = selectedClientDocumentIds.includes(document.id);
+                      return (
+                        <label key={document.id} className={`flex cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2.5 transition ${selected ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            disabled={clientDocumentsAttaching}
+                            onChange={() => toggleClientDocumentSelection(document.id)}
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-semibold text-slate-700">{document.file_name || 'Client document'}</span>
+                            <span className="mt-0.5 block text-[11px] text-slate-500">{document.document_category || document.category || 'Client document'}{document.created_at ? ` · Uploaded ${formatDate(document.created_at)}` : ''}</span>
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-3 py-3">
+                  <button type="button" onClick={() => { setClientDocumentsOpen(false); setSelectedClientDocumentIds([]); }} className="text-xs font-medium text-slate-600 hover:text-slate-900">Cancel</button>
+                  <button
+                    type="button"
+                    onClick={handleAttachClientDocumentsAsExhibits}
+                    disabled={!activeClientExhibitTargetId || !selectedClientDocumentIds.length || clientDocumentsAttaching}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {clientDocumentsAttaching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Add Selected{selectedClientDocumentIds.length ? ` (${selectedClientDocumentIds.length})` : ''}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {libraryMessage && <p className="mt-2 text-xs text-emerald-700">{libraryMessage}</p>}
+        {clientDocumentsMessage && <p className="mt-2 text-xs text-emerald-700">{clientDocumentsMessage}</p>}
         {uploadError && (
           <p className="text-xs text-red-600 mt-2">Error: {uploadError}</p>
         )}
