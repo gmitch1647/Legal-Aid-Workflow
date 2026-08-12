@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   User,
@@ -1868,9 +1868,25 @@ export default function CaseDetail() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
-            {clientName} v. {defendantText}
+            {caseData.client_id ? (
+              <Link
+                to={`/attorney/clients/${caseData.client_id}`}
+                className="rounded text-blue-700 underline decoration-blue-300 decoration-2 underline-offset-4 transition hover:text-blue-900 hover:decoration-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                title={`Open ${clientName}'s client profile`}
+              >
+                {clientName}
+              </Link>
+            ) : clientName} v. {defendantText}
           </h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            {caseData.client_id && (
+              <Link
+                to={`/attorney/clients/${caseData.client_id}`}
+                className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+              >
+                <User className="h-3.5 w-3.5" /> View Client Profile
+              </Link>
+            )}
             <span className={`badge border ${STATUS_COLORS[status] || 'bg-slate-100 text-slate-600'}`}>
               {STATUS_LABELS[status] || status}
             </span>
