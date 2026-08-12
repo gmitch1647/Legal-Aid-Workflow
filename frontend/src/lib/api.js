@@ -1340,6 +1340,28 @@ export async function submitPublicW9(token, data) {
   return response.json();
 }
 
+export async function getPublicPayoutInformation(token) {
+  const response = await fetch(`${BASE_URL}/public/payout-information/${encodeURIComponent(token)}`);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(apiErrorMessage(detail, 'Secure payout form not found'));
+  }
+  return response.json();
+}
+
+export async function submitPublicPayoutInformation(token, data) {
+  const response = await fetch(`${BASE_URL}/public/payout-information/${encodeURIComponent(token)}/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(apiErrorMessage(detail, 'Payout information submission failed'));
+  }
+  return response.json();
+}
+
 export function publicW9TemplateUrl(token) {
   return `${BASE_URL}/w9/${token}/template`;
 }

@@ -369,7 +369,7 @@ export default function ESignatures() {
           onClose={() => setPayoutCase(null)}
           onSent={() => {
             setPayoutCase(null);
-            setPayoutNotice('Secure payout-information request sent. The client received a protected link to complete ACH details from their LegalFlow case portal.');
+            setPayoutNotice('Secure payout-information request sent. The client received a private expiring link and can complete ACH details directly without a LegalFlow account.');
           }}
         />
       )}

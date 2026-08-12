@@ -193,6 +193,35 @@ class FirstViewAndReminderTests(unittest.TestCase):
         self.assertFalse(esign._auto_reminder_is_due(completed_record, preferences, now))
         self.assertFalse(esign._auto_reminder_is_due(credit_disclosure, preferences, now))
 
+    def test_automatic_credit_disclosure_reminder_is_skipped_before_preferences_or_delivery(self):
+        now = datetime(2026, 8, 5, 15, 0, tzinfo=timezone.utc)
+        disclosure = {
+            "id": "disclosure-1",
+            "token": "token-1",
+            "title": "Credit Disclosure",
+            "document_type": "credit_disclosure",
+            "signer_name": "Client Example",
+            "signer_email": "client@example.test",
+            "status": "awaiting_review",
+            "sent_by": "attorney-1",
+            "created_at": (now - timedelta(hours=7)).isoformat(),
+            "viewed_at": None,
+            "reminder_count": 0,
+            "last_reminder_at": None,
+        }
+        supabase = _Supabase({"signing_sessions": [disclosure], "signature_requests": []})
+        preferences = AsyncMock(return_value=(normalize_esign_preferences({"esign_auto_reminders": True}), {"id": "attorney-1"}))
+
+        with patch("utils.esign_notifications.get_esign_preferences", new=preferences), patch.object(
+            esign, "_send_in_app_reminder", new=AsyncMock(return_value=True)
+        ) as send_reminder:
+            result = asyncio.run(esign.process_automatic_signature_reminders(supabase=supabase, now=now))
+
+        self.assertEqual(result["sent"], 0)
+        self.assertEqual(result["skipped"], 1)
+        preferences.assert_not_awaited()
+        send_reminder.assert_not_awaited()
+
     def test_automatic_reminder_updates_history_only_after_email_success(self):
         now = datetime(2026, 8, 5, 15, 0, tzinfo=timezone.utc)
         session = {

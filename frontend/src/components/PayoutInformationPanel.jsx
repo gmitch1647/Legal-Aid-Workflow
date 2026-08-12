@@ -76,7 +76,7 @@ export default function PayoutInformationPanel({ caseId }) {
         message: 'Please provide your ACH payment information so the attorney can send your settlement proceeds securely.',
         due_date: '',
       });
-      setSuccess('The secure payout-information form was sent to the client portal. The email contains only a login link, never banking fields.');
+      setSuccess('The secure payout-information form was sent by private email link. The client can open it directly without an account, and the email never contains banking fields.');
     } catch (err) {
       setError(err.message || 'Could not send the payout-information request.');
     } finally {
@@ -118,7 +118,7 @@ export default function PayoutInformationPanel({ caseId }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><CreditCard className="h-5 w-5 text-emerald-700" /> Client payout information</h2>
-          <p className="mt-1 max-w-2xl text-sm text-slate-600">Send an authenticated portal form for ACH details. Account and routing numbers are encrypted, never placed in case documents, and revealed only through an audited action.</p>
+          <p className="mt-1 max-w-2xl text-sm text-slate-600">Send a private, expiring ACH form link that the client can complete directly from their email without a LegalFlow account. Account and routing numbers are encrypted, never placed in case documents, and revealed only through an audited action.</p>
         </div>
         <button onClick={() => { setShowComposer((open) => !open); setError(''); setSuccess(''); }} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-800">
           {showComposer ? <X className="h-4 w-4" /> : <Send className="h-4 w-4" />}
@@ -135,7 +135,7 @@ export default function PayoutInformationPanel({ caseId }) {
             <input type="date" value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-600" />
           </label>
           <div className="flex items-end justify-end"><button disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60">{saving && <Loader2 className="h-4 w-4 animate-spin" />}{saving ? 'Sending…' : 'Send secure form'}</button></div>
-          <div className="md:col-span-2 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />The client receives a portal link, not an email form. Do not ask clients to reply with banking details by email or message.</div>
+          <div className="md:col-span-2 flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />The client receives a private form link in their email and does not need to sign in. Do not ask clients to reply with banking details by email or message.</div>
         </form>
       )}
 

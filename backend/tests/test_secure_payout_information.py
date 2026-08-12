@@ -3,6 +3,7 @@
 import asyncio
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -80,7 +81,7 @@ class _Supabase:
             ]),
             "client_payout_information_requests": _Query([{
                 "id": "request-1", "case_id": "case-1", "client_id": "client-1", "requested_by": "attorney-1",
-                "message": "Provide ACH information", "status": "requested", "created_at": "2026-08-11T12:00:00+00:00",
+                "message": "Provide ACH information", "status": "requested", "token": "private-payout-token", "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(), "created_at": "2026-08-11T12:00:00+00:00",
             }]),
             "client_payout_information_submissions": _Query([]),
             "payout_information_access_audit": _Query([]),
@@ -168,6 +169,31 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 403)
         audits = supabase.tables["payout_information_access_audit"].inserted
         self.assertEqual([row["action"] for row in audits], ["submitted"])
+
+    def test_public_token_form_submits_without_client_account_and_persists_only_encrypted_values(self):
+        supabase = _Supabase()
+        with patch.object(payout_information, "get_supabase", return_value=supabase), patch.dict(os.environ, {"PAYOUT_ENCRYPTION_KEY": self.key}, clear=False):
+            form_data = asyncio.run(payout_information.get_public_payout_information_form("private-payout-token"))
+            result = asyncio.run(payout_information.submit_public_payout_information(
+                "private-payout-token", self._submit_body(), _request()
+            ))
+
+        stored = supabase.tables["client_payout_information_submissions"].inserted[0]
+        self.assertEqual(form_data["status"], "requested")
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(supabase.tables["payout_information_access_audit"].inserted[0]["actor_id"])
+        self.assertNotEqual(stored["routing_number_encrypted"], "021000021")
+        self.assertNotEqual(stored["account_number_encrypted"], "123456789012")
+
+    def test_expired_public_token_cannot_load_or_submit(self):
+        supabase = _Supabase()
+        supabase.tables["client_payout_information_requests"].rows[0]["expires_at"] = "2020-01-01T00:00:00+00:00"
+        with patch.object(payout_information, "get_supabase", return_value=supabase), patch.dict(os.environ, {"PAYOUT_ENCRYPTION_KEY": self.key}, clear=False):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(payout_information.get_public_payout_information_form("private-payout-token"))
+
+        self.assertEqual(raised.exception.status_code, 410)
+        self.assertEqual(supabase.tables["client_payout_information_submissions"].rows, [])
 
     def test_client_request_list_never_returns_encrypted_or_plaintext_ach_values(self):
         supabase = _Supabase()

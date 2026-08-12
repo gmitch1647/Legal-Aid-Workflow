@@ -254,7 +254,7 @@ export default function SettlementCenter() {
   const handlePayoutRequestSent = (request) => {
     setPayoutInformationRequests((current) => [request, ...current]);
     setShowPayoutRequest(false);
-    setNotice('Secure payout-information request sent. The client received a portal link and must submit their ACH details from their authenticated LegalFlow case page.');
+    setNotice('Secure payout-information request sent. The client received a private expiring link and can submit ACH details directly without a LegalFlow account.');
   };
 
   const openAttorneyDelivery = async () => {
@@ -423,10 +423,10 @@ export default function SettlementCenter() {
                 <StepCard
                   number="4"
                   title="Client payout information"
-                  description="Send the client an authenticated portal form for ACH payout information. Routing and account numbers are encrypted and only available through audited attorney access."
+                  description="Send the client a private, expiring ACH form link they can complete directly without a LegalFlow account. Routing and account numbers are encrypted and only available through audited attorney access."
                   icon={FileKey}
                   kind={payoutKind}
-                  detail={payoutInformationRequest ? (payoutInformationRequest.status === 'completed' ? `Client submitted ${payoutInformationRequest.submission?.account_type || 'bank'} information${payoutInformationRequest.submission?.account_number_last4 ? ` for the account ending in ${payoutInformationRequest.submission.account_number_last4}` : ''}.` : 'Secure ACH form sent; waiting for the client to submit it from their case portal.') : 'No secure client payout-information request has been sent yet.'}
+                  detail={payoutInformationRequest ? (payoutInformationRequest.status === 'completed' ? `Client submitted ${payoutInformationRequest.submission?.account_type || 'bank'} information${payoutInformationRequest.submission?.account_number_last4 ? ` for the account ending in ${payoutInformationRequest.submission.account_number_last4}` : ''}.` : 'Secure ACH form sent; waiting for the client to submit it from their private email link.') : 'No secure client payout-information request has been sent yet.'}
                   actionLabel={payoutInformationRequest?.status === 'requested' ? 'Send another secure form' : 'Request payout information'}
                   onAction={() => { setNotice(''); setShowPayoutRequest(true); }}
                 />

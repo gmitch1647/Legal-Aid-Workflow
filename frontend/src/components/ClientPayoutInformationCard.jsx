@@ -123,7 +123,7 @@ export default function ClientPayoutInformationCard({ requests, onSubmitted }) {
         </div>
       )}
 
-      <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-white/70 p-3 text-xs leading-5 text-emerald-950"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />For your protection, this form is available only after you log in to your own LegalFlow case. Your account and routing numbers are not shown in emails or regular case documents.</div>
+      <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-white/70 p-3 text-xs leading-5 text-emerald-950"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />You can also use the private email link sent by your legal team—no LegalFlow account is required. Your account and routing numbers are not shown in emails or regular case documents.</div>
     </section>
   );
 }

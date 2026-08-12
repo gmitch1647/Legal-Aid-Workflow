@@ -525,6 +525,11 @@ async def process_automatic_signature_reminders(
 
     for source_table, record, is_in_app in candidates:
         results["checked"] += 1
+        # Credit disclosures are review-only notices. Exclude them before any
+        # reminder preference or delivery path is considered.
+        if record.get("document_type") == "credit_disclosure":
+            results["skipped"] += 1
+            continue
         preferences, _attorney = await get_esign_preferences(
             supabase, record.get("notification_recipient_id") or record.get("sent_by")
         )
@@ -1313,16 +1318,23 @@ async def remind_signer(
     if not _is_configured():
         raise HTTPException(status_code=400, detail="Dropbox Sign not configured")
 
-    # Get the signer email from our DB
-    db_resp = supabase.table("signature_requests").select("signer_email").eq("id", request_id).execute()
+    # Check both recipient and document type before using the provider fallback.
+    db_resp = supabase.table("signature_requests").select("signer_email,document_type").eq("id", request_id).execute()
     if not db_resp.data:
         raise HTTPException(status_code=404, detail="Request not found")
 
-    email = db_resp.data[0]["signer_email"]
+    request_record = db_resp.data[0]
+    if request_record.get("document_type") == "credit_disclosure":
+        raise HTTPException(
+            status_code=400,
+            detail="Credit disclosures are view-only and do not receive reminder emails.",
+        )
+    email = request_record["signer_email"]
 
     delivered = await _send_external_reminder({
         "id": request_id,
         "signer_email": email,
+        "document_type": request_record.get("document_type"),
     })
     if not delivered:
         raise HTTPException(status_code=502, detail="Failed to send reminder")

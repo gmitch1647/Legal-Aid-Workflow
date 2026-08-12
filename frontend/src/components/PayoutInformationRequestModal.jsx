@@ -43,7 +43,7 @@ export default function PayoutInformationRequestModal({ caseId, caseLabel, onClo
         </div>
 
         <div className="space-y-4 p-5">
-          <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950"><ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" /><p>The client will receive an email directing them to their authenticated LegalFlow case portal. The email does not contain ACH fields and never asks the client to reply with banking information.</p></div>
+          <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950"><ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" /><p>The client will receive a private, expiring email link that opens this secure form directly. No LegalFlow account or sign-in is required. The email does not contain ACH fields and never asks the client to reply with banking information.</p></div>
           <label className="block text-sm font-semibold text-slate-700">Message to client
             <textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={4} maxLength={2000} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
           </label>

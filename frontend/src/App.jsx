@@ -42,6 +42,7 @@ const Privacy = React.lazy(() => import('./pages/Privacy'));
 const Terms = React.lazy(() => import('./pages/Terms'));
 const QuickBooksCallback = React.lazy(() => import('./pages/QuickBooksCallback'));
 const W9Form = React.lazy(() => import('./pages/W9Form'));
+const PayoutInformationForm = React.lazy(() => import('./pages/PayoutInformationForm'));
 
 // Attorney pages
 const AttorneyDashboard = React.lazy(() => import('./pages/attorney/Dashboard'));
@@ -537,6 +538,7 @@ export default function App() {
           <Route path="/terms" element={<Terms />} />
           <Route path="/quickbooks/callback" element={<QuickBooksCallback />} />
           <Route path="/w9/:token" element={<W9Form />} />
+          <Route path="/payout-information/:token" element={<PayoutInformationForm />} />
 
           {/* Attorney portal */}
           <Route

@@ -2,16 +2,17 @@
 
 ACH routing and account numbers are field-level encrypted before storage, excluded
 from ordinary request APIs, and disclosed only through an authenticated,
-attorney-authorized, audited reveal action.  The client submits information only
-from their authenticated LegalFlow case portal; sensitive values never appear in
-email messages, case documents, or application logs.
+attorney-authorized, audited reveal action.  The client submits information through a private, expiring LegalFlow link;
+sensitive values never appear in email messages, case documents, or application
+logs. The link is a high-entropy bearer secret and does not require a client
+account or LegalFlow sign-in.
 """
 
 import logging
 import os
 import secrets
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from typing import Literal, Optional
 
@@ -25,10 +26,22 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 router = APIRouter()
 STAFF_ROLES = {"attorney", "staff_attorney"}
+DEFAULT_EXPIRY_DAYS = 14
+MAX_EXPIRY_DAYS = 30
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _token() -> str:
+    """Create a high-entropy URL-safe token for a single payout request."""
+    return secrets.token_urlsafe(32)
+
+
+def _public_payout_url(token: str) -> str:
+    frontend_url = os.environ.get("FRONTEND_URL", "https://legalflow.me").rstrip("/")
+    return f"{frontend_url}/payout-information/{token}"
 
 
 async def _current_profile(authorization: str) -> dict:
@@ -132,6 +145,34 @@ def _request_or_404(supabase, payout_request_id: str) -> dict:
     return result.data[0]
 
 
+def _public_request_for_token(supabase, token: str, *, allow_completed: bool = False) -> dict:
+    result = (
+        supabase.table("client_payout_information_requests")
+        .select("*")
+        .eq("token", token)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This secure payout form is not available.")
+    payout_request = result.data[0]
+    if payout_request.get("status") == "cancelled":
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="This secure payout form has been cancelled.")
+    expires_at = payout_request.get("expires_at")
+    if expires_at and payout_request.get("status") != "completed":
+        try:
+            expiry = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            expiry = expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry.astimezone(timezone.utc)
+            if expiry <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail="This secure payout form link has expired. Please contact your legal team for a new link.")
+        except ValueError:
+            logger.error("Invalid payout form expiration timestamp for request %s", payout_request.get("id"))
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="This secure payout form is temporarily unavailable.")
+    if not allow_completed and payout_request.get("status") == "completed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This secure payout form has already been submitted.")
+    return payout_request
+
+
 def _authorized_staff_for_request(supabase, payout_request: dict, profile: dict) -> None:
     """Allow only the request sender or the case's assigned attorney to review."""
     _require_staff(profile)
@@ -154,6 +195,7 @@ def _safe_summary(payout_request: dict, submission: Optional[dict] = None) -> di
         "created_at": payout_request.get("created_at"),
         "updated_at": payout_request.get("updated_at"),
         "completed_at": payout_request.get("completed_at"),
+        "expires_at": payout_request.get("expires_at"),
     }
     if submission:
         summary["submission"] = {
@@ -181,6 +223,7 @@ def _submission_for_request(supabase, payout_request_id: str) -> Optional[dict]:
 class PayoutInformationRequestCreate(BaseModel):
     message: Optional[str] = Field(default=None, max_length=2000)
     due_date: Optional[date] = None
+    expires_in_days: int = Field(default=DEFAULT_EXPIRY_DAYS, ge=1, le=MAX_EXPIRY_DAYS)
 
 
 class PayoutInformationSubmission(BaseModel):
@@ -252,15 +295,20 @@ async def create_payout_information_request(
     supabase = get_supabase()
     case = _case_or_404(supabase, case_id)
     request_id = str(uuid.uuid4())
-    now = _now()
+    token = _token()
+    requested_at = datetime.now(timezone.utc)
+    now = requested_at.isoformat()
+    expires_at = (requested_at + timedelta(days=body.expires_in_days)).isoformat()
     message = (body.message or "").strip() or "Please provide your ACH payment information so the attorney can send your settlement proceeds securely."
     payload = {
         "id": request_id,
         "case_id": case_id,
         "client_id": case["client_id"],
         "requested_by": profile["id"],
+        "token": token,
         "message": message,
         "due_date": body.due_date.isoformat() if body.due_date else None,
+        "expires_at": expires_at,
         "status": "requested",
         "created_at": now,
         "updated_at": now,
@@ -268,7 +316,7 @@ async def create_payout_information_request(
     created = supabase.table("client_payout_information_requests").insert(payload).execute()
     record = (created.data or [payload])[0]
 
-    # The email contains only a portal link—never bank details or form fields.
+    # The email contains a private, expiring form link—never bank details or form fields.
     client_result = (
         supabase.table("profiles")
         .select("full_name,email")
@@ -278,8 +326,9 @@ async def create_payout_information_request(
     )
     client = (client_result.data or [None])[0]
     if client and client.get("email"):
-        frontend_url = os.environ.get("FRONTEND_URL", "https://legalflow.me").rstrip("/")
+        payout_form_url = _public_payout_url(token)
         due_line = f"<p><strong>Please complete by:</strong> {escape(body.due_date.strftime('%B %d, %Y'))}</p>" if body.due_date else ""
+        expires_line = f"<p style=\"font-size:12px;color:#64748b;\">This private link expires on {escape((requested_at + timedelta(days=body.expires_in_days)).strftime('%B %d, %Y'))}. Do not forward it.</p>"
         try:
             delivered = await send_email(
                 to=client["email"],
@@ -289,7 +338,9 @@ async def create_payout_information_request(
                     "<p>Your LegalFlow team needs your secure ACH payment information to prepare a client payout.</p>"
                     f"<p>{escape(message)}</p>"
                     f"{due_line}"
-                    f"<p><a href=\"{frontend_url}/client/cases/{case_id}\">Open your secure LegalFlow case portal</a> to complete the form.</p>"
+                    f"<p><a href=\"{payout_form_url}\" style=\"display:inline-block;background:#047857;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:600;\">Open secure payout form</a></p>"
+                    "<p>You do not need to create a LegalFlow account or sign in to complete this form.</p>"
+                    f"{expires_line}"
                     "<p><strong>For your protection, do not reply to this email with banking details.</strong></p>"
                 ),
                 idempotency_key=f"payout-information-request:{request_id}",
@@ -301,6 +352,80 @@ async def create_payout_information_request(
         except Exception:
             logger.exception("Could not deliver payout-information request notification %s", request_id)
     return _safe_summary(record)
+
+
+@router.get("/public/payout-information/{token}")
+async def get_public_payout_information_form(token: str):
+    """Load minimal, non-sensitive form metadata through an expiring bearer link."""
+    supabase = get_supabase()
+    payout_request = _public_request_for_token(supabase, token, allow_completed=True)
+    submission = _submission_for_request(supabase, payout_request["id"])
+    return {
+        "status": payout_request.get("status"),
+        "message": payout_request.get("message"),
+        "due_date": payout_request.get("due_date"),
+        "expires_at": payout_request.get("expires_at"),
+        "submitted_at": submission.get("submitted_at") if submission else None,
+        "account_number_last4": submission.get("account_number_last4") if submission else None,
+    }
+
+
+@router.post("/public/payout-information/{token}/submit", status_code=status.HTTP_201_CREATED)
+async def submit_public_payout_information(
+    token: str,
+    body: PayoutInformationSubmission,
+    request: Request,
+):
+    """Persist encrypted ACH details through a single-use, expiring public link."""
+    if not body.authorized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Please confirm that the payment information is accurate and authorized.")
+
+    supabase = get_supabase()
+    payout_request = _public_request_for_token(supabase, token)
+    existing = _submission_for_request(supabase, payout_request["id"])
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This secure payout form has already been submitted.")
+
+    client_ip, ip_source = _audit_client_ip(request)
+    now = _now()
+    submission_payload = {
+        "id": str(uuid.uuid4()),
+        "request_id": payout_request["id"],
+        "account_holder_name": body.account_holder_name.strip(),
+        "account_type": body.account_type,
+        "bank_name": (body.bank_name or "").strip() or None,
+        "routing_number_encrypted": _encrypt(body.routing_number),
+        "account_number_encrypted": _encrypt(body.account_number),
+        "account_number_last4": body.account_number[-4:],
+        "certified_at": now,
+        "submitted_at": now,
+        "signer_ip": client_ip,
+        "ip_source": ip_source,
+        "user_agent": request.headers.get("user-agent", "")[:1000] or None,
+    }
+    try:
+        supabase.table("client_payout_information_submissions").insert(submission_payload).execute()
+        supabase.table("client_payout_information_requests").update({
+            "status": "completed",
+            "completed_at": now,
+            "updated_at": now,
+        }).eq("id", payout_request["id"]).execute()
+        supabase.table("payout_information_access_audit").insert({
+            "id": str(uuid.uuid4()),
+            "request_id": payout_request["id"],
+            "actor_id": None,
+            "action": "submitted",
+            "actor_ip": client_ip,
+            "ip_source": ip_source,
+            "created_at": now,
+        }).execute()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Public payout-information submission failed for request %s", payout_request.get("id"))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not save your payout information securely. Please try again.") from exc
+
+    return {"status": "completed", "account_number_last4": body.account_number[-4:]}
 
 
 @router.post("/payout-information-requests/{payout_request_id}/submit", status_code=status.HTTP_201_CREATED)
