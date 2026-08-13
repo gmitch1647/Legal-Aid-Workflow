@@ -168,6 +168,31 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertTrue(any(fitz.Rect(w9.W9_FIELD_RECTS["signature"]).contains(rect) for rect in image_rects))
         document.close()
 
+    def test_pending_w9_notification_reuses_secure_link_without_tin(self):
+        request_row = {
+            "id": "request-1",
+            "token": "existing-secure-token",
+            "signer_name": "Signer Test",
+            "signer_email": "signer@example.com",
+            "title": "Form W-9",
+            "message": "Please complete this tax form.",
+            "expires_at": "2026-08-30T00:00:00+00:00",
+        }
+        with patch.dict(os.environ, {"FRONTEND_URL": "https://app.example.test"}):
+            with patch("utils.email_service.send_email", new=AsyncMock(return_value=True)) as send_email:
+                sent = asyncio.run(w9._send_w9_signing_notification(request_row))
+
+        self.assertTrue(sent)
+        kwargs = send_email.await_args.kwargs
+        self.assertEqual(kwargs["to"], "signer@example.com")
+        self.assertIn("https://app.example.test/w9/existing-secure-token", kwargs["body"])
+        self.assertNotIn("123456789", kwargs["body"])
+        self.assertNotIn("completed_form_w9.pdf", kwargs["body"])
+
+    def test_pending_w9_notification_requires_existing_token(self):
+        sent = asyncio.run(w9._send_w9_signing_notification({"id": "request-1", "signer_email": "signer@example.com"}))
+        self.assertFalse(sent)
+
     def test_completed_copy_email_uses_secure_link_without_tin(self):
         request_row = {
             "id": "request-1",

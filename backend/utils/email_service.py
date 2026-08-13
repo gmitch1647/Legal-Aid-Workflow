@@ -28,7 +28,10 @@ SMTP_PORT: int = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER: str = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD: str = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL: str = os.environ.get("SMTP_FROM_EMAIL", SMTP_USER)
-SMTP_FROM_NAME: str = os.environ.get("SMTP_FROM_NAME", "Legal Aid Workflow")
+# Transactional notifications represent the LegalFlow platform. Keep the display
+# name independent of legacy SMTP user settings so an individual profile name
+# cannot unintentionally appear in client or partner mail.
+PLATFORM_FROM_NAME: str = "LegalFlow"
 SMTP_USE_TLS: bool = os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
 
 
@@ -75,7 +78,7 @@ async def send_email(
     if resend_key:
         try:
             import httpx
-            from_header = f"{SMTP_FROM_NAME} <{email_from}>"
+            from_header = f"{PLATFORM_FROM_NAME} <{email_from}>"
             logger.info("Sending via Resend: from=%s to=%s subject=%s", from_header, to, subject)
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -123,7 +126,7 @@ async def send_email(
 
     try:
         msg = MIMEMultipart("mixed")
-        msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+        msg["From"] = f"{PLATFORM_FROM_NAME} <{SMTP_FROM_EMAIL}>"
         msg["To"] = to
         msg["Subject"] = subject
         alternatives = MIMEMultipart("alternative")

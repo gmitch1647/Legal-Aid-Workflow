@@ -21,6 +21,8 @@ import {
   FileKey,
   DollarSign,
   FileSignature,
+  Search,
+  UserRound,
 } from 'lucide-react';
 import {
   supabase,
@@ -30,7 +32,7 @@ import {
   signOut as supabaseSignOut,
   onAuthStateChange,
 } from './lib/supabase';
-import { getNotifications, markNotificationRead } from './lib/api';
+import { getCases, getNotifications, markNotificationRead } from './lib/api';
 
 // ---------------------------------------------------------------------------
 // Lazy-loaded page components
@@ -310,11 +312,145 @@ function NotificationBell() {
 }
 
 // ---------------------------------------------------------------------------
+// Global Client Search
+// ---------------------------------------------------------------------------
+function ClientProfileSearch() {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (normalizedQuery.length < 2) {
+      setResults([]);
+      setLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const [casesData, profilesResponse] = await Promise.all([
+          getCases(),
+          supabase
+            .from('profiles')
+            .select('id, full_name, email')
+            .eq('role', 'client')
+            .ilike('full_name', `%${normalizedQuery}%`)
+            .limit(8),
+        ]);
+
+        const matches = new Map();
+        const caseList = Array.isArray(casesData) ? casesData : casesData?.items ?? casesData?.cases ?? [];
+        caseList.forEach((caseRecord) => {
+          const id = caseRecord.client_id || caseRecord.plaintiff_id || caseRecord.user_id;
+          const fullName = caseRecord.plaintiff_name || caseRecord.client_name;
+          if (!id || !fullName || !fullName.toLowerCase().includes(normalizedQuery)) return;
+          matches.set(id, {
+            id,
+            full_name: fullName,
+            email: caseRecord.client_email || caseRecord.plaintiff_email || '',
+          });
+        });
+
+        if (!profilesResponse.error && Array.isArray(profilesResponse.data)) {
+          profilesResponse.data.forEach((client) => {
+            if (client?.id && client?.full_name) matches.set(client.id, client);
+          });
+        }
+
+        if (!cancelled) {
+          setResults(Array.from(matches.values()).slice(0, 8));
+        }
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  function openClientProfile(clientId) {
+    setQuery('');
+    setResults([]);
+    setOpen(false);
+    navigate(`/attorney/clients/${clientId}`);
+  }
+
+  return (
+    <div className="relative hidden w-full max-w-md md:block">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      <input
+        type="search"
+        value={query}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        placeholder="Search client name..."
+        aria-label="Search client profiles"
+        aria-expanded={open && query.trim().length >= 2}
+        aria-controls="client-profile-search-results"
+        className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-primary-400 focus:bg-white focus:ring-2 focus:ring-primary-100"
+      />
+
+      {open && query.trim().length >= 2 && (
+        <div
+          id="client-profile-search-results"
+          role="listbox"
+          className="absolute left-0 right-0 z-50 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+        >
+          {loading ? (
+            <div className="flex items-center gap-2 px-4 py-3 text-sm text-slate-500">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-200 border-t-primary-600" />
+              Searching clients...
+            </div>
+          ) : results.length ? (
+            results.map((client) => (
+              <button
+                key={client.id}
+                type="button"
+                role="option"
+                aria-label={`Open ${client.full_name}'s profile`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => openClientProfile(client.id)}
+                className="flex w-full items-center gap-3 border-b border-slate-100 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-primary-50 focus:bg-primary-50 focus:outline-none"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-100 text-primary-700">
+                  <UserRound className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold text-slate-900">{client.full_name}</span>
+                  {client.email && <span className="block truncate text-xs text-slate-500">{client.email}</span>}
+                </span>
+              </button>
+            ))
+          ) : (
+            <p className="px-4 py-3 text-sm text-slate-500">No client profiles match “{query.trim()}”.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Top Bar
 // ---------------------------------------------------------------------------
 function TopBar({ onMenuToggle }) {
   const { profile, signOut } = useAuth();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const canSearchClients = ['attorney', 'staff_attorney', 'affiliate'].includes(profile?.role);
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-6">
@@ -330,6 +466,8 @@ function TopBar({ onMenuToggle }) {
           <span className="text-lg font-bold text-slate-900">LegalFlow</span>
         </div>
       </div>
+
+      {canSearchClients && <ClientProfileSearch />}
 
       <div className="flex items-center gap-2">
         <NotificationBell />

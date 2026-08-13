@@ -139,6 +139,47 @@ def _public_w9_url(token: str) -> str:
     return f"{frontend_url}/w9/{token}"
 
 
+async def _send_w9_signing_notification(request_row: dict) -> bool:
+    """Send or resend the existing private W-9 signing link to its named signer.
+
+    The message never includes a taxpayer ID or a completed W-9 attachment. The
+    recipient receives only the already-issued high-entropy link for the pending
+    request, so notifying them does not create a duplicate form or token.
+    """
+    from utils.email_service import send_email
+
+    token = str(request_row.get("token") or "")
+    if not token:
+        logger.error("W-9 request %s has no signing token", request_row.get("id"))
+        return False
+
+    signer_name = escape(str(request_row.get("signer_name") or "there"))
+    title = escape(str(request_row.get("title") or "Form W-9"))
+    message = escape(str(request_row.get("message") or "Please complete your secure Form W-9."))
+    expires_at = request_row.get("expires_at")
+    expiry_display = "the scheduled expiration date"
+    if expires_at:
+        try:
+            expiry_display = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00")).strftime("%B %d, %Y")
+        except ValueError:
+            pass
+
+    return await send_email(
+        to=str(request_row["signer_email"]),
+        subject=f"Action Required: {title}",
+        body=f"""
+        <div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;\">
+          <h2 style=\"color:#1e40af;\">Form W-9 Requested</h2>
+          <p>Hello {signer_name},</p>
+          <p>{message}</p>
+          <p>Your taxpayer identification number is encrypted in LegalFlow and will not be included in email or application logs.</p>
+          <p><a href=\"{_public_w9_url(token)}\" style=\"background:#2563eb;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:600;display:inline-block;\">Complete Form W-9</a></p>
+          <p style=\"font-size:12px;color:#64748b;\">This link expires on {expiry_display}.</p>
+        </div>
+        """,
+    )
+
+
 async def _send_w9_completed_copy_email(request_row: dict, token: str) -> bool:
     """Email a signer a secure copy link after the W-9 is stored successfully.
 
@@ -824,25 +865,9 @@ async def create_w9_request(
         logger.exception("Could not create W-9 request")
         raise HTTPException(status_code=500, detail="Could not create the W-9 request.") from exc
 
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
-    signing_url = f"{frontend_url}/w9/{token}"
+    signing_url = _public_w9_url(token)
     try:
-        from utils.email_service import send_email
-
-        await send_email(
-            to=str(payload.signer_email),
-            subject=f"Action Required: {payload.title}",
-            body=f"""
-            <div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;\">
-              <h2 style=\"color:#1e40af;\">Form W-9 Requested</h2>
-              <p>Hello {payload.signer_name},</p>
-              <p>{payload.message}</p>
-              <p>Your taxpayer identification number is encrypted in LegalFlow and will not be included in email or application logs.</p>
-              <p><a href=\"{signing_url}\" style=\"background:#2563eb;color:#fff;padding:11px 20px;border-radius:7px;text-decoration:none;font-weight:600;display:inline-block;\">Complete Form W-9</a></p>
-              <p style=\"font-size:12px;color:#64748b;\">This link expires on {expires_at.strftime('%B %d, %Y')}.</p>
-            </div>
-            """,
-        )
+        await _send_w9_signing_notification(record)
     except Exception:
         logger.exception("W-9 request was created but the notification email could not be sent")
 
@@ -1056,6 +1081,33 @@ async def list_w9_requests(
         query = query.eq("case_id", case_id)
     response = query.order("created_at", desc=True).limit(200).execute()
     return response.data or []
+
+
+@router.post("/attorney/requests/{request_id}/notify")
+async def notify_w9_signer(request_id: str, authorization: str = Header(default=None)):
+    """Send a fresh notification for an existing pending W-9 request."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+    row = _owned_w9_request(supabase, request_id, profile)
+
+    if row.get("status") != "awaiting_submission":
+        raise HTTPException(status_code=409, detail="Only pending W-9 requests can be notified.")
+
+    # Reuse the same token only while it remains valid. This avoids silently
+    # sending a link that the client cannot complete.
+    _validate_token_session(supabase, str(row.get("token") or ""))
+    try:
+        sent = await _send_w9_signing_notification(row)
+    except Exception as exc:
+        logger.exception("Could not send W-9 notification for request %s", request_id)
+        raise HTTPException(status_code=502, detail="The secure W-9 notification could not be sent.") from exc
+
+    if not sent:
+        raise HTTPException(status_code=502, detail="The secure W-9 notification could not be sent.")
+
+    supabase.table("w9_requests").update({"updated_at": _iso_now()}).eq("id", request_id).execute()
+    return {"status": "sent", "message": "The secure W-9 signing notification was sent."}
 
 
 @router.get("/attorney/requests/{request_id}")
