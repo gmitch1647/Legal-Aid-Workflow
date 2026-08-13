@@ -12,7 +12,7 @@ import smtplib
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel
@@ -34,8 +34,8 @@ async def _get_current_user(authorization: str) -> dict:
 
 
 def _require_attorney(profile: dict) -> None:
-    if profile.get("role") != "attorney":
-        raise HTTPException(status_code=403, detail="Only attorneys can send communications.")
+    if profile.get("role") not in {"attorney", "staff_attorney"}:
+        raise HTTPException(status_code=403, detail="Only attorneys and staff attorneys can send communications.")
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +48,7 @@ class SendEmailPayload(BaseModel):
     subject: str
     body: str
     case_id: Optional[str] = None
+    recipient_type: Literal["client", "attorney"] = "client"
 
 
 class SendSMSPayload(BaseModel):
@@ -55,6 +56,7 @@ class SendSMSPayload(BaseModel):
     to_phone: str
     body: str
     case_id: Optional[str] = None
+    recipient_type: Literal["client", "attorney"] = "client"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +89,57 @@ async def get_config(authorization: str = Header(...)):
 
 
 # ---------------------------------------------------------------------------
-# GET /history/{client_id} — get communication history
+# GET /recipients/{recipient_type} — authorized communication directories
+# ---------------------------------------------------------------------------
+
+@router.get("/recipients/{recipient_type}")
+async def get_recipients(
+    recipient_type: Literal["client", "attorney"],
+    authorization: str = Header(...),
+):
+    """Return contactable profiles for the selected Communications audience."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    roles = ["client"] if recipient_type == "client" else ["attorney", "staff_attorney"]
+    result = (
+        get_supabase().table("profiles")
+        .select("id,full_name,email,phone,firm_name,role")
+        .in_("role", roles)
+        .order("full_name")
+        .execute()
+    )
+    return result.data or []
+
+
+# ---------------------------------------------------------------------------
+# GET /history/{recipient_type}/{recipient_id} — typed message history
+# ---------------------------------------------------------------------------
+
+@router.get("/history/{recipient_type}/{recipient_id}")
+async def get_typed_history(
+    recipient_type: Literal["client", "attorney"],
+    recipient_id: str,
+    authorization: str = Header(...),
+):
+    """Return message history for one authorized client or attorney recipient."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+
+    result = (
+        get_supabase().table("communications")
+        .select("*")
+        .eq("client_id", recipient_id)
+        .eq("recipient_type", recipient_type)
+        .order("created_at", desc=False)
+        .limit(100)
+        .execute()
+    )
+    return result.data or []
+
+
+# ---------------------------------------------------------------------------
+# GET /history/{client_id} — legacy client communication history
 # ---------------------------------------------------------------------------
 
 @router.get("/history/{client_id}")
@@ -132,7 +184,7 @@ async def send_email(
     smtp_pass = os.environ.get("SMTP_PASSWORD")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     email_from = os.environ.get("EMAIL_FROM", smtp_user or "noreply@example.com")
-    from_name = profile.get('firm_name') or profile.get('full_name', 'LegalFlow')
+    from_name = profile.get('firm_name') or 'LegalFlow'
 
     if not resend_key and not (smtp_host and smtp_user):
         record = supabase.table("communications").insert({
@@ -146,6 +198,7 @@ async def send_email(
             "status": "failed",
             "error_message": "Email not configured. Add RESEND_API_KEY or SMTP settings to Railway.",
             "sent_by": profile["id"],
+            "recipient_type": payload.recipient_type,
         }).execute()
         return {
             "status": "failed",
@@ -217,6 +270,7 @@ async def send_email(
         "status": send_status,
         "error_message": error_message,
         "sent_by": profile["id"],
+        "recipient_type": payload.recipient_type,
     }).execute()
 
     return {
@@ -256,6 +310,7 @@ async def send_sms(
             "status": "failed",
             "error_message": "Twilio not configured. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER to Railway.",
             "sent_by": profile["id"],
+            "recipient_type": payload.recipient_type,
         }).execute()
         return {
             "status": "failed",
@@ -296,6 +351,7 @@ async def send_sms(
         "error_message": error_message,
         "sent_by": profile["id"],
         "metadata": metadata if metadata else None,
+        "recipient_type": payload.recipient_type,
     }).execute()
 
     return {

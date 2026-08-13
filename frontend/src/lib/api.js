@@ -895,6 +895,14 @@ export async function getCommsHistory(clientId) {
   return request(`/communications/history/${clientId}`);
 }
 
+export async function getCommunicationRecipients(recipientType) {
+  return request(`/communications/recipients/${recipientType}`);
+}
+
+export async function getTypedCommsHistory(recipientType, recipientId) {
+  return request(`/communications/history/${recipientType}/${recipientId}`);
+}
+
 export async function sendClientEmail(data) {
   return request('/communications/email', {
     method: 'POST',
