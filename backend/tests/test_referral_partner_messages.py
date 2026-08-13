@@ -88,6 +88,26 @@ class ReferralPartnerMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.supabase.messages[0]["channel"], "email")
         self.assertEqual(self.supabase.messages[0]["body"], "Thank you for the referral.")
         self.assertEqual(self.supabase.messages[0]["sent_by"], "attorney-1")
+        self.assertEqual(self.supabase.messages[0]["direction"], "outbound")
+        self.assertEqual(self.supabase.messages[0]["thread_key"], "email:partner-1")
+
+    async def test_partner_email_uses_partner_specific_reply_address_when_receiving_domain_is_configured(self):
+        payload = referrals.ReferralPartnerMessageCreate(channel="email", subject="Case update", body="Thank you.")
+        with patch.object(referrals, "_get_current_user", AsyncMock(return_value=self.attorney)), \
+             patch.object(referrals, "get_supabase", return_value=self.supabase), \
+             patch("utils.email_service.send_email", AsyncMock(return_value=True)) as send_email, \
+             patch.dict("os.environ", {"RESEND_RECEIVING_DOMAIN": "inbound.legalflow.test"}, clear=False):
+            await referrals.send_referral_partner_message("partner-1", payload)
+
+        self.assertEqual(send_email.await_args.kwargs["reply_to"], "partner+partner-1@inbound.legalflow.test")
+        self.assertTrue(self.supabase.messages[0]["provider_metadata"]["reply_capture_configured"])
+
+    def test_reply_address_parser_rejects_non_partner_addresses(self):
+        self.assertEqual(
+            referrals._partner_id_from_reply_addresses(["Partner <partner+12345678-1234-1234-1234-123456789abc@inbound.legalflow.test>"]),
+            "12345678-1234-1234-1234-123456789abc",
+        )
+        self.assertIsNone(referrals._partner_id_from_reply_addresses(["support@inbound.legalflow.test"]))
 
     async def test_staff_attorney_can_read_partner_message_history(self):
         self.supabase.messages.append({

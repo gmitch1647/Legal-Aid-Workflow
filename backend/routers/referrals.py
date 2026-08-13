@@ -7,10 +7,11 @@ import logging
 import os
 import re
 import uuid
+from email.utils import parseaddr
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from utils.supabase_client import get_supabase
@@ -60,6 +61,44 @@ async def _get_referral_partner_or_404(partner_id: str) -> dict:
     if not response.data:
         raise HTTPException(status_code=404, detail="Referral partner not found")
     return response.data[0]
+
+
+def _email_address(value: str | None) -> str:
+    """Return a normalized address without trusting display-name formatting."""
+    return parseaddr(str(value or ""))[1].strip().lower()
+
+
+def _phone_number(value: str | None) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _conversation_key(channel: str, partner_id: str) -> str:
+    return f"{channel}:{partner_id}"
+
+
+def _partner_reply_address(partner_id: str) -> str | None:
+    """Build a receiving-domain address that safely maps an email reply to a partner."""
+    domain = str(os.environ.get("RESEND_RECEIVING_DOMAIN") or "").strip().lower()
+    if not domain or "@" in domain or any(char.isspace() for char in domain):
+        return None
+    return f"partner+{partner_id}@{domain}"
+
+
+def _partner_id_from_reply_addresses(addresses: list[str]) -> str | None:
+    for address in addresses:
+        local = _email_address(address).split("@", 1)[0]
+        match = re.fullmatch(r"partner\+([0-9a-fA-F-]{36})", local)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _safe_inbound_text(text: str | None, html_body: str | None = None) -> str:
+    content = str(text or "").strip()
+    if not content and html_body:
+        content = re.sub(r"<[^>]+>", " ", str(html_body))
+        content = html.unescape(re.sub(r"\s+", " ", content)).strip()
+    return content[:10_000]
 
 
 @router.get("")
@@ -117,9 +156,9 @@ async def get_referral_partner_messages(partner_id: str, authorization: str = He
     supabase = get_supabase()
     result = (
         supabase.table("referral_partner_messages")
-        .select("id,channel,recipient,subject,body,status,error_message,provider_metadata,sent_by,created_at")
+        .select("id,channel,direction,sender,recipient,subject,body,status,error_message,provider_metadata,sent_by,thread_key,provider_message_id,provider_event_id,received_at,created_at")
         .eq("referral_partner_id", partner_id)
-        .order("created_at", desc=True)
+        .order("created_at", desc=False)
         .limit(100)
         .execute()
     )
@@ -143,6 +182,9 @@ async def send_referral_partner_message(
     send_status = "sent"
     error_message = None
     provider_metadata = None
+    provider_message_id = None
+    thread_key = _conversation_key(payload.channel, partner_id)
+    sender = "LegalFlow"
 
     if payload.channel == "email":
         recipient = str(partner.get("email") or "").strip()
@@ -155,6 +197,7 @@ async def send_referral_partner_message(
 
         safe_name = html.escape(str(partner.get("full_name") or "there"))
         safe_body = html.escape(payload.body).replace("\n", "<br>")
+        reply_to = _partner_reply_address(partner_id)
         delivered = await send_email(
             to=recipient,
             subject=payload.subject,
@@ -164,11 +207,16 @@ async def send_referral_partner_message(
                 "</div>"
             ),
             idempotency_key=f"referral-partner-message:{message_id}",
+            reply_to=reply_to,
         )
         if not delivered:
             send_status = "failed"
             error_message = get_last_email_error() or "Email delivery failed"
-        provider_metadata = {"provider": "resend_or_smtp"}
+        provider_metadata = {
+            "provider": "resend_or_smtp",
+            "reply_capture_configured": bool(reply_to),
+            "reply_to": reply_to,
+        }
     else:
         recipient = str(partner.get("phone") or "").strip()
         if not recipient:
@@ -192,6 +240,7 @@ async def send_referral_partner_message(
                     from_=from_number,
                     to=recipient,
                 )
+                provider_message_id = message.sid
                 provider_metadata = {"provider": "twilio", "sid": message.sid, "status": message.status}
             except Exception as exc:
                 send_status = "failed"
@@ -202,9 +251,13 @@ async def send_referral_partner_message(
         "id": message_id,
         "referral_partner_id": partner_id,
         "channel": payload.channel,
+        "direction": "outbound",
+        "sender": sender,
         "recipient": recipient,
         "subject": payload.subject if payload.channel == "email" else None,
         "body": payload.body,
+        "thread_key": thread_key,
+        "provider_message_id": provider_message_id,
         "status": send_status,
         "error_message": error_message,
         "sent_by": profile["id"],
@@ -217,6 +270,163 @@ async def send_referral_partner_message(
         "error": error_message,
         "record": insert_result.data[0] if insert_result.data else record,
     }
+
+
+@router.post("/webhooks/resend/inbound")
+async def receive_referral_partner_email_reply(request: Request):
+    """Receive a signed inbound Resend reply and append it to one partner thread."""
+    signing_secret = str(os.environ.get("RESEND_WEBHOOK_SECRET") or "").strip()
+    if not signing_secret:
+        raise HTTPException(status_code=503, detail="Inbound email receiving is not configured")
+
+    raw_body = await request.body()
+    headers = {
+        "svix-id": request.headers.get("svix-id", ""),
+        "svix-timestamp": request.headers.get("svix-timestamp", ""),
+        "svix-signature": request.headers.get("svix-signature", ""),
+    }
+    if not all(headers.values()):
+        raise HTTPException(status_code=401, detail="Missing Resend webhook signature")
+
+    try:
+        from svix.webhooks import Webhook
+        event = Webhook(signing_secret).verify(raw_body.decode("utf-8"), headers)
+    except Exception:
+        logger.warning("Rejected an invalid Resend inbound-email webhook")
+        raise HTTPException(status_code=401, detail="Invalid Resend webhook signature")
+
+    if event.get("type") != "email.received":
+        return {"received": False, "ignored": True}
+
+    data = event.get("data") or {}
+    email_id = str(data.get("email_id") or "").strip()
+    event_id = str(request.headers.get("svix-id") or email_id).strip()
+    recipient_addresses = data.get("to") or data.get("received_for") or []
+    if isinstance(recipient_addresses, str):
+        recipient_addresses = [recipient_addresses]
+    partner_id = _partner_id_from_reply_addresses([str(item) for item in recipient_addresses])
+    if not email_id or not partner_id:
+        logger.warning("Ignoring inbound email without a partner-specific reply address")
+        return {"received": False, "ignored": True}
+
+    supabase = get_supabase()
+    duplicate = supabase.table("referral_partner_messages").select("id").eq("provider_event_id", event_id).limit(1).execute()
+    if duplicate.data:
+        return {"received": True, "duplicate": True}
+
+    partner = await _get_referral_partner_or_404(partner_id)
+    source_address = _email_address(data.get("from"))
+    if not source_address or source_address != _email_address(partner.get("email")):
+        logger.warning("Ignoring inbound email sender that does not match referral partner %s", partner_id)
+        return {"received": False, "ignored": True}
+
+    resend_key = str(os.environ.get("RESEND_API_KEY") or "").strip()
+    if not resend_key:
+        raise HTTPException(status_code=503, detail="Inbound email content retrieval is not configured")
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            content_response = await client.get(
+                f"https://api.resend.com/emails/receiving/{email_id}",
+                headers={"Authorization": f"Bearer {resend_key}"},
+            )
+        if content_response.status_code != 200:
+            raise RuntimeError(f"Resend content retrieval failed with HTTP {content_response.status_code}")
+        inbound = content_response.json()
+    except Exception as exc:
+        logger.exception("Could not retrieve inbound Resend email %s", email_id)
+        raise HTTPException(status_code=502, detail="Could not retrieve inbound email content") from exc
+
+    body = _safe_inbound_text(inbound.get("text"), inbound.get("html"))
+    if not body:
+        return {"received": False, "ignored": True}
+
+    record = {
+        "id": str(uuid.uuid4()),
+        "referral_partner_id": partner_id,
+        "channel": "email",
+        "direction": "inbound",
+        "sender": source_address,
+        "recipient": _email_address((inbound.get("to") or [""])[0]),
+        "subject": str(inbound.get("subject") or data.get("subject") or "").strip()[:200] or None,
+        "body": body,
+        "thread_key": _conversation_key("email", partner_id),
+        "provider_message_id": str(inbound.get("message_id") or email_id),
+        "provider_event_id": event_id,
+        "status": "received",
+        "provider_metadata": {"provider": "resend", "received_email_id": email_id},
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        supabase.table("referral_partner_messages").insert(record).execute()
+    except Exception:
+        logger.exception("Could not store inbound referral partner email event %s", event_id)
+        raise HTTPException(status_code=500, detail="Could not store inbound email reply")
+    return {"received": True}
+
+
+@router.post("/webhooks/twilio/inbound")
+async def receive_referral_partner_text_reply(request: Request):
+    """Receive a signed Twilio SMS reply and append it to a matched partner thread."""
+    auth_token = str(os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    signature = request.headers.get("x-twilio-signature")
+    form = {key: str(value) for key, value in (await request.form()).items()}
+    if not auth_token or not signature:
+        raise HTTPException(status_code=401, detail="Invalid Twilio webhook signature")
+
+    callback_url = str(os.environ.get("TWILIO_INBOUND_WEBHOOK_URL") or str(request.url))
+    try:
+        from twilio.request_validator import RequestValidator
+        valid = RequestValidator(auth_token).validate(callback_url, form, signature)
+    except Exception:
+        logger.exception("Could not validate Twilio inbound SMS webhook")
+        valid = False
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid Twilio webhook signature")
+
+    sender_phone = _phone_number(form.get("From"))
+    provider_event_id = str(form.get("MessageSid") or form.get("SmsSid") or "").strip()
+    body = str(form.get("Body") or "").strip()[:1600]
+    if not sender_phone or not provider_event_id or not body:
+        return Response(content="<Response></Response>", media_type="application/xml")
+
+    supabase = get_supabase()
+    duplicate = supabase.table("referral_partner_messages").select("id").eq("provider_event_id", provider_event_id).limit(1).execute()
+    if duplicate.data:
+        return Response(content="<Response></Response>", media_type="application/xml")
+
+    partners = supabase.table("referral_partners").select("id,phone").not_.is_("phone", "null").execute()
+    partner = next((item for item in (partners.data or []) if _phone_number(item.get("phone")) == sender_phone), None)
+    if not partner:
+        logger.warning("Ignoring inbound SMS from an unknown number")
+        return Response(content="<Response></Response>", media_type="application/xml")
+
+    partner_id = str(partner["id"])
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4()),
+        "referral_partner_id": partner_id,
+        "channel": "sms",
+        "direction": "inbound",
+        "sender": str(form.get("From") or "").strip(),
+        "recipient": str(form.get("To") or "").strip(),
+        "body": body,
+        "thread_key": _conversation_key("sms", partner_id),
+        "provider_message_id": provider_event_id,
+        "provider_event_id": provider_event_id,
+        "status": "received",
+        "provider_metadata": {"provider": "twilio", "account_sid": form.get("AccountSid")},
+        "received_at": now,
+        "created_at": now,
+    }
+    try:
+        supabase.table("referral_partner_messages").insert(record).execute()
+    except Exception:
+        logger.exception("Could not store inbound referral partner SMS event %s", provider_event_id)
+        raise HTTPException(status_code=500, detail="Could not store inbound text reply")
+    return Response(content="<Response></Response>", media_type="application/xml")
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

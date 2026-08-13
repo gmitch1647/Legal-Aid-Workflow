@@ -105,7 +105,7 @@ function PartnerCommunications({ partner }) {
           <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900">
             <MessageSquare className="h-5 w-5 text-blue-600" /> Contact {partner.full_name}
           </h2>
-          <p className="mt-1 text-sm text-slate-500">Compose a message here and select Send to deliver it. Every attempted delivery is recorded below.</p>
+          <p className="mt-1 text-sm text-slate-500">Read incoming replies and send a response from the same LegalFlow conversation. Every delivery and reply is recorded below.</p>
         </div>
       </div>
 
@@ -185,26 +185,36 @@ function PartnerCommunications({ partner }) {
       )}
 
       <div className="mt-6 border-t border-slate-100 pt-4">
-        <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">{channel === 'email' ? 'Email' : 'Text'} History</h3>
+        <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">{channel === 'email' ? 'Email' : 'Text'} Conversation</h3>
         {historyLoading ? (
           <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
         ) : visibleHistory.length === 0 ? (
-          <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">No {channel === 'email' ? 'emails' : 'text messages'} have been sent to this partner yet.</p>
+          <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">No {channel === 'email' ? 'emails' : 'text messages'} in this conversation yet.</p>
         ) : (
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-            {visibleHistory.map((item) => (
-              <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-800">{item.subject || `Text to ${item.recipient}`}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">To {item.recipient} · {formatDate(item.created_at)}</p>
+            {visibleHistory.map((item) => {
+              const inbound = item.direction === 'inbound';
+              const statusClass = inbound || item.status === 'sent'
+                ? (inbound ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700')
+                : 'bg-red-100 text-red-700';
+              const title = item.subject || (inbound ? `Text from ${item.sender || partner.full_name}` : `Text to ${item.recipient}`);
+              const detail = inbound
+                ? `From ${item.sender || partner.full_name} · ${formatDate(item.received_at || item.created_at)}`
+                : `To ${item.recipient} · ${formatDate(item.created_at)}`;
+              return (
+                <div key={item.id} className={`rounded-lg border p-3 ${inbound ? 'border-indigo-200 bg-indigo-50/60' : 'border-slate-200 bg-white'}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-800">{title}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{detail}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusClass}`}>{inbound ? 'received' : item.status}</span>
                   </div>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${item.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{item.status}</span>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{item.body}</p>
+                  {item.error_message && <p className="mt-2 text-xs text-red-600">Delivery error: {item.error_message}</p>}
                 </div>
-                <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{item.body}</p>
-                {item.error_message && <p className="mt-2 text-xs text-red-600">Delivery error: {item.error_message}</p>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

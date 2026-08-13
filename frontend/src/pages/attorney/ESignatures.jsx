@@ -12,7 +12,7 @@ import {
   deleteSigningSession,
   getGroupedSignatureDashboard, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
-  sendOiseEngagementContract,
+  sendOiseEngagementContract, notifyW9Signer,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import PayoutInformationRequestModal from '../../components/PayoutInformationRequestModal';
@@ -498,6 +498,7 @@ function SignatureDocumentRow({ document, onOpen, onView, onDownload, onDelete }
           {isW9 ? <LockKeyhole className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
         </button>
         {isPending && !isW9 && !isViewOnly && <ReminderBtn id={document.id} />}
+        {isPending && isW9 && <W9NotificationBtn id={document.id} />}
         {document.has_signed_document && !isW9 && (
           <button type="button" onClick={() => onDownload(document)}
             className="rounded-lg p-2 text-blue-500 hover:bg-blue-50 hover:text-blue-700" title="Download signed PDF">
@@ -554,6 +555,32 @@ function ReminderBtn({ id }) {
     <button onClick={handleRemind} disabled={sending || sent}
       className={`p-2 rounded-lg ${sent ? 'text-emerald-500 bg-emerald-50' : 'text-amber-500 hover:text-amber-700 hover:bg-amber-50'}`}
       title={sent ? 'Reminder sent!' : 'Send reminder'}>
+      {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : sent ? <CheckCircle2 className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+    </button>
+  );
+}
+
+function W9NotificationBtn({ id }) {
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  async function handleNotify() {
+    setSending(true);
+    try {
+      await notifyW9Signer(id);
+      setSent(true);
+      setTimeout(() => setSent(false), 3000);
+    } catch (err) {
+      alert('Could not notify the client about the W-9: ' + err.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <button onClick={handleNotify} disabled={sending || sent}
+      className={`p-2 rounded-lg ${sent ? 'text-emerald-500 bg-emerald-50' : 'text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50'}`}
+      title={sent ? 'W-9 notification sent!' : 'Notify client to complete W-9'}>
       {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : sent ? <CheckCircle2 className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
     </button>
   );

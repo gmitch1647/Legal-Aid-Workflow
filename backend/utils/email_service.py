@@ -51,6 +51,7 @@ async def send_email(
     *,
     idempotency_key: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    reply_to: str | None = None,
 ) -> bool:
     """Send one HTML email via Resend (primary) or SMTP (fallback).
 
@@ -93,6 +94,7 @@ async def send_email(
                         "to": [to],
                         "subject": subject,
                         "html": body,
+                        **({"reply_to": [reply_to]} if reply_to else {}),
                         **({
                             "attachments": [
                                 {
@@ -129,6 +131,8 @@ async def send_email(
         msg["From"] = f"{PLATFORM_FROM_NAME} <{SMTP_FROM_EMAIL}>"
         msg["To"] = to
         msg["Subject"] = subject
+        if reply_to:
+            msg["Reply-To"] = reply_to
         alternatives = MIMEMultipart("alternative")
         alternatives.attach(MIMEText(body, "html", "utf-8"))
         msg.attach(alternatives)
