@@ -53,6 +53,7 @@ const CaseDetail = React.lazy(() => import('./pages/attorney/CaseDetail'));
 const ClientList = React.lazy(() => import('./pages/attorney/ClientList'));
 const ClientProfile = React.lazy(() => import('./pages/attorney/ClientProfile'));
 const ReferralPartnerProfile = React.lazy(() => import('./pages/attorney/ReferralPartnerProfile'));
+const Communications = React.lazy(() => import('./pages/attorney/Communications'));
 const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
 const AgentChat = React.lazy(() => import('./pages/attorney/AgentChat'));
 const DraftComplaint = React.lazy(() => import('./pages/attorney/DraftComplaint'));
@@ -606,6 +607,7 @@ const allAttorneyLinks = [
   { to: '/attorney/payouts', label: 'Attorney Payouts', icon: DollarSign, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/forms', label: 'Forms', icon: FileText, roles: ['attorney'] },
   { to: '/attorney/clients', label: 'Clients', icon: Users, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/communications', label: 'Communications', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/settings', label: 'Settings', icon: Settings, roles: ['attorney'] },
 ];
 
@@ -706,6 +708,7 @@ export default function App() {
             <Route path="clients" element={<ClientList />} />
             <Route path="clients/:id" element={<ClientProfile />} />
             <Route path="referrals/:id" element={<ReferralPartnerProfile />} />
+            <Route path="communications" element={<Communications />} />
             <Route path="settings" element={<AttorneySettings />} />
           </Route>
 
