@@ -1090,6 +1090,17 @@ export async function toggleReferralAccess(partnerId, feature, enabled) {
   });
 }
 
+export async function getReferralPartnerMessages(partnerId) {
+  return request(`/referrals/${partnerId}/messages`);
+}
+
+export async function sendReferralPartnerMessage(partnerId, data) {
+  return request(`/referrals/${partnerId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Commissions
 // ---------------------------------------------------------------------------

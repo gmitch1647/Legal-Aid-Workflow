@@ -23,6 +23,7 @@ import {
   Sparkles,
   FolderOpen,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../App';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import {
@@ -2190,7 +2191,14 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
           </span>
         </div>
         <div className="flex-1">
-          <div className="text-sm font-semibold text-slate-900">{p.full_name}</div>
+          <Link
+            to={`/attorney/referrals/${p.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className="text-sm font-semibold text-blue-700 underline decoration-blue-200 decoration-2 underline-offset-2 transition hover:text-blue-900 hover:decoration-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            title={`Open ${p.full_name}'s profile`}
+          >
+            {p.full_name}
+          </Link>
           <div className="text-xs text-slate-500 flex items-center gap-3 flex-wrap">
             {p.company && <span>{p.company}</span>}
             {p.email && <span>{p.email}</span>}
@@ -2205,7 +2213,16 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
             {p.portal_user_id && <span className="ml-2 text-emerald-600">· Portal Active</span>}
           </div>
         </div>
-        <ChevronRight className={`w-4 h-4 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            to={`/attorney/referrals/${p.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className="hidden rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100 sm:inline-flex"
+          >
+            Open Profile
+          </Link>
+          <ChevronRight className={`w-4 h-4 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
+        </div>
       </div>
 
       {expanded && (

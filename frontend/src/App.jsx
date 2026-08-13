@@ -50,6 +50,7 @@ const CasePipeline = React.lazy(() => import('./pages/attorney/CasePipeline'));
 const CaseDetail = React.lazy(() => import('./pages/attorney/CaseDetail'));
 const ClientList = React.lazy(() => import('./pages/attorney/ClientList'));
 const ClientProfile = React.lazy(() => import('./pages/attorney/ClientProfile'));
+const ReferralPartnerProfile = React.lazy(() => import('./pages/attorney/ReferralPartnerProfile'));
 const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
 const AgentChat = React.lazy(() => import('./pages/attorney/AgentChat'));
 const DraftComplaint = React.lazy(() => import('./pages/attorney/DraftComplaint'));
@@ -566,6 +567,7 @@ export default function App() {
             <Route path="forms" element={<FormsPage />} />
             <Route path="clients" element={<ClientList />} />
             <Route path="clients/:id" element={<ClientProfile />} />
+            <Route path="referrals/:id" element={<ReferralPartnerProfile />} />
             <Route path="settings" element={<AttorneySettings />} />
           </Route>
 
