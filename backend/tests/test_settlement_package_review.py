@@ -47,6 +47,8 @@ class SettlementPackageReviewTests(unittest.TestCase):
     def test_submitter_cannot_approve_own_package(self):
         async def run():
             with patch.object(packages, "_get_current_user", return_value={"id": "attorney-1", "role": "attorney"}), patch.object(
+                packages, "_is_reviewer", return_value=True
+            ), patch.object(
                 packages, "_get_package_with_case", return_value={"id": "package-1", "submitted_by": "attorney-1", "status": "awaiting_review"}
             ):
                 with self.assertRaises(HTTPException) as error:
@@ -68,6 +70,8 @@ class SettlementPackageReviewTests(unittest.TestCase):
             updated = {**package, "status": "approved"}
             supabase = _Supabase(updated)
             with patch.object(packages, "_get_current_user", return_value={"id": "reviewer-1", "role": "attorney"}), patch.object(
+                packages, "_is_reviewer", return_value=True
+            ), patch.object(
                 packages, "_get_package_with_case", return_value=package
             ), patch.object(packages, "get_supabase", return_value=supabase), patch.object(
                 packages, "_stage_case_document", side_effect=[{"id": "settlement-doc"}, {"id": "disclosure-doc"}]
@@ -83,6 +87,18 @@ class SettlementPackageReviewTests(unittest.TestCase):
             event.assert_called_once()
 
         asyncio.run(run())
+
+    def test_owner_reviewer_cannot_submit_for_review(self):
+        with patch.object(packages, "_is_reviewer", return_value=True):
+            with self.assertRaises(HTTPException) as error:
+                packages._require_submitter({"id": "owner-1", "role": "attorney"})
+        self.assertEqual(error.exception.status_code, 403)
+
+    def test_submitting_attorney_cannot_review(self):
+        with patch.object(packages, "_is_reviewer", return_value=False):
+            with self.assertRaises(HTTPException) as error:
+                packages._require_reviewer({"id": "attorney-2", "role": "staff_attorney"})
+        self.assertEqual(error.exception.status_code, 403)
 
 
 if __name__ == "__main__":

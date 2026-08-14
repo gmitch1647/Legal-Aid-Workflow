@@ -43,9 +43,38 @@ def _require_internal(profile: dict) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Attorney access is required.")
 
 
+def _reviewer_profile_id() -> Optional[str]:
+    """Return the configured owner account for settlement-package review."""
+    try:
+        response = (
+            get_supabase().table("settlement_package_reviewers")
+            .select("owner_profile_id").eq("active", True).limit(1).execute()
+        )
+        row = (response.data or [None])[0]
+        return str(row["owner_profile_id"]) if row and row.get("owner_profile_id") else None
+    except Exception:
+        logger.exception("Could not load settlement package reviewer configuration")
+        return None
+
+
+def _is_reviewer(profile: dict) -> bool:
+    return bool(_reviewer_profile_id() and str(profile.get("id")) == _reviewer_profile_id())
+
+
 def _require_reviewer(profile: dict) -> None:
-    if profile.get("role") != "attorney":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an attorney can approve or return a settlement package.")
+    _require_internal(profile)
+    if not _is_reviewer(profile):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the configured settlement reviewer can approve, return, or send this package.")
+
+
+def _require_submitter(profile: dict) -> None:
+    _require_internal(profile)
+    if _is_reviewer(profile):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The settlement reviewer receives attorney submissions and cannot submit a package for review.")
+
+
+def _can_view_package(package: dict, profile: dict) -> bool:
+    return _is_reviewer(profile) or str(package.get("submitted_by")) == str(profile.get("id"))
 
 
 def _case_with_access(case_id: str, profile: dict) -> dict:
@@ -97,10 +126,20 @@ async def list_settlement_packages(
     _require_internal(profile)
     supabase = get_supabase()
     query = supabase.table("settlement_package_submissions").select("*").order("submitted_at", desc=True).limit(100)
+    if not _is_reviewer(profile):
+        query = query.eq("submitted_by", profile["id"])
     if status_filter:
         query = query.eq("status", status_filter)
     response = query.execute()
     return [_package_summary(row) for row in response.data or []]
+
+
+@router.get("/settlement-packages/access")
+async def settlement_package_access(authorization: str = Header(...)):
+    profile = await _get_current_user(authorization)
+    _require_internal(profile)
+    reviewer = _is_reviewer(profile)
+    return {"can_review": reviewer, "can_submit": not reviewer, "role": "reviewer" if reviewer else "submitting_attorney"}
 
 
 @router.get("/cases/{case_id}/settlement-packages")
@@ -108,11 +147,16 @@ async def list_case_settlement_packages(case_id: str, authorization: str = Heade
     profile = await _get_current_user(authorization)
     _require_internal(profile)
     _case_with_access(case_id, profile)
-    response = (
+    query = (
         get_supabase().table("settlement_package_submissions")
         .select("*")
         .eq("case_id", case_id)
         .order("submitted_at", desc=True)
+    )
+    if not _is_reviewer(profile):
+        query = query.eq("submitted_by", profile["id"])
+    response = (
+        query
         .limit(25)
         .execute()
     )
@@ -129,7 +173,7 @@ async def submit_settlement_package(
     authorization: str = Header(...),
 ):
     profile = await _get_current_user(authorization)
-    _require_internal(profile)
+    _require_submitter(profile)
     case = _case_with_access(case_id, profile)
 
     settlement_name = _safe_filename(settlement_agreement.filename or "Settlement_Agreement.pdf", "Settlement_Agreement.pdf")
@@ -184,14 +228,16 @@ async def submit_settlement_package(
         if not created.data:
             raise RuntimeError("Settlement package could not be saved.")
         _event(supabase, package_id, "submitted", profile["id"], attorney_notes.strip())
-        # Notify the primary attorney that a review decision is needed. This is
-        # best-effort; a notification failure never blocks an already stored package.
+        # Notify the configured owner-reviewer. This is best-effort; a
+        # notification failure never blocks an already stored package.
         try:
-            reviewers = (
+            reviewer_id = _reviewer_profile_id()
+            reviewer_response = (
                 supabase.table("profiles").select("id,full_name,email")
-                .eq("role", "attorney").order("created_at").limit(1).execute()
+                .eq("id", reviewer_id).limit(1).execute()
+                if reviewer_id else None
             )
-            reviewer = (reviewers.data or [None])[0]
+            reviewer = ((reviewer_response.data or [None])[0] if reviewer_response else None)
             if reviewer and str(reviewer.get("id")) != str(profile.get("id")):
                 from utils.notifications import create_notification
                 create_notification(
@@ -331,6 +377,8 @@ async def download_settlement_package_document(package_id: str, kind: str, autho
     if kind not in {"settlement", "credit_disclosure"}:
         raise HTTPException(status_code=404, detail="Document type not found.")
     package = _get_package_with_case(package_id, profile)
+    if not _can_view_package(package, profile):
+        raise HTTPException(status_code=403, detail="You can only open packages you submitted unless you are the configured reviewer.")
     storage_path = package.get(f"{kind}_storage_path")
     if not storage_path:
         raise HTTPException(status_code=404, detail="This package does not contain that document.")

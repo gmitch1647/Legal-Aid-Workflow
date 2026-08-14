@@ -892,6 +892,10 @@ export async function getSettlementPackages(statusFilter = '') {
   return request(`/settlement-packages${suffix}`);
 }
 
+export async function getSettlementPackageAccess() {
+  return request('/settlement-packages/access');
+}
+
 export async function getCaseSettlementPackages(caseId) {
   return request(`/cases/${caseId}/settlement-packages`);
 }
