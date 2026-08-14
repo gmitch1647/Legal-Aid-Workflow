@@ -25,6 +25,7 @@ import {
 } from '../../lib/api';
 import SettlementAgreementModal, { SettlementAgreementStatusModal } from './SettlementAgreementModal';
 import PayoutInformationRequestModal from '../../components/PayoutInformationRequestModal';
+import SettlementPackageReview, { PreparedSettlementPackageSendModal } from '../../components/SettlementPackageReview';
 
 function asRows(value, fallbackKeys = []) {
   if (Array.isArray(value)) return value;
@@ -151,6 +152,8 @@ export default function SettlementCenter() {
   const [loadingDeliveryAttorneys, setLoadingDeliveryAttorneys] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [approvedPackage, setApprovedPackage] = useState(null);
+  const [preparedSendTarget, setPreparedSendTarget] = useState(null);
 
   const selectedCase = useMemo(
     () => cases.find((caseRow) => String(caseRow.id) === String(selectedCaseId)) || null,
@@ -243,11 +246,19 @@ export default function SettlementCenter() {
 
   const openAgreementPanel = () => {
     setNotice('');
+    if (agreementNeedsReplacement && approvedPackage?.settlement_storage_path) {
+      setPreparedSendTarget({ packageRow: approvedPackage, kind: 'settlement' });
+      return;
+    }
     setAgreementPanel(agreementNeedsReplacement ? 'agreement-send' : 'agreement-status');
   };
 
   const openCreditDisclosurePanel = () => {
     setNotice('');
+    if (creditDisclosureNeedsReplacement && approvedPackage?.credit_disclosure_storage_path) {
+      setPreparedSendTarget({ packageRow: approvedPackage, kind: 'credit_disclosure' });
+      return;
+    }
     setAgreementPanel(creditDisclosureNeedsReplacement ? 'disclosure-send' : 'disclosure-status');
   };
 
@@ -358,6 +369,14 @@ export default function SettlementCenter() {
             <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-white py-16 text-sm text-slate-500"><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Refreshing settlement status…</div>
           ) : (
             <>
+              {selectedCase && (
+                <SettlementPackageReview
+                  caseRow={selectedCase}
+                  onWorkflowChanged={() => loadWorkflow(selectedCaseId)}
+                  onNotice={(message) => { setNotice(message); setError(''); }}
+                  onApprovedPackage={setApprovedPackage}
+                />
+              )}
               {nextStep ? (
                 <section className="flex flex-col gap-4 rounded-2xl border border-primary-200 bg-primary-50 p-5 md:flex-row md:items-center md:justify-between">
                   <div>
@@ -436,6 +455,20 @@ export default function SettlementCenter() {
             </>
           )}
         </>
+      )}
+      {preparedSendTarget && (
+        <PreparedSettlementPackageSendModal
+          packageRow={preparedSendTarget.packageRow}
+          kind={preparedSendTarget.kind}
+          onClose={() => setPreparedSendTarget(null)}
+          onSent={async (result) => {
+            setPreparedSendTarget(null);
+            await loadWorkflow(selectedCaseId);
+            setNotice(result.already_created
+              ? 'This approved document was already prepared for client delivery.'
+              : `${preparedSendTarget.kind === 'settlement' ? 'Settlement agreement' : 'Credit disclosure'} sent to the client from the approved package.`);
+          }}
+        />
       )}
       {showPayoutRequest && selectedCase && (
         <PayoutInformationRequestModal

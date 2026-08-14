@@ -884,6 +884,56 @@ export async function deleteCalendarEvent(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Settlement Package Review
+// ---------------------------------------------------------------------------
+
+export async function getSettlementPackages(statusFilter = '') {
+  const suffix = statusFilter ? `?status_filter=${encodeURIComponent(statusFilter)}` : '';
+  return request(`/settlement-packages${suffix}`);
+}
+
+export async function getCaseSettlementPackages(caseId) {
+  return request(`/cases/${caseId}/settlement-packages`);
+}
+
+export async function submitSettlementPackage(caseId, { settlementAgreement, creditDisclosure, settlementAmount, attorneyNotes }) {
+  const formData = new FormData();
+  formData.append('settlement_agreement', settlementAgreement);
+  if (creditDisclosure) formData.append('credit_disclosure', creditDisclosure);
+  if (settlementAmount) formData.append('settlement_amount', settlementAmount);
+  if (attorneyNotes) formData.append('attorney_notes', attorneyNotes);
+  return request(`/cases/${caseId}/settlement-packages`, { method: 'POST', body: formData });
+}
+
+export async function approveSettlementPackage(packageId, comments = '') {
+  return request(`/settlement-packages/${packageId}/approve`, {
+    method: 'POST', body: JSON.stringify({ comments }),
+  });
+}
+
+export async function returnSettlementPackage(packageId, comments) {
+  return request(`/settlement-packages/${packageId}/return`, {
+    method: 'POST', body: JSON.stringify({ comments }),
+  });
+}
+
+export async function downloadSettlementPackageDocument(packageId, kind) {
+  const response = await fetch(`${API_URL}/settlement-packages/${packageId}/documents/${kind}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || 'Could not open the settlement package document.');
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function sendApprovedSettlementPackageDocument(packageId, kind) {
+  return request(`/settlement-packages/${packageId}/send/${kind}`, { method: 'POST' });
+}
+
+// ---------------------------------------------------------------------------
 // Communications (Email + SMS)
 // ---------------------------------------------------------------------------
 

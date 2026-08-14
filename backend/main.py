@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # sees the environment variables it expects.
 load_dotenv()
 
-from routers import address_suggestions, attorneys, auth, calendar, case_law, cases, closing_statements, commissions, communications, conversations, credit_reports, defendants, document_requests, documents, draft, disputes, esign, intake, integrations, memory, messages, notifications, payout_information, pipeline_stages, referrals, signing, supporting_documents, violations, w9  # noqa: E402
+from routers import address_suggestions, attorneys, auth, calendar, case_law, cases, closing_statements, commissions, communications, conversations, credit_reports, defendants, document_requests, documents, draft, disputes, esign, intake, integrations, memory, messages, notifications, payout_information, pipeline_stages, referrals, settlement_packages, signing, supporting_documents, violations, w9  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -99,6 +99,7 @@ app.include_router(messages.router,                               tags=["Message
 app.include_router(notifications.router,    prefix="/notifications",    tags=["Notifications"])
 app.include_router(pipeline_stages.router,  prefix="/pipeline-stages",  tags=["Pipeline Stages"])
 app.include_router(referrals.router,       prefix="/referrals",        tags=["Referrals"])
+app.include_router(settlement_packages.router,                 tags=["Settlement Package Review"])
 app.include_router(commissions.router,    prefix="/commissions",      tags=["Commissions"])
 
 # ---------------------------------------------------------------------------
