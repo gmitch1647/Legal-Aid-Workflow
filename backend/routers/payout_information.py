@@ -261,6 +261,56 @@ class PayoutInformationSubmission(BaseModel):
         return digits
 
 
+@router.get("/payout-information-requests")
+async def list_all_visible_payout_information_requests(authorization: str = Header(...)):
+    """Return the current staff member's authorized payout request inbox.
+
+    This endpoint deliberately returns only masked submission metadata. Full ACH
+    details still require the existing per-request audited reveal endpoint.
+    """
+    profile = await _current_profile(authorization)
+    _require_staff(profile)
+    supabase = get_supabase()
+    rows = (
+        supabase.table("client_payout_information_requests")
+        .select("*").order("created_at", desc=True).limit(250).execute()
+    ).data or []
+
+    visible = []
+    case_ids = set()
+    client_ids = set()
+    for row in rows:
+        try:
+            _authorized_staff_for_request(supabase, row, profile)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN:
+                continue
+            raise
+        summary = _safe_summary(row, _submission_for_request(supabase, row["id"]))
+        visible.append(summary)
+        if row.get("case_id"):
+            case_ids.add(row["case_id"])
+        if row.get("client_id"):
+            client_ids.add(row["client_id"])
+
+    cases_by_id = {}
+    if case_ids:
+        case_rows = supabase.table("cases").select("id,case_number,client_id").in_("id", list(case_ids)).execute().data or []
+        cases_by_id = {row["id"]: row for row in case_rows}
+    clients_by_id = {}
+    if client_ids:
+        client_rows = supabase.table("profiles").select("id,full_name,email").in_("id", list(client_ids)).execute().data or []
+        clients_by_id = {row["id"]: row for row in client_rows}
+
+    for summary in visible:
+        case = cases_by_id.get(summary.get("case_id"), {})
+        client = clients_by_id.get(summary.get("client_id"), {})
+        summary["client_name"] = client.get("full_name") or "Client"
+        summary["client_email"] = client.get("email") or ""
+        summary["case_label"] = case.get("case_number") or "Case"
+    return visible
+
+
 @router.get("/cases/{case_id}/payout-information-requests")
 async def list_payout_information_requests(case_id: str, authorization: str = Header(...)):
     profile = await _current_profile(authorization)

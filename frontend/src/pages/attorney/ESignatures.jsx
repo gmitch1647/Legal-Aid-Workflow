@@ -4,7 +4,7 @@ import {
   PenLine, Send, Download, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
   ChevronDown, ChevronRight, X, Search, User, Upload, Trash2,
-  FolderOpen, LockKeyhole, ExternalLink, CreditCard,
+  FolderOpen, LockKeyhole, ExternalLink, CreditCard, KeyRound, ShieldCheck,
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
@@ -12,7 +12,8 @@ import {
   deleteSigningSession,
   getGroupedSignatureDashboard, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
-  sendOiseEngagementContract, notifyW9Signer,
+  sendOiseEngagementContract, notifyW9Signer, getAllPayoutInformationRequests,
+  revealPayoutInformation, cancelPayoutInformationRequest,
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import PayoutInformationRequestModal from '../../components/PayoutInformationRequestModal';
@@ -69,6 +70,9 @@ export default function ESignatures() {
   const [testing, setTesting] = useState(false);
   const [payoutCase, setPayoutCase] = useState(null);
   const [payoutNotice, setPayoutNotice] = useState('');
+  const [activeWorkspace, setActiveWorkspace] = useState('documents');
+  const [bankingRequests, setBankingRequests] = useState([]);
+  const [bankingLoading, setBankingLoading] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -89,6 +93,11 @@ export default function ESignatures() {
         }),
         getGroupedSignatureDashboard(),
       ]);
+      setBankingLoading(true);
+      getAllPayoutInformationRequests()
+        .then((requests) => setBankingRequests(Array.isArray(requests) ? requests : requests?.data || []))
+        .catch((err) => console.error('Failed to load payout request inbox:', err))
+        .finally(() => setBankingLoading(false));
       const nextGroups = Array.isArray(dashboardResp?.groups) ? dashboardResp.groups : [];
       setConfigured(Boolean(configResp?.configured));
       setGroups(nextGroups);
@@ -273,6 +282,12 @@ export default function ESignatures() {
         </div>
       )}
 
+      <div className="mb-5 flex w-fit gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+        <button type="button" onClick={() => setActiveWorkspace('documents')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeWorkspace === 'documents' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><FileText className="mr-1.5 inline h-4 w-4" />Signature Documents</button>
+        <button type="button" onClick={() => setActiveWorkspace('banking')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeWorkspace === 'banking' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}><CreditCard className="mr-1.5 inline h-4 w-4" />Banking Forms</button>
+      </div>
+
+      {activeWorkspace === 'documents' ? <>
       <div className="mb-4 flex items-center gap-3">
         <button onClick={async () => {
           setTesting(true); setTestResult(null);
@@ -362,6 +377,15 @@ export default function ESignatures() {
         </div>
       )}
 
+      </> : (
+        <BankingFormsTab
+          requests={bankingRequests}
+          loading={bankingLoading}
+          onRefresh={loadData}
+          onOpenCase={(caseId) => navigate(`/attorney/cases/${caseId}`)}
+        />
+      )}
+
       {payoutCase && (
         <PayoutInformationRequestModal
           caseId={payoutCase.id}
@@ -411,6 +435,53 @@ export default function ESignatures() {
       {preview && <PdfPreviewModal title={preview.title} url={preview.url} onClose={closePreview} onDownload={() => handleDownload(showDetailModal || '')} />}
     </div>
   );
+}
+
+function BankingFormsTab({ requests, loading, onRefresh, onOpenCase }) {
+  const [search, setSearch] = useState('');
+  const [revealingId, setRevealingId] = useState('');
+  const [cancellingId, setCancellingId] = useState('');
+  const [revealed, setRevealed] = useState(null);
+  const [error, setError] = useState('');
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return requests;
+    return requests.filter((item) => [item.client_name, item.client_email, item.case_label, item.status, item.submission?.account_holder_name]
+      .filter(Boolean).join(' ').toLowerCase().includes(term));
+  }, [requests, search]);
+
+  async function reveal(item) {
+    if (!window.confirm('Reveal this client’s ACH routing and account number now? This access is recorded in LegalFlow’s private audit trail.')) return;
+    setRevealingId(item.id); setError('');
+    try { setRevealed({ ...(await revealPayoutInformation(item.id)), requestId: item.id, clientName: item.client_name, caseLabel: item.case_label }); }
+    catch (err) { setError(err.message || 'Could not open payout information securely.'); }
+    finally { setRevealingId(''); }
+  }
+
+  async function cancel(item) {
+    if (!window.confirm('Cancel this banking form request? The client will no longer be able to submit it.')) return;
+    setCancellingId(item.id); setError('');
+    try { await cancelPayoutInformationRequest(item.id); await onRefresh(); }
+    catch (err) { setError(err.message || 'Could not cancel the banking form request.'); }
+    finally { setCancellingId(''); }
+  }
+
+  const submitted = requests.filter((item) => item.status === 'completed').length;
+  const pending = requests.filter((item) => item.status === 'requested').length;
+  return <section className="rounded-2xl border border-emerald-200 bg-emerald-50/30 p-5 shadow-sm">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-800"><CreditCard className="h-4 w-4" />Secure payout workspace</p><h2 className="mt-1 text-xl font-bold text-slate-900">Client banking forms</h2><p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">Track private payout-information requests from E-Signatures. Account and routing numbers remain encrypted and require a separate audited secure view.</p></div><button type="button" onClick={onRefresh} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3.5 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"><RefreshCw className="h-4 w-4" /> Refresh forms</button></div>
+    <div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-xl border border-emerald-100 bg-white p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">All forms</p><p className="mt-1 text-2xl font-bold text-slate-900">{requests.length}</p></div><div className="rounded-xl border border-amber-100 bg-white p-3"><p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Waiting on client</p><p className="mt-1 text-2xl font-bold text-amber-800">{pending}</p></div><div className="rounded-xl border border-emerald-100 bg-white p-3"><p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Submitted</p><p className="mt-1 text-2xl font-bold text-emerald-800">{submitted}</p></div></div>
+    <div className="relative mt-5"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search client, case, or banking form status..." className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" /></div>
+    {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertCircle className="mr-1 inline h-4 w-4" /> {error}</div>}
+    <div className="mt-4 space-y-3">{loading ? <div className="flex items-center gap-2 rounded-xl border border-dashed border-emerald-200 bg-white px-4 py-6 text-sm text-slate-600"><Loader2 className="h-4 w-4 animate-spin" />Loading secure banking forms…</div> : filtered.length === 0 ? <div className="rounded-xl border border-dashed border-emerald-200 bg-white px-4 py-8 text-center text-sm text-slate-500">No authorized banking form requests match this view.</div> : filtered.map((item) => {
+      const submittedForm = item.status === 'completed';
+      const statusText = submittedForm ? 'Submitted' : item.status === 'cancelled' ? 'Cancelled' : 'Waiting on client';
+      const statusClass = submittedForm ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : item.status === 'cancelled' ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-amber-200 bg-amber-50 text-amber-800';
+      return <article key={item.id} className="rounded-xl border border-emerald-100 bg-white p-4"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div className="flex min-w-0 items-start gap-3">{submittedForm ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" /> : <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />}<div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-900">{item.client_name || 'Client'}</p><span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass}`}>{statusText}</span></div><p className="mt-1 text-sm text-slate-600">{item.case_label || 'Case'}{item.client_email ? ` · ${item.client_email}` : ''}</p><p className="mt-1 text-sm text-slate-500">{submittedForm && item.submission ? `${item.submission.account_holder_name || 'Account holder'} · ${item.submission.account_ownership === 'business' ? 'Business' : 'Personal'} · ${item.submission.account_type === 'savings' ? 'Savings' : 'Checking'} ending in ${item.submission.account_number_last4 || '••••'}${item.submission.submitted_at ? ` · submitted ${formattedDate(item.submission.submitted_at)}` : ''}` : item.status === 'cancelled' ? 'The request was cancelled.' : item.due_date ? `Requested by ${formattedDate(`${item.due_date}T00:00:00`)}` : 'The client has not completed the private banking form yet.'}</p></div></div><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => onOpenCase(item.case_id)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Open case</button>{submittedForm && <button type="button" onClick={() => reveal(item)} disabled={revealingId === item.id} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60">{revealingId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}View securely</button>}{item.status === 'requested' && <button type="button" onClick={() => cancel(item)} disabled={cancellingId === item.id} className="rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-60">{cancellingId === item.id ? 'Cancelling…' : 'Cancel request'}</button>}</div></div></article>;
+    })}</div>
+    {revealed && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-label="Secure banking form details"><div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-700"><KeyRound className="h-3.5 w-3.5" />Audited secure view</p><h3 className="mt-1 text-lg font-bold text-slate-900">{revealed.clientName || 'Client'} banking details</h3><p className="mt-1 text-sm text-slate-500">{revealed.caseLabel || 'Case'}</p></div><button type="button" onClick={() => setRevealed(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-5 w-5" /></button></div><div className="mt-5 grid gap-3 text-sm"><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Account holder</p><p className="mt-1 font-semibold text-slate-900">{revealed.account_holder_name}</p></div><div className="grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Ownership</p><p className="mt-1 font-semibold capitalize text-slate-900">{revealed.account_ownership}</p></div><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Type</p><p className="mt-1 font-semibold capitalize text-slate-900">{revealed.account_type}</p></div><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Bank</p><p className="mt-1 font-semibold text-slate-900">{revealed.bank_name || 'Not provided'}</p></div></div><div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><p className="text-xs font-semibold text-emerald-800">Routing number</p><p className="mt-1 font-mono text-base font-bold tracking-wide text-slate-950">{revealed.routing_number}</p></div><div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><p className="text-xs font-semibold text-emerald-800">Account number</p><p className="mt-1 font-mono text-base font-bold tracking-wide text-slate-950">{revealed.account_number}</p></div></div><div className="mt-5 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />This view is recorded in LegalFlow’s private audit trail. Do not copy these details into messages, notes, or ordinary documents.</div><div className="mt-5 flex justify-end"><button type="button" onClick={() => setRevealed(null)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">Close secure view</button></div></div></div>}
+  </section>;
 }
 
 function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onRequestPayout, onDelete }) {

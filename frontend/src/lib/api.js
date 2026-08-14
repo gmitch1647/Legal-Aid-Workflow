@@ -312,6 +312,10 @@ export async function getPayoutInformationRequests(caseId) {
   return request(`/cases/${caseId}/payout-information-requests`);
 }
 
+export async function getAllPayoutInformationRequests() {
+  return request('/payout-information-requests');
+}
+
 export async function createPayoutInformationRequest(caseId, data = {}) {
   return request(`/cases/${caseId}/payout-information-requests`, {
     method: 'POST',
