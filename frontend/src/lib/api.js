@@ -342,6 +342,24 @@ export async function cancelPayoutInformationRequest(requestId) {
   return request(`/payout-information-requests/${requestId}/cancel`, { method: 'POST' });
 }
 
+export async function releasePayoutInformationToAttorney(requestId, attorneyProfileId = null) {
+  return request(`/payout-information-requests/${requestId}/release-to-attorney`, {
+    method: 'POST',
+    body: JSON.stringify({ attorney_profile_id: attorneyProfileId || null }),
+  });
+}
+
+export async function revokePayoutInformationAttorneyAccess(requestId) {
+  return request(`/payout-information-requests/${requestId}/revoke-attorney-access`, { method: 'POST' });
+}
+
+export async function markPayoutPaymentSent(requestId, data = {}) {
+  return request(`/payout-information-requests/${requestId}/mark-payment-sent`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Supporting Documents Library
 // ---------------------------------------------------------------------------

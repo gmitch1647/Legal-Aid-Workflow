@@ -76,16 +76,19 @@ class _Supabase:
         self.tables = {
             "cases": _Query([{"id": "case-1", "client_id": "client-1", "case_number": "1:26-cv-1", "plaintiff_name": "Client"}]),
             "profiles": _Query([
-                {"id": "client-1", "full_name": "Client", "email": "client@example.test", "assigned_attorney_id": "attorney-1"},
-                {"id": "attorney-1", "full_name": "Attorney", "email": "attorney@example.test"},
-                {"id": "attorney-2", "full_name": "Other Attorney", "email": "other@example.test"},
+                {"id": "client-1", "full_name": "Client", "email": "client@example.test", "assigned_attorney_id": "attorney-1", "role": "client"},
+                {"id": "owner-1", "full_name": "Gary Mitchell", "email": "gary@example.test", "role": "attorney"},
+                {"id": "attorney-1", "full_name": "Attorney", "email": "attorney@example.test", "role": "staff_attorney"},
+                {"id": "attorney-2", "full_name": "Other Attorney", "email": "other@example.test", "role": "staff_attorney"},
             ]),
             "client_payout_information_requests": _Query([{
                 "id": "request-1", "case_id": "case-1", "client_id": "client-1", "requested_by": "attorney-1",
                 "message": "Provide ACH information", "status": "requested", "token": "private-payout-token", "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(), "created_at": "2026-08-11T12:00:00+00:00",
             }]),
             "client_payout_information_submissions": _Query([]),
+            "payout_attorney_payment_access": _Query([]),
             "payout_information_access_audit": _Query([]),
+            "settlement_package_reviewers": _Query([{"owner_profile_id": "owner-1", "active": True}]),
         }
 
     def table(self, name):
@@ -163,13 +166,19 @@ class SecurePayoutInformationTests(unittest.TestCase):
                 authorized=True,
             )
 
-    def test_authorized_attorney_reveal_decrypts_values_and_creates_audit_row(self):
+    def test_released_attorney_reveal_decrypts_values_and_creates_audit_row(self):
         supabase = _Supabase()
         get_supabase, current_profile, encryption = self._patches(supabase, {"id": "client-1", "role": "client"})
         with get_supabase, current_profile, encryption:
             asyncio.run(payout_information.submit_payout_information("request-1", self._submit_body(), _request(), "Bearer client"))
 
-        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "attorney"})
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "owner-1", "role": "attorney"})
+        with get_supabase, current_profile, encryption, patch.object(payout_information, "send_email", new=AsyncMock()):
+            asyncio.run(payout_information.release_payout_information_to_attorney(
+                "request-1", payout_information.PayoutAttorneyRelease(), _request(), "Bearer owner"
+            ))
+
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "staff_attorney"})
         with get_supabase, current_profile, encryption:
             revealed = asyncio.run(payout_information.reveal_payout_information("request-1", _request(), "Bearer attorney"))
 
@@ -184,7 +193,7 @@ class SecurePayoutInformationTests(unittest.TestCase):
         with get_supabase, current_profile, encryption:
             asyncio.run(payout_information.submit_payout_information("request-1", self._submit_body(), _request(), "Bearer client"))
 
-        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-2", "role": "attorney"})
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-2", "role": "staff_attorney"})
         with get_supabase, current_profile, encryption:
             with self.assertRaises(HTTPException) as raised:
                 asyncio.run(payout_information.reveal_payout_information("request-1", _request(), "Bearer other"))
@@ -231,6 +240,103 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertNotIn("123456789012", encoded)
         self.assertNotIn("routing_number_encrypted", encoded)
         self.assertNotIn("account_number_encrypted", encoded)
+
+    def _complete_request(self, supabase):
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "client-1", "role": "client"})
+        with get_supabase, current_profile, encryption:
+            asyncio.run(payout_information.submit_payout_information("request-1", self._submit_body(), _request(), "Bearer client"))
+
+    def _release_to_assigned_attorney(self, supabase):
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "owner-1", "role": "attorney"})
+        with get_supabase, current_profile, encryption, patch.object(payout_information, "send_email", new=AsyncMock()):
+            return asyncio.run(payout_information.release_payout_information_to_attorney(
+                "request-1", payout_information.PayoutAttorneyRelease(), _request(), "Bearer owner"
+            ))
+
+    def test_owner_can_release_completed_form_to_assigned_attorney(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+
+        released = self._release_to_assigned_attorney(supabase)
+
+        access = supabase.tables["payout_attorney_payment_access"].rows[0]
+        self.assertEqual(access["attorney_profile_id"], "attorney-1")
+        self.assertEqual(access["released_by"], "owner-1")
+        self.assertEqual(access["status"], "released")
+        self.assertTrue(released["payment_access"]["can_revoke"])
+        self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[-1]["action"], "released_to_attorney")
+
+    def test_non_owner_cannot_release_completed_form(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "staff_attorney"})
+        with get_supabase, current_profile, encryption:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(payout_information.release_payout_information_to_attorney(
+                    "request-1", payout_information.PayoutAttorneyRelease(), _request(), "Bearer attorney"
+                ))
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(supabase.tables["payout_attorney_payment_access"].rows, [])
+
+    def test_assigned_attorney_is_blocked_until_owner_releases_form(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "staff_attorney"})
+        with get_supabase, current_profile, encryption:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(payout_information.reveal_payout_information("request-1", _request(), "Bearer attorney"))
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[-1]["action"], "submitted")
+
+    def test_owner_can_revoke_released_attorney_access(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+        self._release_to_assigned_attorney(supabase)
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "owner-1", "role": "attorney"})
+        with get_supabase, current_profile, encryption:
+            result = asyncio.run(payout_information.revoke_payout_information_attorney_access("request-1", _request(), "Bearer owner"))
+
+        access = supabase.tables["payout_attorney_payment_access"].rows[0]
+        self.assertEqual(access["status"], "revoked")
+        self.assertEqual(access["revoked_by"], "owner-1")
+        self.assertEqual(result["payment_access"]["status"], "revoked")
+
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "staff_attorney"})
+        with get_supabase, current_profile, encryption:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(payout_information.reveal_payout_information("request-1", _request(), "Bearer attorney"))
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_released_attorney_can_mark_external_payment_sent(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+        self._release_to_assigned_attorney(supabase)
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "staff_attorney"})
+        with get_supabase, current_profile, encryption:
+            result = asyncio.run(payout_information.mark_payout_payment_sent(
+                "request-1",
+                payout_information.PayoutPaymentMarkedSent(payment_amount=1250.50, payment_reference="ACH-123", payment_note="Sent through bank portal"),
+                _request(),
+                "Bearer attorney",
+            ))
+
+        access = supabase.tables["payout_attorney_payment_access"].rows[0]
+        self.assertEqual(access["status"], "payment_marked_sent")
+        self.assertEqual(access["payment_amount"], 1250.50)
+        self.assertEqual(access["payment_reference"], "ACH-123")
+        self.assertEqual(result["payment_access"]["status"], "payment_marked_sent")
+        self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[-1]["action"], "payment_marked_sent")
+
+    def test_attorney_cannot_mark_payment_sent_without_owner_release(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "attorney-1", "role": "staff_attorney"})
+        with get_supabase, current_profile, encryption:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(payout_information.mark_payout_payment_sent(
+                    "request-1", payout_information.PayoutPaymentMarkedSent(payment_amount=100), _request(), "Bearer attorney"
+                ))
+        self.assertEqual(raised.exception.status_code, 403)
 
 
 if __name__ == "__main__":

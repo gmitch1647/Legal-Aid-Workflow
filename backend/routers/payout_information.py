@@ -132,6 +132,56 @@ def _case_assigned_attorney_id(supabase, client_id: str) -> Optional[str]:
     return (profile.data or [{}])[0].get("assigned_attorney_id")
 
 
+def _owner_profile_id(supabase) -> Optional[str]:
+    """Return the explicit active LegalFlow owner reviewer, never an inferred attorney."""
+    try:
+        response = (
+            supabase.table("settlement_package_reviewers")
+            .select("owner_profile_id")
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
+        return (response.data or [{}])[0].get("owner_profile_id")
+    except Exception:
+        logger.exception("Could not load the active payout owner reviewer")
+        return None
+
+
+def _is_owner_reviewer(supabase, profile: dict) -> bool:
+    return bool(profile.get("id") and profile.get("id") == _owner_profile_id(supabase))
+
+
+def _payment_access_for_request(supabase, payout_request_id: str) -> Optional[dict]:
+    response = (
+        supabase.table("payout_attorney_payment_access")
+        .select("*")
+        .eq("request_id", payout_request_id)
+        .limit(1)
+        .execute()
+    )
+    return (response.data or [None])[0]
+
+
+def _append_payment_access(summary: dict, payment_access: Optional[dict], profile: dict, is_owner: bool) -> dict:
+    """Attach release status only; never attach decrypted account data."""
+    status_value = payment_access.get("status") if payment_access else None
+    summary["payment_access"] = {
+        "status": status_value or "not_released",
+        "attorney_profile_id": payment_access.get("attorney_profile_id") if payment_access else None,
+        "released_at": payment_access.get("released_at") if payment_access else None,
+        "released_to_current_user": bool(payment_access and payment_access.get("attorney_profile_id") == profile.get("id") and status_value in {"released", "payment_marked_sent"}),
+        "can_release": bool(is_owner and summary.get("status") == "completed"),
+        "can_revoke": bool(is_owner and status_value in {"released", "payment_marked_sent"}),
+        "can_mark_payment_sent": bool(payment_access and payment_access.get("attorney_profile_id") == profile.get("id") and status_value == "released"),
+        "payment_amount": payment_access.get("payment_amount") if payment_access else None,
+        "payment_sent_at": payment_access.get("payment_sent_at") if payment_access else None,
+        "payment_reference": payment_access.get("payment_reference") if payment_access else None,
+        "payment_note": payment_access.get("payment_note") if payment_access else None,
+    }
+    return summary
+
+
 def _request_or_404(supabase, payout_request_id: str) -> dict:
     result = (
         supabase.table("client_payout_information_requests")
@@ -174,11 +224,14 @@ def _public_request_for_token(supabase, token: str, *, allow_completed: bool = F
 
 
 def _authorized_staff_for_request(supabase, payout_request: dict, profile: dict) -> None:
-    """Allow only the request sender or the case's assigned attorney to review."""
+    """Allow the owner, or only an explicitly released assigned attorney, to review."""
     _require_staff(profile)
-    assigned_attorney_id = _case_assigned_attorney_id(supabase, payout_request["client_id"])
-    if profile.get("id") not in {payout_request.get("requested_by"), assigned_attorney_id}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to review this client's payout information.")
+    if _is_owner_reviewer(supabase, profile):
+        return
+    payment_access = _payment_access_for_request(supabase, payout_request["id"])
+    if payment_access and payment_access.get("attorney_profile_id") == profile.get("id") and payment_access.get("status") in {"released", "payment_marked_sent"}:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The owner has not released this client's payment details to you.")
 
 
 def _safe_summary(payout_request: dict, submission: Optional[dict] = None) -> dict:
@@ -261,6 +314,17 @@ class PayoutInformationSubmission(BaseModel):
         return digits
 
 
+class PayoutAttorneyRelease(BaseModel):
+    attorney_profile_id: Optional[str] = None
+
+
+class PayoutPaymentMarkedSent(BaseModel):
+    payment_amount: Optional[float] = Field(default=None, ge=0, le=100000000)
+    payment_sent_at: Optional[datetime] = None
+    payment_reference: Optional[str] = Field(default=None, max_length=180)
+    payment_note: Optional[str] = Field(default=None, max_length=1000)
+
+
 @router.get("/payout-information-requests")
 async def list_all_visible_payout_information_requests(authorization: str = Header(...)):
     """Return the current staff member's authorized payout request inbox.
@@ -279,6 +343,7 @@ async def list_all_visible_payout_information_requests(authorization: str = Head
     visible = []
     case_ids = set()
     client_ids = set()
+    is_owner = _is_owner_reviewer(supabase, profile)
     for row in rows:
         try:
             _authorized_staff_for_request(supabase, row, profile)
@@ -287,7 +352,7 @@ async def list_all_visible_payout_information_requests(authorization: str = Head
                 continue
             raise
         summary = _safe_summary(row, _submission_for_request(supabase, row["id"]))
-        visible.append(summary)
+        visible.append(_append_payment_access(summary, _payment_access_for_request(supabase, row["id"]), profile, is_owner))
         if row.get("case_id"):
             case_ids.add(row["case_id"])
         if row.get("client_id"):
@@ -333,6 +398,7 @@ async def list_payout_information_requests(case_id: str, authorization: str = He
         return [_safe_summary(row) for row in rows]
 
     visible = []
+    is_owner = _is_owner_reviewer(supabase, profile)
     for row in rows:
         try:
             _authorized_staff_for_request(supabase, row, profile)
@@ -340,7 +406,8 @@ async def list_payout_information_requests(case_id: str, authorization: str = He
             if exc.status_code == status.HTTP_403_FORBIDDEN:
                 continue
             raise
-        visible.append(_safe_summary(row, _submission_for_request(supabase, row["id"])))
+        summary = _safe_summary(row, _submission_for_request(supabase, row["id"]))
+        visible.append(_append_payment_access(summary, _payment_access_for_request(supabase, row["id"]), profile, is_owner))
     return visible
 
 
@@ -568,7 +635,8 @@ async def get_payout_information_request(payout_request_id: str, authorization: 
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this payout-information request.")
         return _safe_summary(payout_request)
     _authorized_staff_for_request(supabase, payout_request, profile)
-    return _safe_summary(payout_request, _submission_for_request(supabase, payout_request_id))
+    summary = _safe_summary(payout_request, _submission_for_request(supabase, payout_request_id))
+    return _append_payment_access(summary, _payment_access_for_request(supabase, payout_request_id), profile, _is_owner_reviewer(supabase, profile))
 
 
 @router.post("/payout-information-requests/{payout_request_id}/reveal")
@@ -628,3 +696,155 @@ async def cancel_payout_information_request(payout_request_id: str, authorizatio
     now = _now()
     supabase.table("client_payout_information_requests").update({"status": "cancelled", "updated_at": now}).eq("id", payout_request_id).execute()
     return {"id": payout_request_id, "status": "cancelled"}
+
+
+@router.post("/payout-information-requests/{payout_request_id}/release-to-attorney")
+async def release_payout_information_to_attorney(
+    payout_request_id: str,
+    body: PayoutAttorneyRelease,
+    request: Request,
+    authorization: str = Header(...),
+):
+    """Owner-only release of a completed bank form to one attorney profile."""
+    profile = await _current_profile(authorization)
+    _require_staff(profile)
+    supabase = get_supabase()
+    if not _is_owner_reviewer(supabase, profile):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the LegalFlow owner can release payment details to an attorney.")
+
+    payout_request = _request_or_404(supabase, payout_request_id)
+    if payout_request.get("status") != "completed" or not _submission_for_request(supabase, payout_request_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only a submitted banking form can be released for payment.")
+
+    attorney_profile_id = body.attorney_profile_id or _case_assigned_attorney_id(supabase, payout_request["client_id"])
+    if not attorney_profile_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assign an attorney to this client before releasing payment details.")
+    target_result = (
+        supabase.table("profiles")
+        .select("id,full_name,email,role")
+        .eq("id", attorney_profile_id)
+        .limit(1)
+        .execute()
+    )
+    attorney = (target_result.data or [None])[0]
+    if not attorney or attorney.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select an active LegalFlow attorney or staff attorney.")
+
+    now = _now()
+    existing = _payment_access_for_request(supabase, payout_request_id)
+    payload = {
+        "request_id": payout_request_id,
+        "attorney_profile_id": attorney_profile_id,
+        "released_by": profile["id"],
+        "released_at": now,
+        "status": "released",
+        "revoked_at": None,
+        "revoked_by": None,
+        "payment_amount": None,
+        "payment_sent_at": None,
+        "payment_reference": None,
+        "payment_note": None,
+        "payment_marked_by": None,
+        "payment_marked_at": None,
+        "updated_at": now,
+    }
+    if existing:
+        supabase.table("payout_attorney_payment_access").update(payload).eq("id", existing["id"]).execute()
+    else:
+        payload["id"] = str(uuid.uuid4())
+        supabase.table("payout_attorney_payment_access").insert(payload).execute()
+
+    actor_ip, ip_source = _audit_client_ip(request)
+    supabase.table("payout_information_access_audit").insert({
+        "id": str(uuid.uuid4()), "request_id": payout_request_id, "actor_id": profile["id"],
+        "action": "released_to_attorney", "actor_ip": actor_ip, "ip_source": ip_source, "created_at": now,
+    }).execute()
+
+    if attorney.get("email"):
+        try:
+            case = _case_or_404(supabase, payout_request["case_id"])
+            client_result = supabase.table("profiles").select("full_name").eq("id", payout_request["client_id"]).limit(1).execute()
+            client_name = ((client_result.data or [{}])[0].get("full_name") or "Client")
+            await send_email(
+                to=attorney["email"],
+                subject=f"Payment details released: {client_name}",
+                body=(
+                    f"<p>Hello {escape(str(attorney.get('full_name') or 'Attorney'))},</p>"
+                    f"<p>Gary Mitchell has released secure payout details for <strong>{escape(str(client_name))}</strong>"
+                    f" ({escape(str(case.get('case_number') or 'case'))}).</p>"
+                    "<p>Sign in to LegalFlow, open <strong>E-Signatures → Banking Forms</strong>, and use the audited secure view. "
+                    "For security, this email contains no bank routing or account information.</p>"
+                ),
+                idempotency_key=f"payout-release:{payout_request_id}:{attorney_profile_id}:{now}",
+            )
+        except Exception:
+            logger.exception("Payment release notification failed for %s", payout_request_id)
+
+    summary = _safe_summary(payout_request, _submission_for_request(supabase, payout_request_id))
+    return _append_payment_access(summary, _payment_access_for_request(supabase, payout_request_id), profile, True)
+
+
+@router.post("/payout-information-requests/{payout_request_id}/revoke-attorney-access")
+async def revoke_payout_information_attorney_access(
+    payout_request_id: str,
+    request: Request,
+    authorization: str = Header(...),
+):
+    """Owner-only revocation of an attorney's payment-detail access."""
+    profile = await _current_profile(authorization)
+    _require_staff(profile)
+    supabase = get_supabase()
+    if not _is_owner_reviewer(supabase, profile):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the LegalFlow owner can revoke payment-detail access.")
+    payout_request = _request_or_404(supabase, payout_request_id)
+    payment_access = _payment_access_for_request(supabase, payout_request_id)
+    if not payment_access or payment_access.get("status") not in {"released", "payment_marked_sent"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There is no active attorney payment access to revoke.")
+    now = _now()
+    supabase.table("payout_attorney_payment_access").update({
+        "status": "revoked", "revoked_at": now, "revoked_by": profile["id"], "updated_at": now,
+    }).eq("id", payment_access["id"]).execute()
+    actor_ip, ip_source = _audit_client_ip(request)
+    supabase.table("payout_information_access_audit").insert({
+        "id": str(uuid.uuid4()), "request_id": payout_request_id, "actor_id": profile["id"],
+        "action": "release_revoked", "actor_ip": actor_ip, "ip_source": ip_source, "created_at": now,
+    }).execute()
+    summary = _safe_summary(payout_request, _submission_for_request(supabase, payout_request_id))
+    return _append_payment_access(summary, _payment_access_for_request(supabase, payout_request_id), profile, True)
+
+
+@router.post("/payout-information-requests/{payout_request_id}/mark-payment-sent")
+async def mark_payout_payment_sent(
+    payout_request_id: str,
+    body: PayoutPaymentMarkedSent,
+    request: Request,
+    authorization: str = Header(...),
+):
+    """Record an external payment after the released attorney has paid the client."""
+    profile = await _current_profile(authorization)
+    _require_staff(profile)
+    supabase = get_supabase()
+    payout_request = _request_or_404(supabase, payout_request_id)
+    payment_access = _payment_access_for_request(supabase, payout_request_id)
+    if not payment_access or payment_access.get("status") != "released" or payment_access.get("attorney_profile_id") != profile.get("id"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the attorney with active released payment access can mark this payment sent.")
+
+    now = _now()
+    sent_at = (body.payment_sent_at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    supabase.table("payout_attorney_payment_access").update({
+        "status": "payment_marked_sent",
+        "payment_amount": body.payment_amount,
+        "payment_sent_at": sent_at,
+        "payment_reference": (body.payment_reference or "").strip() or None,
+        "payment_note": (body.payment_note or "").strip() or None,
+        "payment_marked_by": profile["id"],
+        "payment_marked_at": now,
+        "updated_at": now,
+    }).eq("id", payment_access["id"]).execute()
+    actor_ip, ip_source = _audit_client_ip(request)
+    supabase.table("payout_information_access_audit").insert({
+        "id": str(uuid.uuid4()), "request_id": payout_request_id, "actor_id": profile["id"],
+        "action": "payment_marked_sent", "actor_ip": actor_ip, "ip_source": ip_source, "created_at": now,
+    }).execute()
+    summary = _safe_summary(payout_request, _submission_for_request(supabase, payout_request_id))
+    return _append_payment_access(summary, _payment_access_for_request(supabase, payout_request_id), profile, False)
