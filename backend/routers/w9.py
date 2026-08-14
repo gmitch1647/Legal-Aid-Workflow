@@ -422,46 +422,60 @@ def _decode_signature(signature_data: str) -> bytes:
     return payload
 
 
-def _fit_signature_image(signature_bytes: bytes, target_rect):
-    """Trim blank canvas and fit an e-signature inside the official W-9 line."""
-    import fitz
+def _visible_signature_image(signature_bytes: bytes):
+    """Return a decoded signature image and its visible-ink bounds, or fail closed.
+
+    A client can submit a syntactically valid PNG that is entirely transparent or
+    white. Previously that produced a completed W-9 with no visible signature.
+    The public completion flow must reject such a payload before it creates a
+    certification record or stores the finished PDF.
+    """
     from PIL import Image
 
-    field_rect = fitz.Rect(target_rect)
     try:
         image = Image.open(io.BytesIO(signature_bytes)).convert("RGBA")
-        alpha_aware = Image.new("L", image.size, 0)
-        alpha_aware.putdata([
+        ink = Image.new("L", image.size, 0)
+        ink.putdata([
             255 if alpha > 16 and (red < 245 or green < 245 or blue < 245) else 0
             for red, green, blue, alpha in image.getdata()
         ])
-        bounds = alpha_aware.getbbox()
-        if bounds:
-            left, top, right, bottom = bounds
-            pad = max(3, round(min(image.size) * 0.04))
-            image = image.crop((
-                max(0, left - pad),
-                max(0, top - pad),
-                min(image.width, right + pad),
-                min(image.height, bottom + pad),
-            ))
-        width, height = image.size
-        available_width = max(20, field_rect.width - 12)
-        available_height = max(12, field_rect.height - 5)
-        scale = min(available_width / width, available_height / height)
-        rendered_width, rendered_height = width * scale, height * scale
-        rendered = fitz.Rect(
-            field_rect.x0 + (field_rect.width - rendered_width) / 2,
-            field_rect.y0 + (field_rect.height - rendered_height) / 2,
-            field_rect.x0 + (field_rect.width + rendered_width) / 2,
-            field_rect.y0 + (field_rect.height + rendered_height) / 2,
-        )
-        output = io.BytesIO()
-        image.save(output, format="PNG")
-        return output.getvalue(), rendered
+        bounds = ink.getbbox()
     except Exception as exc:
-        logger.warning("W-9 signature fitting failed; using full field: %s", exc)
-        return signature_bytes, field_rect
+        raise HTTPException(status_code=400, detail="Please provide a valid signature image.") from exc
+
+    if not bounds:
+        raise HTTPException(status_code=422, detail="Your signature was blank. Please draw or type your signature before submitting the Form W-9.")
+    return image, bounds
+
+
+def _fit_signature_image(signature_bytes: bytes, target_rect):
+    """Trim visible ink and fit an e-signature inside the official W-9 line."""
+    import fitz
+
+    field_rect = fitz.Rect(target_rect)
+    image, bounds = _visible_signature_image(signature_bytes)
+    left, top, right, bottom = bounds
+    pad = max(3, round(min(image.size) * 0.04))
+    image = image.crop((
+        max(0, left - pad),
+        max(0, top - pad),
+        min(image.width, right + pad),
+        min(image.height, bottom + pad),
+    ))
+    width, height = image.size
+    available_width = max(20, field_rect.width - 12)
+    available_height = max(12, field_rect.height - 5)
+    scale = min(available_width / width, available_height / height)
+    rendered_width, rendered_height = width * scale, height * scale
+    rendered = fitz.Rect(
+        field_rect.x0 + (field_rect.width - rendered_width) / 2,
+        field_rect.y0 + (field_rect.height - rendered_height) / 2,
+        field_rect.x0 + (field_rect.width + rendered_width) / 2,
+        field_rect.y0 + (field_rect.height + rendered_height) / 2,
+    )
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue(), rendered
 
 
 def _write_text_in_rect(
@@ -958,6 +972,7 @@ async def complete_w9_request(token: str, payload: W9PublicSubmission, request: 
     cipher = _cipher()
     submission = _resolve_w9_submission(request_row, payload, cipher)
     signature_bytes = _decode_signature(submission.signature)
+    _visible_signature_image(signature_bytes)
 
     # Generate the document before writing sensitive database values. No TIN is
     # logged, returned, or kept in server-side request state after this handler.
@@ -1108,6 +1123,78 @@ async def notify_w9_signer(request_id: str, authorization: str = Header(default=
 
     supabase.table("w9_requests").update({"updated_at": _iso_now()}).eq("id", request_id).execute()
     return {"status": "sent", "message": "The secure W-9 signing notification was sent."}
+
+
+@router.post("/attorney/requests/{request_id}/correct-signature")
+async def create_corrected_w9_signature_request(request_id: str, authorization: str = Header(default=None)):
+    """Issue a new signature request without overwriting an already completed W-9.
+
+    The original PDF and audit record remain intact. The replacement request
+    reuses only the encrypted prefill required for the signer to complete a new
+    certification, and is linked to the original request for review history.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+    original = _owned_w9_request(supabase, request_id, profile)
+    if original.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="Only a completed W-9 can be corrected with a new signature request.")
+
+    submission_result = (
+        supabase.table("w9_submissions")
+        .select("legal_name,tin_ciphertext,tin_type,tin_last4")
+        .eq("request_id", request_id)
+        .limit(1)
+        .execute()
+    )
+    if not submission_result.data:
+        raise HTTPException(status_code=404, detail="The completed W-9 data needed for a corrected request could not be found.")
+    submission = submission_result.data[0]
+
+    now = _now()
+    replacement = {
+        "id": str(uuid.uuid4()),
+        "token": _token(),
+        "title": "Corrected Form W-9 — Signature Required",
+        "signer_name": original["signer_name"],
+        "signer_email": original["signer_email"],
+        "case_id": original.get("case_id"),
+        "client_id": original.get("client_id"),
+        "sent_by": profile["id"],
+        "attorney_name": profile.get("full_name", ""),
+        "message": "Please complete and sign this corrected Form W-9. Your earlier form was retained for the record, but the signature image did not render correctly.",
+        "prefilled_legal_name": submission.get("legal_name"),
+        "prefilled_tin_ciphertext": submission.get("tin_ciphertext"),
+        "prefilled_tin_type": submission.get("tin_type"),
+        "prefilled_tin_last4": submission.get("tin_last4"),
+        "prefill_sources": {
+            "legal_name": {"kind": "prior_completed_w9"},
+            "tin": {"kind": "prior_completed_w9"},
+        },
+        "corrects_request_id": request_id,
+        "status": "awaiting_submission",
+        "expires_at": (now + timedelta(days=DEFAULT_EXPIRY_DAYS)).isoformat(),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    try:
+        supabase.table("w9_requests").insert(replacement).execute()
+    except Exception as exc:
+        logger.exception("Could not create corrected W-9 signature request")
+        raise HTTPException(status_code=500, detail="Could not create the corrected W-9 request.") from exc
+
+    notification_sent = False
+    try:
+        notification_sent = await _send_w9_signing_notification(replacement)
+    except Exception:
+        logger.exception("Corrected W-9 request was created but the notification email could not be sent")
+
+    return {
+        "id": replacement["id"],
+        "status": replacement["status"],
+        "expires_at": replacement["expires_at"],
+        "notification_sent": notification_sent,
+    }
 
 
 @router.get("/attorney/requests/{request_id}")

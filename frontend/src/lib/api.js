@@ -1387,6 +1387,10 @@ export async function notifyW9Signer(id) {
   return request(`/w9/attorney/requests/${id}/notify`, { method: 'POST' });
 }
 
+export async function createCorrectedW9SignatureRequest(id) {
+  return request(`/w9/attorney/requests/${id}/correct-signature`, { method: 'POST' });
+}
+
 export async function downloadCompletedW9(id) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/w9/attorney/requests/${id}/download`, {

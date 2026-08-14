@@ -111,6 +111,17 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertLessEqual(fitted_rect.y1, field.y1)
         self.assertGreater(fitted_rect.height, 10)
 
+    def test_blank_signature_image_is_rejected_before_w9_completion(self):
+        image = Image.new("RGBA", (600, 180), "white")
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+
+        with self.assertRaises(w9.HTTPException) as raised:
+            w9._visible_signature_image(output.getvalue())
+
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIn("blank", raised.exception.detail.lower())
+
     def test_official_pdf_contains_completed_fields_but_no_audit_ip(self):
         submission = self._submission()
         pdf = w9._render_official_w9(submission, self._signature_png())
