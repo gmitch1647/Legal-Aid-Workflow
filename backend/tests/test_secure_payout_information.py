@@ -263,8 +263,25 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertEqual(access["attorney_profile_id"], "attorney-1")
         self.assertEqual(access["released_by"], "owner-1")
         self.assertEqual(access["status"], "released")
+        self.assertFalse(released["payment_access"]["can_release"])
         self.assertTrue(released["payment_access"]["can_revoke"])
         self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[-1]["action"], "released_to_attorney")
+
+    def test_release_notifies_assigned_attorney_without_bank_numbers(self):
+        supabase = _Supabase()
+        self._complete_request(supabase)
+        get_supabase, current_profile, encryption = self._patches(supabase, {"id": "owner-1", "role": "attorney"})
+        with get_supabase, current_profile, encryption, patch.object(payout_information, "send_email", new=AsyncMock()) as send_email:
+            asyncio.run(payout_information.release_payout_information_to_attorney(
+                "request-1", payout_information.PayoutAttorneyRelease(), _request(), "Bearer owner"
+            ))
+
+        send_email.assert_awaited_once()
+        email = send_email.await_args.kwargs
+        self.assertEqual(email["to"], "attorney@example.test")
+        self.assertIn("Payment details released", email["subject"])
+        self.assertNotIn("021000021", email["body"])
+        self.assertNotIn("123456789012", email["body"])
 
     def test_non_owner_cannot_release_completed_form(self):
         supabase = _Supabase()

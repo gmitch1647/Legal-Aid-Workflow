@@ -171,7 +171,7 @@ def _append_payment_access(summary: dict, payment_access: Optional[dict], profil
         "attorney_profile_id": payment_access.get("attorney_profile_id") if payment_access else None,
         "released_at": payment_access.get("released_at") if payment_access else None,
         "released_to_current_user": bool(payment_access and payment_access.get("attorney_profile_id") == profile.get("id") and status_value in {"released", "payment_marked_sent"}),
-        "can_release": bool(is_owner and summary.get("status") == "completed"),
+        "can_release": bool(is_owner and summary.get("status") == "completed" and status_value in {None, "revoked"}),
         "can_revoke": bool(is_owner and status_value in {"released", "payment_marked_sent"}),
         "can_mark_payment_sent": bool(payment_access and payment_access.get("attorney_profile_id") == profile.get("id") and status_value == "released"),
         "payment_amount": payment_access.get("payment_amount") if payment_access else None,
