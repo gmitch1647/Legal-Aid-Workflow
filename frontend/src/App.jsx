@@ -22,6 +22,7 @@ import {
   DollarSign,
   BarChart3,
   FileSignature,
+  FolderSync,
   Search,
   UserRound,
 } from 'lucide-react';
@@ -68,6 +69,7 @@ const ClosingStatements = React.lazy(() => import('./pages/attorney/ClosingState
 const SettlementCenter = React.lazy(() => import('./pages/attorney/SettlementCenter'));
 const AttorneyPayouts = React.lazy(() => import('./pages/attorney/AttorneyPayouts'));
 const PayoutOverview = React.lazy(() => import('./pages/attorney/PayoutOverview'));
+const DocumentExchange = React.lazy(() => import('./pages/attorney/DocumentExchange'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -602,6 +604,7 @@ const allAttorneyLinks = [
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/document-exchange', label: 'Document Exchange', icon: FolderSync, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
@@ -698,6 +701,7 @@ export default function App() {
             <Route path="draft" element={<DraftComplaint />} />
             <Route path="disputes" element={<DisputeLetters />} />
             <Route path="esign" element={<ESignatures />} />
+            <Route path="document-exchange" element={<DocumentExchange />} />
             <Route path="w9" element={<W9Requests />} />
             <Route path="closing-statements" element={<ClosingStatements />} />
             <Route path="settlements" element={<SettlementCenter />} />
