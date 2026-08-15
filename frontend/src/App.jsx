@@ -20,6 +20,7 @@ import {
   PenLine,
   FileKey,
   DollarSign,
+  BarChart3,
   FileSignature,
   Search,
   UserRound,
@@ -66,6 +67,7 @@ const W9Requests = React.lazy(() => import('./pages/attorney/W9Requests'));
 const ClosingStatements = React.lazy(() => import('./pages/attorney/ClosingStatements'));
 const SettlementCenter = React.lazy(() => import('./pages/attorney/SettlementCenter'));
 const AttorneyPayouts = React.lazy(() => import('./pages/attorney/AttorneyPayouts'));
+const PayoutOverview = React.lazy(() => import('./pages/attorney/PayoutOverview'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -603,6 +605,7 @@ const allAttorneyLinks = [
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/payout-overview', label: 'Payout Overview', icon: BarChart3, roles: ['attorney'] },
   { to: '/attorney/commissions', label: 'Commissions', icon: DollarSign, roles: ['attorney'] },
   { to: '/attorney/payouts', label: 'Attorney Payouts', icon: DollarSign, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/forms', label: 'Forms', icon: FileText, roles: ['attorney'] },
@@ -702,6 +705,7 @@ export default function App() {
             <Route path="cases/:id" element={<CaseDetail />} />
             <Route path="agents" element={<AgentChat />} />
             <Route path="calendar" element={<CalendarPage />} />
+            <Route path="payout-overview" element={<PayoutOverview />} />
             <Route path="commissions" element={<CommissionsPage />} />
             <Route path="payouts" element={<AttorneyPayouts />} />
             <Route path="forms" element={<FormsPage />} />
