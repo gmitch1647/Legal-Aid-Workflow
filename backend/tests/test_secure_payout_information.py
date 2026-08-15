@@ -76,7 +76,7 @@ class _Supabase:
         self.tables = {
             "cases": _Query([{"id": "case-1", "client_id": "client-1", "case_number": "1:26-cv-1", "plaintiff_name": "Client"}]),
             "profiles": _Query([
-                {"id": "client-1", "full_name": "Client", "email": "client@example.test", "assigned_attorney_id": "attorney-1", "role": "client"},
+                {"id": "client-1", "full_name": "Client", "email": "client@example.test", "address": "12 Main Street, Atlanta, GA 30303", "assigned_attorney_id": "attorney-1", "role": "client"},
                 {"id": "owner-1", "full_name": "Gary Mitchell", "email": "gary@example.test", "role": "attorney"},
                 {"id": "attorney-1", "full_name": "Attorney", "email": "attorney@example.test", "role": "staff_attorney"},
                 {"id": "attorney-2", "full_name": "Other Attorney", "email": "other@example.test", "role": "staff_attorney"},
@@ -112,6 +112,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
 
     def _submit_body(self):
         return payout_information.PayoutInformationSubmission(
+            email="alex.client@example.test",
+            mailing_address="12 Main Street, Atlanta, GA 30303",
             account_holder_name="Alex Client",
             account_ownership="personal",
             account_type="checking",
@@ -143,6 +145,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertEqual(stored["account_ownership"], "personal")
         self.assertNotEqual(stored["routing_number_encrypted"], "021000021")
         self.assertNotEqual(stored["account_number_encrypted"], "123456789012")
+        self.assertNotEqual(stored["email_encrypted"], "alex.client@example.test")
+        self.assertNotEqual(stored["mailing_address_encrypted"], "12 Main Street, Atlanta, GA 30303")
         self.assertNotIn("routing_number", stored)
         self.assertNotIn("account_number", stored)
         self.assertEqual(supabase.tables["client_payout_information_requests"].rows[0]["status"], "completed")
@@ -151,6 +155,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
     def test_account_holder_and_account_ownership_are_required(self):
         with self.assertRaises(ValidationError):
             payout_information.PayoutInformationSubmission(
+                email="alex.client@example.test",
+                mailing_address="12 Main Street, Atlanta, GA 30303",
                 account_holder_name="   ",
                 account_type="checking",
                 routing_number="021000021",
@@ -159,6 +165,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
             )
         with self.assertRaises(ValidationError):
             payout_information.PayoutInformationSubmission(
+                email="alex.client@example.test",
+                mailing_address="12 Main Street, Atlanta, GA 30303",
                 account_holder_name="Alex Client",
                 account_type="checking",
                 routing_number="021000021",
@@ -185,6 +193,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertEqual(revealed["account_ownership"], "personal")
         self.assertEqual(revealed["routing_number"], "021000021")
         self.assertEqual(revealed["account_number"], "123456789012")
+        self.assertEqual(revealed["email"], "alex.client@example.test")
+        self.assertEqual(revealed["mailing_address"], "12 Main Street, Atlanta, GA 30303")
         self.assertEqual(supabase.tables["payout_information_access_audit"].inserted[-1]["action"], "revealed")
 
     def test_other_attorney_cannot_reveal_or_get_submission_details(self):
@@ -212,6 +222,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
 
         stored = supabase.tables["client_payout_information_submissions"].inserted[0]
         self.assertEqual(form_data["status"], "requested")
+        self.assertEqual(form_data["prefill"]["email"], "client@example.test")
+        self.assertEqual(form_data["prefill"]["mailing_address"], "12 Main Street, Atlanta, GA 30303")
         self.assertEqual(result["status"], "completed")
         self.assertIsNone(supabase.tables["payout_information_access_audit"].inserted[0]["actor_id"])
         self.assertNotEqual(stored["routing_number_encrypted"], "021000021")
@@ -240,6 +252,8 @@ class SecurePayoutInformationTests(unittest.TestCase):
         self.assertNotIn("123456789012", encoded)
         self.assertNotIn("routing_number_encrypted", encoded)
         self.assertNotIn("account_number_encrypted", encoded)
+        self.assertNotIn("email_encrypted", encoded)
+        self.assertNotIn("mailing_address_encrypted", encoded)
 
     def _complete_request(self, supabase):
         get_supabase, current_profile, encryption = self._patches(supabase, {"id": "client-1", "role": "client"})

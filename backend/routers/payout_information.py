@@ -281,10 +281,28 @@ class PayoutInformationRequestCreate(BaseModel):
 
 
 class PayoutInformationSubmission(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    mailing_address: str = Field(min_length=6, max_length=500)
     account_holder_name: str = Field(min_length=2, max_length=160)
     account_ownership: Literal["personal", "business"]
     account_type: Literal["checking", "savings"]
     bank_name: Optional[str] = Field(default=None, max_length=160)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        email = value.strip().lower()
+        if "@" not in email or email.startswith("@") or email.endswith("@"):
+            raise ValueError("Enter a valid email address.")
+        return email
+
+    @field_validator("mailing_address")
+    @classmethod
+    def validate_mailing_address(cls, value: str) -> str:
+        address = " ".join(value.strip().split())
+        if len(address) < 6:
+            raise ValueError("Enter your complete mailing address.")
+        return address
 
     @field_validator("account_holder_name")
     @classmethod
@@ -483,10 +501,18 @@ async def create_payout_information_request(
 
 @router.get("/public/payout-information/{token}")
 async def get_public_payout_information_form(token: str):
-    """Load minimal, non-sensitive form metadata through an expiring bearer link."""
+    """Load minimal form metadata and profile-based contact prefills through an expiring bearer link."""
     supabase = get_supabase()
     payout_request = _public_request_for_token(supabase, token, allow_completed=True)
     submission = _submission_for_request(supabase, payout_request["id"])
+    client_result = (
+        supabase.table("profiles")
+        .select("email,address")
+        .eq("id", payout_request["client_id"])
+        .limit(1)
+        .execute()
+    )
+    client = (client_result.data or [{}])[0]
     return {
         "status": payout_request.get("status"),
         "message": payout_request.get("message"),
@@ -494,6 +520,10 @@ async def get_public_payout_information_form(token: str):
         "expires_at": payout_request.get("expires_at"),
         "submitted_at": submission.get("submitted_at") if submission else None,
         "account_number_last4": submission.get("account_number_last4") if submission else None,
+        "prefill": {
+            "email": str(client.get("email") or "").strip(),
+            "mailing_address": str(client.get("address") or "").strip(),
+        },
     }
 
 
@@ -518,6 +548,8 @@ async def submit_public_payout_information(
     submission_payload = {
         "id": str(uuid.uuid4()),
         "request_id": payout_request["id"],
+        "email_encrypted": _encrypt(body.email),
+        "mailing_address_encrypted": _encrypt(body.mailing_address),
         "account_holder_name": body.account_holder_name,
         "account_ownership": body.account_ownership,
         "account_type": body.account_type,
@@ -587,6 +619,8 @@ async def submit_payout_information(
     submission_payload = {
         "id": str(uuid.uuid4()),
         "request_id": payout_request_id,
+        "email_encrypted": _encrypt(body.email),
+        "mailing_address_encrypted": _encrypt(body.mailing_address),
         "account_holder_name": body.account_holder_name,
         "account_ownership": body.account_ownership,
         "account_type": body.account_type,
@@ -678,6 +712,8 @@ async def reveal_payout_information(
         "routing_number": _decrypt(submission["routing_number_encrypted"]),
         "account_number": _decrypt(submission["account_number_encrypted"]),
         "account_number_last4": submission.get("account_number_last4"),
+        "email": _decrypt(submission["email_encrypted"]) if submission.get("email_encrypted") else None,
+        "mailing_address": _decrypt(submission["mailing_address_encrypted"]) if submission.get("mailing_address_encrypted") else None,
         "submitted_at": submission.get("submitted_at"),
         "revealed_at": now,
     }
