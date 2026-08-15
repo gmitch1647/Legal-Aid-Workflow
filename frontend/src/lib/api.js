@@ -266,6 +266,17 @@ export async function deleteDocument(caseId, docId) {
   return request(`/cases/${caseId}/documents/${docId}`, { method: 'DELETE' });
 }
 
+export async function getDiscoveryDocumentDeliveries(caseId) {
+  return request(`/cases/${caseId}/discovery-deliveries`);
+}
+
+export async function sendDiscoveryDocumentsToAttorney(caseId, documentIds, message = '') {
+  return request(`/cases/${caseId}/discovery-deliveries`, {
+    method: 'POST',
+    body: JSON.stringify({ document_ids: documentIds, message: message || null }),
+  });
+}
+
 export async function getDocumentRequests(caseId) {
   return request(`/cases/${caseId}/document-requests`);
 }

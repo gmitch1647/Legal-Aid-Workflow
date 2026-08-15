@@ -7,12 +7,17 @@ Handles file upload to Supabase Storage and metadata tracking in the
 
 import logging
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime, timezone
+from html import escape
+from typing import Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
+from utils.email_service import send_email
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -20,6 +25,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 STORAGE_BUCKET = "documents"
+STAFF_ROLES = {"attorney", "staff_attorney"}
+MAX_DISCOVERY_DELIVERY_FILES = 10
+MAX_DISCOVERY_DELIVERY_BYTES = 20 * 1024 * 1024
+
+
+class DiscoveryDocumentDeliveryPayload(BaseModel):
+    document_ids: list[str] = Field(min_length=1, max_length=MAX_DISCOVERY_DELIVERY_FILES)
+    message: Optional[str] = Field(default=None, max_length=2000)
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +44,12 @@ async def _get_current_user(authorization: str) -> dict:
     """Delegate to the shared auth helper in cases.py (auto-creates profile)."""
     from routers.cases import get_current_user as _shared
     return await _shared(authorization)
+
+
+def _require_staff(profile: dict) -> None:
+    if profile.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Attorney or staff access required.")
+
 
 def _fetch_case_with_access(case_id: str, profile: dict) -> dict:
     """Fetch a case and verify the caller has access."""
@@ -524,3 +543,200 @@ async def delete_document(case_id: str, doc_id: str, authorization: str = Header
     supabase.table("case_documents").delete().eq("id", doc_id).execute()
 
     return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Discovery delivery — user-confirmed selected-document delivery to the
+# case's assigned attorney. Files are attached directly; no expiring links or
+# sensitive PII categories are exposed through this workflow.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cases/{case_id}/discovery-deliveries")
+async def list_discovery_document_deliveries(case_id: str, authorization: str = Header(...)):
+    profile = await _get_current_user(authorization)
+    _require_staff(profile)
+    _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+    response = (
+        supabase.table("discovery_document_deliveries")
+        .select("*")
+        .eq("case_id", case_id)
+        .order("created_at", desc=True)
+        .limit(100)
+        .execute()
+    )
+    deliveries = response.data or []
+    delivery_ids = [item["id"] for item in deliveries if item.get("id")]
+    items_by_delivery: dict[str, list[dict]] = {}
+    if delivery_ids:
+        item_response = (
+            supabase.table("discovery_document_delivery_items")
+            .select("delivery_id,case_document_id,file_name")
+            .in_("delivery_id", delivery_ids)
+            .execute()
+        )
+        for item in item_response.data or []:
+            items_by_delivery.setdefault(str(item.get("delivery_id")), []).append(item)
+    for delivery in deliveries:
+        delivery["items"] = items_by_delivery.get(str(delivery.get("id")), [])
+        delivery["document_count"] = len(delivery["items"])
+    return deliveries
+
+
+@router.post("/cases/{case_id}/discovery-deliveries", status_code=status.HTTP_201_CREATED)
+async def deliver_discovery_documents_to_assigned_attorney(
+    case_id: str,
+    payload: DiscoveryDocumentDeliveryPayload,
+    authorization: str = Header(...),
+):
+    """Attach selected discovery files to an assigned attorney's LegalFlow email.
+
+    This is a user-confirmed action. Every send creates a fresh audit row so a
+    user may resend later if needed; account, W-9, PII, and non-discovery files
+    are intentionally excluded from this email workflow.
+    """
+    profile = await _get_current_user(authorization)
+    _require_staff(profile)
+    case = _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+
+    client_response = (
+        supabase.table("profiles")
+        .select("id,full_name,assigned_attorney_id")
+        .eq("id", case["client_id"])
+        .limit(1)
+        .execute()
+    )
+    client = (client_response.data or [None])[0]
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client profile not found for this case.")
+    attorney_id = client.get("assigned_attorney_id")
+    if not attorney_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assign an attorney to this client before sending discovery documents.")
+    attorney_response = (
+        supabase.table("profiles")
+        .select("id,full_name,email,role")
+        .eq("id", attorney_id)
+        .limit(1)
+        .execute()
+    )
+    attorney = (attorney_response.data or [None])[0]
+    if not attorney or attorney.get("role") not in STAFF_ROLES or not str(attorney.get("email") or "").strip():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The assigned attorney needs an active LegalFlow email address before discovery can be sent.")
+
+    document_ids = list(dict.fromkeys(str(item).strip() for item in payload.document_ids if str(item).strip()))
+    if not document_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose at least one discovery document to send.")
+    documents_response = (
+        supabase.table("case_documents")
+        .select("id,case_id,file_name,file_type,file_size,storage_path,document_category")
+        .eq("case_id", case_id)
+        .in_("id", document_ids)
+        .execute()
+    )
+    documents = documents_response.data or []
+    if len(documents) != len(document_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more selected discovery documents are no longer available in this case.")
+    invalid_documents = [
+        item.get("file_name") or "Document"
+        for item in documents
+        if str(item.get("document_category") or "").lower() != "discovery" or not item.get("storage_path")
+    ]
+    if invalid_documents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only documents uploaded with the Discovery category can be delivered through this workflow.",
+        )
+    total_bytes = sum(int(item.get("file_size") or 0) for item in documents)
+    if total_bytes > MAX_DISCOVERY_DELIVERY_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected discovery files exceed the 20 MB email attachment limit. Send fewer files in separate deliveries.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    delivery_id = str(uuid.uuid4())
+    clean_message = (payload.message or "").strip() or None
+    delivery_record = {
+        "id": delivery_id,
+        "case_id": case_id,
+        "client_id": client["id"],
+        "recipient_profile_id": attorney["id"],
+        "recipient_email": attorney["email"],
+        "sent_by": profile["id"],
+        "message": clean_message,
+        "status": "sending",
+        "created_at": now,
+        "updated_at": now,
+    }
+    supabase.table("discovery_document_deliveries").insert(delivery_record).execute()
+    supabase.table("discovery_document_delivery_items").insert([
+        {
+            "id": str(uuid.uuid4()),
+            "delivery_id": delivery_id,
+            "case_document_id": item["id"],
+            "file_name": item.get("file_name") or "Discovery document",
+            "created_at": now,
+        }
+        for item in documents
+    ]).execute()
+
+    try:
+        attachments = []
+        for document in documents:
+            document_bytes = supabase.storage.from_(STORAGE_BUCKET).download(document["storage_path"])
+            attachments.append({
+                "filename": document.get("file_name") or "Discovery document",
+                "content": document_bytes,
+            })
+    except Exception as exc:
+        logger.exception("Could not download discovery documents for delivery %s", delivery_id)
+        supabase.table("discovery_document_deliveries").update({
+            "status": "failed",
+            "failure_reason": "One or more selected files could not be retrieved from secure storage.",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", delivery_id).execute()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not retrieve the selected discovery documents for delivery.") from exc
+
+    case_label = str(case.get("case_number") or case.get("plaintiff_name") or "Case")
+    client_name = str(client.get("full_name") or "Client")
+    uploaded_by = str(profile.get("full_name") or "LegalFlow user")
+    custom_note = f"<p><strong>Message from {escape(uploaded_by)}:</strong><br>{escape(clean_message)}</p>" if clean_message else ""
+    document_list = "".join(f"<li>{escape(str(item.get('file_name') or 'Discovery document'))}</li>" for item in documents)
+    delivered = await send_email(
+        to=attorney["email"],
+        subject=f"Discovery documents: {client_name} — {case_label}",
+        body=(
+            "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2937;\">"
+            f"<p>Hello {escape(str(attorney.get('full_name') or 'Attorney'))},</p>"
+            f"<p>Discovery documents for <strong>{escape(client_name)}</strong> in <strong>{escape(case_label)}</strong> were sent to you through LegalFlow.</p>"
+            "<p>The selected files are attached to this email:</p>"
+            f"<ul>{document_list}</ul>"
+            f"{custom_note}"
+            "<p>Please save the attachments to the case file and review them in accordance with your office procedures.</p>"
+            "</div>"
+        ),
+        attachments=attachments,
+        idempotency_key=f"discovery-delivery:{delivery_id}",
+    )
+    if not delivered:
+        supabase.table("discovery_document_deliveries").update({
+            "status": "failed",
+            "failure_reason": "LegalFlow could not deliver the discovery email. Please try sending again.",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", delivery_id).execute()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The discovery email could not be delivered. No documents were sent; you can retry from the case page.")
+
+    sent_at = datetime.now(timezone.utc).isoformat()
+    supabase.table("discovery_document_deliveries").update({
+        "status": "sent",
+        "sent_at": sent_at,
+        "updated_at": sent_at,
+    }).eq("id", delivery_id).execute()
+    return {
+        "id": delivery_id,
+        "status": "sent",
+        "sent_at": sent_at,
+        "recipient_name": attorney.get("full_name") or "Assigned attorney",
+        "recipient_email": attorney["email"],
+        "document_count": len(documents),
+        "documents": [{"id": item["id"], "file_name": item.get("file_name")} for item in documents],
+    }

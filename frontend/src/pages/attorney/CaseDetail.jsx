@@ -67,6 +67,7 @@ import AgentPipelineStatus from '../../components/AgentPipelineStatus';
 import SecureDocumentLink from '../../components/SecureDocumentLink';
 import DocumentRequestPanel from '../../components/DocumentRequestPanel';
 import PayoutInformationPanel from '../../components/PayoutInformationPanel';
+import DiscoveryDeliveryPanel from '../../components/DiscoveryDeliveryPanel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2578,6 +2579,9 @@ export default function CaseDetail() {
 
           {/* Client Document Requests */}
           <DocumentRequestPanel caseId={id} />
+
+          {/* Discovery Delivery */}
+          <DiscoveryDeliveryPanel caseId={id} documents={documents} onRefreshDocuments={fetchDocuments} />
 
           {/* Secure Client Payout Information */}
           <PayoutInformationPanel caseId={id} />
