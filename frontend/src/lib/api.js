@@ -277,6 +277,35 @@ export async function sendDiscoveryDocumentsToAttorney(caseId, documentIds, mess
   });
 }
 
+export async function getDocumentExchanges(caseId) {
+  return request(`/cases/${caseId}/document-exchanges`);
+}
+
+export async function getClientDocumentExchanges(clientId) {
+  return request(`/clients/${clientId}/document-exchanges`);
+}
+
+export async function createDocumentExchange(caseId, data) {
+  return request(`/cases/${caseId}/document-exchanges`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function addDocumentExchangePackage(caseId, threadId, data) {
+  return request(`/cases/${caseId}/document-exchanges/${threadId}/packages`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function addDocumentExchangeComment(caseId, threadId, data) {
+  return request(`/cases/${caseId}/document-exchanges/${threadId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function getDocumentRequests(caseId) {
   return request(`/cases/${caseId}/document-requests`);
 }

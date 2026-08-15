@@ -47,6 +47,7 @@ import {
 } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import SecureDocumentLink from '../../components/SecureDocumentLink';
+import ClientDocumentExchangeOverview from '../../components/ClientDocumentExchangeOverview';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -639,6 +640,9 @@ export default function ClientProfile() {
 
           {/* Credit Reports */}
           <CreditReportSection clientId={id} client={client} />
+
+          {/* Client-wide case-separated collaboration overview */}
+          <ClientDocumentExchangeOverview clientId={id} />
 
           {/* Documents */}
           <DocumentsSection

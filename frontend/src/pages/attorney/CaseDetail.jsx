@@ -68,6 +68,7 @@ import SecureDocumentLink from '../../components/SecureDocumentLink';
 import DocumentRequestPanel from '../../components/DocumentRequestPanel';
 import PayoutInformationPanel from '../../components/PayoutInformationPanel';
 import DiscoveryDeliveryPanel from '../../components/DiscoveryDeliveryPanel';
+import DocumentExchangePanel from '../../components/DocumentExchangePanel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2582,6 +2583,9 @@ export default function CaseDetail() {
 
           {/* Discovery Delivery */}
           <DiscoveryDeliveryPanel caseId={id} documents={documents} onRefreshDocuments={fetchDocuments} />
+
+          {/* Client-separated owner and attorney collaboration */}
+          <DocumentExchangePanel caseId={id} documents={documents} onRefreshDocuments={fetchDocuments} />
 
           {/* Secure Client Payout Information */}
           <PayoutInformationPanel caseId={id} />

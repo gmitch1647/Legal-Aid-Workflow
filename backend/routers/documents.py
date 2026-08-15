@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from html import escape
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.responses import Response
@@ -35,6 +35,54 @@ class DiscoveryDocumentDeliveryPayload(BaseModel):
     message: Optional[str] = Field(default=None, max_length=2000)
 
 
+EXCHANGE_DOCUMENT_TYPES = {
+    "interrogatories",
+    "requests_for_production",
+    "requests_for_admission",
+    "discovery_response",
+    "declaration",
+    "settlement_draft",
+    "court_filing",
+    "other",
+}
+EXCHANGE_PACKAGE_STAGES = {
+    "attorney_draft",
+    "owner_working_copy",
+    "returned_for_review",
+    "final_attorney_version",
+    "filed_served",
+}
+MAX_EXCHANGE_FILES = 20
+
+
+class DocumentExchangeCreatePayload(BaseModel):
+    title: str = Field(min_length=2, max_length=240)
+    document_type: Literal[
+        "interrogatories", "requests_for_production", "requests_for_admission",
+        "discovery_response", "declaration", "settlement_draft", "court_filing", "other",
+    ] = "other"
+    document_ids: list[str] = Field(min_length=1, max_length=MAX_EXCHANGE_FILES)
+    message: Optional[str] = Field(default=None, max_length=4000)
+    stage: Literal[
+        "attorney_draft", "owner_working_copy", "returned_for_review",
+        "final_attorney_version", "filed_served",
+    ] = "attorney_draft"
+
+
+class DocumentExchangePackagePayload(BaseModel):
+    document_ids: list[str] = Field(min_length=1, max_length=MAX_EXCHANGE_FILES)
+    message: Optional[str] = Field(default=None, max_length=4000)
+    stage: Literal[
+        "attorney_draft", "owner_working_copy", "returned_for_review",
+        "final_attorney_version", "filed_served",
+    ] = "returned_for_review"
+
+
+class DocumentExchangeCommentPayload(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+    package_id: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Auth helper
 # ---------------------------------------------------------------------------
@@ -49,6 +97,43 @@ async def _get_current_user(authorization: str) -> dict:
 def _require_staff(profile: dict) -> None:
     if profile.get("role") not in STAFF_ROLES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Attorney or staff access required.")
+
+
+def _owner_reviewer_id(supabase) -> Optional[str]:
+    try:
+        response = (
+            supabase.table("settlement_package_reviewers")
+            .select("owner_profile_id")
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
+        return (response.data or [{}])[0].get("owner_profile_id")
+    except Exception:
+        logger.exception("Could not resolve the active LegalFlow owner reviewer")
+        return None
+
+
+def _document_exchange_participants(supabase, case: dict, profile: dict) -> tuple[dict, dict]:
+    """Return client and active owner, authorizing only owner + the assigned attorney."""
+    _require_staff(profile)
+    client_response = (
+        supabase.table("profiles")
+        .select("id,full_name,assigned_attorney_id")
+        .eq("id", case["client_id"])
+        .limit(1)
+        .execute()
+    )
+    client = (client_response.data or [None])[0]
+    if not client or not client.get("assigned_attorney_id"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assign an attorney to this client before using Document Exchange.")
+    owner_id = _owner_reviewer_id(supabase)
+    if not owner_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Configure the LegalFlow owner before using Document Exchange.")
+    allowed = {str(owner_id), str(client["assigned_attorney_id"])}
+    if str(profile.get("id")) not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the LegalFlow owner and this client's assigned attorney can use this document exchange.")
+    return client, {"id": owner_id}
 
 
 def _fetch_case_with_access(case_id: str, profile: dict) -> dict:
@@ -740,3 +825,375 @@ async def deliver_discovery_documents_to_assigned_attorney(
         "document_count": len(documents),
         "documents": [{"id": item["id"], "file_name": item.get("file_name")} for item in documents],
     }
+
+
+# ---------------------------------------------------------------------------
+# Document Exchange — private, client-separated collaboration between the
+# LegalFlow owner and the case's currently assigned attorney. Documents stay
+# protected in LegalFlow; notification emails carry no document attachments or
+# storage links.
+# ---------------------------------------------------------------------------
+
+
+def _exchange_status_for(sender_id: str, owner_id: str, stage: str) -> str:
+    if stage in {"final_attorney_version", "filed_served"}:
+        return "finalized"
+    return "awaiting_attorney" if str(sender_id) == str(owner_id) else "awaiting_owner"
+
+
+def _recipient_for_exchange(profile_id: str, owner_id: str, attorney_id: str) -> str:
+    return attorney_id if str(profile_id) == str(owner_id) else owner_id
+
+
+def _exchange_thread_or_404(supabase, case_id: str, thread_id: str) -> dict:
+    response = (
+        supabase.table("case_document_exchange_threads")
+        .select("*")
+        .eq("id", thread_id)
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+    )
+    if not response.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document Exchange thread not found in this case.")
+    return response.data[0]
+
+
+def _selected_exchange_documents(supabase, case_id: str, raw_document_ids: list[str]) -> list[dict]:
+    document_ids = list(dict.fromkeys(str(item).strip() for item in raw_document_ids if str(item).strip()))
+    if not document_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose at least one case document for this package.")
+    response = (
+        supabase.table("case_documents")
+        .select("id,case_id,file_name,document_category,storage_path,created_at")
+        .eq("case_id", case_id)
+        .in_("id", document_ids)
+        .execute()
+    )
+    documents = response.data or []
+    if len(documents) != len(document_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more selected documents are no longer available in this case.")
+    restricted = [item.get("file_name") or "Document" for item in documents if str(item.get("document_category") or "").lower() == "pii" or not item.get("storage_path")]
+    if restricted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="PII or unavailable files cannot be sent through Document Exchange. Use the protected PII workflow instead.")
+    return documents
+
+
+async def _notify_document_exchange_recipient(
+    *,
+    recipient: dict,
+    sender: dict,
+    client: dict,
+    case: dict,
+    thread: dict,
+    documents: list[dict],
+    message: Optional[str],
+    version_number: int,
+) -> None:
+    """Best-effort email notice. Documents remain inside LegalFlow."""
+    recipient_email = str(recipient.get("email") or "").strip()
+    if not recipient_email:
+        return
+    frontend_url = os.environ.get("FRONTEND_URL", "https://legalflow.me").rstrip("/")
+    case_url = f"{frontend_url}/attorney/cases/{case['id']}"
+    safe_title = escape(str(thread.get("title") or "Document package"))
+    safe_client = escape(str(client.get("full_name") or "Client"))
+    safe_sender = escape(str(sender.get("full_name") or "LegalFlow user"))
+    safe_case = escape(str(case.get("case_number") or case.get("plaintiff_name") or "Case"))
+    safe_message = escape(str(message or "")).replace("\n", "<br>")
+    document_summary = ", ".join(escape(str(item.get("file_name") or "Document")) for item in documents[:5])
+    if len(documents) > 5:
+        document_summary += f" and {len(documents) - 5} more"
+    note = f"<p><strong>Message:</strong><br>{safe_message}</p>" if safe_message else ""
+    try:
+        await send_email(
+            to=recipient_email,
+            subject=f"Document Exchange: {safe_client} — {safe_title}",
+            body=(
+                "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2937;\">"
+                f"<p>Hello {escape(str(recipient.get('full_name') or 'there'))},</p>"
+                f"<p><strong>{safe_sender}</strong> sent version {version_number} of <strong>{safe_title}</strong> for <strong>{safe_client}</strong> ({safe_case}) in LegalFlow.</p>"
+                f"<p><strong>Documents:</strong> {document_summary}</p>"
+                f"{note}"
+                f"<p><a href=\"{case_url}\" style=\"display:inline-block;background:#334155;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;\">Open Document Exchange</a></p>"
+                "<p style=\"font-size:12px;color:#64748b;\">For security, the documents are not attached to this email. Review and reply from the case workspace in LegalFlow.</p>"
+                "</div>"
+            ),
+            idempotency_key=f"case-document-exchange:{thread['id']}:v{version_number}",
+        )
+    except Exception:
+        logger.exception("Could not send Document Exchange notification for thread %s", thread.get("id"))
+
+
+def _attach_exchange_rows(supabase, threads: list[dict], profile: dict) -> list[dict]:
+    thread_ids = [item["id"] for item in threads if item.get("id")]
+    if not thread_ids:
+        return []
+    packages_response = (
+        supabase.table("case_document_exchange_packages")
+        .select("*")
+        .in_("thread_id", thread_ids)
+        .order("version_number", desc=False)
+        .execute()
+    )
+    packages = packages_response.data or []
+    # A recipient opening the case sees the package as viewed. The thread itself
+    # retains the original sent timestamp for its audit history.
+    unseen_ids = [item["id"] for item in packages if item.get("recipient_id") == profile.get("id") and item.get("status") == "sent"]
+    if unseen_ids:
+        viewed_at = datetime.now(timezone.utc).isoformat()
+        supabase.table("case_document_exchange_packages").update({"status": "viewed", "viewed_at": viewed_at}).in_("id", unseen_ids).execute()
+        for item in packages:
+            if item.get("id") in unseen_ids:
+                item["status"] = "viewed"
+                item["viewed_at"] = viewed_at
+    package_ids = [item["id"] for item in packages if item.get("id")]
+    items_by_package: dict[str, list[dict]] = {}
+    if package_ids:
+        items_response = (
+            supabase.table("case_document_exchange_items")
+            .select("package_id,case_document_id,file_name")
+            .in_("package_id", package_ids)
+            .execute()
+        )
+        for item in items_response.data or []:
+            items_by_package.setdefault(str(item.get("package_id")), []).append(item)
+    comments_response = (
+        supabase.table("case_document_exchange_comments")
+        .select("*")
+        .in_("thread_id", thread_ids)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    comments_by_thread: dict[str, list[dict]] = {}
+    for comment in comments_response.data or []:
+        comments_by_thread.setdefault(str(comment.get("thread_id")), []).append(comment)
+    profile_ids = {str(item.get("sender_id")) for item in packages if item.get("sender_id")}
+    profile_ids.update(str(item.get("author_id")) for item in comments_response.data or [] if item.get("author_id"))
+    profile_names: dict[str, str] = {}
+    if profile_ids:
+        profile_response = supabase.table("profiles").select("id,full_name").in_("id", list(profile_ids)).execute()
+        profile_names = {str(item.get("id")): str(item.get("full_name") or "LegalFlow user") for item in profile_response.data or []}
+    packages_by_thread: dict[str, list[dict]] = {}
+    for package in packages:
+        package["items"] = items_by_package.get(str(package.get("id")), [])
+        package["sender_name"] = profile_names.get(str(package.get("sender_id")), "LegalFlow user")
+        packages_by_thread.setdefault(str(package.get("thread_id")), []).append(package)
+    for thread in threads:
+        thread["packages"] = packages_by_thread.get(str(thread.get("id")), [])
+        thread["comments"] = comments_by_thread.get(str(thread.get("id")), [])
+        for comment in thread["comments"]:
+            comment["author_name"] = profile_names.get(str(comment.get("author_id")), "LegalFlow user")
+    return threads
+
+
+@router.get("/cases/{case_id}/document-exchanges")
+async def list_case_document_exchanges(case_id: str, authorization: str = Header(...)):
+    profile = await _get_current_user(authorization)
+    case = _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+    _document_exchange_participants(supabase, case, profile)
+    response = (
+        supabase.table("case_document_exchange_threads")
+        .select("*")
+        .eq("case_id", case_id)
+        .order("last_activity_at", desc=True)
+        .limit(100)
+        .execute()
+    )
+    threads = _attach_exchange_rows(supabase, response.data or [], profile)
+    return {"threads": threads, "viewer_id": profile.get("id")}
+
+
+@router.post("/cases/{case_id}/document-exchanges", status_code=status.HTTP_201_CREATED)
+async def create_case_document_exchange(
+    case_id: str,
+    payload: DocumentExchangeCreatePayload,
+    authorization: str = Header(...),
+):
+    profile = await _get_current_user(authorization)
+    case = _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+    client, owner = _document_exchange_participants(supabase, case, profile)
+    documents = _selected_exchange_documents(supabase, case_id, payload.document_ids)
+    recipient_id = _recipient_for_exchange(profile["id"], owner["id"], client["assigned_attorney_id"])
+    recipient_response = supabase.table("profiles").select("id,full_name,email,role").eq("id", recipient_id).limit(1).execute()
+    recipient = (recipient_response.data or [None])[0]
+    if not recipient:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The other Document Exchange participant is unavailable.")
+    now = datetime.now(timezone.utc).isoformat()
+    thread_id = str(uuid.uuid4())
+    package_id = str(uuid.uuid4())
+    clean_title = payload.title.strip()
+    clean_message = (payload.message or "").strip() or None
+    thread = {
+        "id": thread_id,
+        "case_id": case_id,
+        "client_id": client["id"],
+        "assigned_attorney_id": client["assigned_attorney_id"],
+        "title": clean_title,
+        "document_type": payload.document_type,
+        "status": _exchange_status_for(profile["id"], owner["id"], payload.stage),
+        "created_by": profile["id"],
+        "last_activity_at": now,
+        "created_at": now,
+        "updated_at": now,
+    }
+    package = {
+        "id": package_id,
+        "thread_id": thread_id,
+        "case_id": case_id,
+        "sender_id": profile["id"],
+        "recipient_id": recipient_id,
+        "version_number": 1,
+        "stage": payload.stage,
+        "message": clean_message,
+        "status": "sent",
+        "sent_at": now,
+        "created_at": now,
+    }
+    supabase.table("case_document_exchange_threads").insert(thread).execute()
+    supabase.table("case_document_exchange_packages").insert(package).execute()
+    supabase.table("case_document_exchange_items").insert([
+        {"id": str(uuid.uuid4()), "package_id": package_id, "case_document_id": item["id"], "file_name": item.get("file_name") or "Case document", "created_at": now}
+        for item in documents
+    ]).execute()
+    await _notify_document_exchange_recipient(
+        recipient=recipient, sender=profile, client=client, case=case, thread=thread,
+        documents=documents, message=clean_message, version_number=1,
+    )
+    return {"thread": _attach_exchange_rows(supabase, [thread], profile)[0]}
+
+
+@router.post("/cases/{case_id}/document-exchanges/{thread_id}/packages", status_code=status.HTTP_201_CREATED)
+async def add_case_document_exchange_package(
+    case_id: str,
+    thread_id: str,
+    payload: DocumentExchangePackagePayload,
+    authorization: str = Header(...),
+):
+    profile = await _get_current_user(authorization)
+    case = _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+    client, owner = _document_exchange_participants(supabase, case, profile)
+    thread = _exchange_thread_or_404(supabase, case_id, thread_id)
+    if thread.get("status") == "archived":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This Document Exchange thread is archived.")
+    documents = _selected_exchange_documents(supabase, case_id, payload.document_ids)
+    recipient_id = _recipient_for_exchange(profile["id"], owner["id"], client["assigned_attorney_id"])
+    recipient_response = supabase.table("profiles").select("id,full_name,email,role").eq("id", recipient_id).limit(1).execute()
+    recipient = (recipient_response.data or [None])[0]
+    if not recipient:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The other Document Exchange participant is unavailable.")
+    package_response = (
+        supabase.table("case_document_exchange_packages")
+        .select("version_number")
+        .eq("thread_id", thread_id)
+        .order("version_number", desc=True)
+        .limit(1)
+        .execute()
+    )
+    version_number = int((package_response.data or [{"version_number": 0}])[0].get("version_number") or 0) + 1
+    now = datetime.now(timezone.utc).isoformat()
+    clean_message = (payload.message or "").strip() or None
+    package_id = str(uuid.uuid4())
+    package = {
+        "id": package_id,
+        "thread_id": thread_id,
+        "case_id": case_id,
+        "sender_id": profile["id"],
+        "recipient_id": recipient_id,
+        "version_number": version_number,
+        "stage": payload.stage,
+        "message": clean_message,
+        "status": "sent",
+        "sent_at": now,
+        "created_at": now,
+    }
+    supabase.table("case_document_exchange_packages").insert(package).execute()
+    supabase.table("case_document_exchange_items").insert([
+        {"id": str(uuid.uuid4()), "package_id": package_id, "case_document_id": item["id"], "file_name": item.get("file_name") or "Case document", "created_at": now}
+        for item in documents
+    ]).execute()
+    thread_update = {
+        "status": _exchange_status_for(profile["id"], owner["id"], payload.stage),
+        "last_activity_at": now,
+        "updated_at": now,
+    }
+    supabase.table("case_document_exchange_threads").update(thread_update).eq("id", thread_id).execute()
+    thread.update(thread_update)
+    await _notify_document_exchange_recipient(
+        recipient=recipient, sender=profile, client=client, case=case, thread=thread,
+        documents=documents, message=clean_message, version_number=version_number,
+    )
+    return {"thread": _attach_exchange_rows(supabase, [thread], profile)[0]}
+
+
+@router.post("/cases/{case_id}/document-exchanges/{thread_id}/comments", status_code=status.HTTP_201_CREATED)
+async def add_case_document_exchange_comment(
+    case_id: str,
+    thread_id: str,
+    payload: DocumentExchangeCommentPayload,
+    authorization: str = Header(...),
+):
+    profile = await _get_current_user(authorization)
+    case = _fetch_case_with_access(case_id, profile)
+    supabase = get_supabase()
+    _document_exchange_participants(supabase, case, profile)
+    thread = _exchange_thread_or_404(supabase, case_id, thread_id)
+    if payload.package_id:
+        package_response = (
+            supabase.table("case_document_exchange_packages")
+            .select("id")
+            .eq("id", payload.package_id)
+            .eq("thread_id", thread_id)
+            .limit(1)
+            .execute()
+        )
+        if not package_response.data:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The selected package does not belong to this Document Exchange thread.")
+    now = datetime.now(timezone.utc).isoformat()
+    comment = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "package_id": payload.package_id,
+        "author_id": profile["id"],
+        "body": payload.body.strip(),
+        "created_at": now,
+    }
+    supabase.table("case_document_exchange_comments").insert(comment).execute()
+    supabase.table("case_document_exchange_threads").update({"last_activity_at": now, "updated_at": now}).eq("id", thread_id).execute()
+    comment["author_name"] = profile.get("full_name") or "LegalFlow user"
+    return comment
+
+
+@router.get("/clients/{client_id}/document-exchanges")
+async def list_client_document_exchanges(client_id: str, authorization: str = Header(...)):
+    """Return a client-wide overview while retaining separate case threads.
+
+    The LegalFlow owner can see all of a client's exchange threads. A staff
+    attorney can see only the threads assigned to that attorney, and never a
+    different attorney's client collaboration.
+    """
+    profile = await _get_current_user(authorization)
+    _require_staff(profile)
+    supabase = get_supabase()
+    owner_id = _owner_reviewer_id(supabase)
+    if not owner_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Configure the LegalFlow owner before using Document Exchange.")
+    query = supabase.table("case_document_exchange_threads").select("*").eq("client_id", client_id)
+    if str(profile.get("id")) != str(owner_id):
+        query = query.eq("assigned_attorney_id", profile.get("id"))
+    response = query.order("last_activity_at", desc=True).limit(200).execute()
+    threads = _attach_exchange_rows(supabase, response.data or [], profile)
+    case_ids = [item.get("case_id") for item in threads if item.get("case_id")]
+    case_labels: dict[str, str] = {}
+    if case_ids:
+        case_response = supabase.table("cases").select("id,case_number,plaintiff_name").in_("id", case_ids).execute()
+        case_labels = {
+            str(item.get("id")): str(item.get("case_number") or item.get("plaintiff_name") or "Case")
+            for item in case_response.data or []
+        }
+    for thread in threads:
+        thread["case_label"] = case_labels.get(str(thread.get("case_id")), "Case")
+    return {"threads": threads, "viewer_id": profile.get("id")}
