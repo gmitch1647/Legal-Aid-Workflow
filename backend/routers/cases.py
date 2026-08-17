@@ -139,6 +139,39 @@ def _require_attorney(profile: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _require_pipeline_case_mover(profile: dict, case: dict) -> None:
+    """Authorize pipeline movement for the owner or a client's assigned attorney.
+
+    The ``attorney`` role retains firm-wide case-management access. A
+    ``staff_attorney`` can change only the workflow stage of cases belonging to
+    clients explicitly assigned to that attorney. This is intentionally more
+    limited than the generic attorney guard used for owner-only administration.
+    """
+    role = profile.get("role")
+    if role == "attorney":
+        return
+    if role != "staff_attorney":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the LegalFlow owner or the assigned attorney can move this case.",
+        )
+
+    supabase = get_supabase()
+    client_response = (
+        supabase.table("profiles")
+        .select("id,assigned_attorney_id")
+        .eq("id", case.get("client_id"))
+        .limit(1)
+        .execute()
+    )
+    client = (client_response.data or [None])[0]
+    if not client or str(client.get("assigned_attorney_id")) != str(profile.get("id")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can move only cases assigned to you.",
+        )
+
+
 def _fetch_case(case_id: str, *, profile: dict | None = None) -> dict:
     """Fetch a case by ID. If *profile* is provided and the user is a
     client, verify they own the case (raise 403 otherwise)."""
@@ -532,8 +565,8 @@ async def update_case_status(
 ):
     """Attorney manually updates the workflow status of a case."""
     profile = await get_current_user(authorization)
-    _require_attorney(profile)
-    _fetch_case(case_id)  # ensure case exists
+    case = _fetch_case(case_id)  # ensure case exists
+    _require_pipeline_case_mover(profile, case)
 
     supabase = get_supabase()
     resp = (
