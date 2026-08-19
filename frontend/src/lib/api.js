@@ -1209,6 +1209,21 @@ export async function getReferralAttorneyWorkspace() {
   return request('/referrals/portal/workspace');
 }
 
+export async function getReferralAttorneyPortalFeatures() {
+  return request('/referrals/portal/features');
+}
+
+export async function getReferralAttorneyFeatureAccess(partnerId) {
+  return request(`/referrals/attorney-workspaces/${partnerId}/features`);
+}
+
+export async function updateReferralAttorneyFeatureAccess(partnerId, featureAccess) {
+  return request(`/referrals/attorney-workspaces/${partnerId}/features`, {
+    method: 'PUT',
+    body: JSON.stringify({ feature_access: featureAccess }),
+  });
+}
+
 export async function getReferralPartner(id) {
   return request(`/referrals/${id}`);
 }

@@ -34,7 +34,7 @@ import {
   signOut as supabaseSignOut,
   onAuthStateChange,
 } from './lib/supabase';
-import { getCases, getNotifications, markNotificationRead } from './lib/api';
+import { getCases, getNotifications, markNotificationRead, getReferralAttorneyPortalFeatures } from './lib/api';
 
 // ---------------------------------------------------------------------------
 // Lazy-loaded page components
@@ -614,10 +614,10 @@ function Sidebar({ links, open, onClose }) {
 // ---------------------------------------------------------------------------
 const allAttorneyLinks = [
   { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['attorney', 'staff_attorney'] },
-  { to: '/attorney/referral-workspace', label: 'Dashboard', icon: LayoutDashboard, roles: ['affiliate'] },
-  { to: '/attorney/pipeline', label: 'My Case Pipeline', icon: Kanban, roles: ['affiliate'] },
-  { to: '/attorney/clients', label: 'My Clients', icon: Users, roles: ['affiliate'] },
-  { to: '/attorney/documents', label: 'My Case Documents', icon: FolderSync, roles: ['affiliate'] },
+  { to: '/attorney/referral-workspace', label: 'Dashboard', icon: LayoutDashboard, roles: ['affiliate'], feature: 'dashboard' },
+  { to: '/attorney/pipeline', label: 'My Case Pipeline', icon: Kanban, roles: ['affiliate'], feature: 'pipeline' },
+  { to: '/attorney/clients', label: 'My Clients', icon: Users, roles: ['affiliate'], feature: 'clients' },
+  { to: '/attorney/documents', label: 'My Case Documents', icon: FolderSync, roles: ['affiliate'], feature: 'documents' },
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
@@ -653,11 +653,25 @@ function AffiliateClientsPage() {
 
 function AttorneyLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [affiliateFeatures, setAffiliateFeatures] = useState(null);
   const { profile } = useAuth();
   const role = profile?.role || 'attorney';
 
+  useEffect(() => {
+    let active = true;
+    if (role !== 'affiliate') {
+      setAffiliateFeatures(null);
+      return undefined;
+    }
+    getReferralAttorneyPortalFeatures()
+      .then((features) => { if (active) setAffiliateFeatures(features || {}); })
+      .catch(() => { if (active) setAffiliateFeatures({}); });
+    return () => { active = false; };
+  }, [role]);
+
   const attorneyLinks = allAttorneyLinks.filter(link => {
     if (!link.roles.includes(role)) return false;
+    if (role === 'affiliate' && link.feature && affiliateFeatures && !affiliateFeatures[link.feature]) return false;
     return true;
   });
 

@@ -62,6 +62,18 @@ class ReferralAttorneyWorkspaceCreate(BaseModel):
     submission_slug: Optional[str] = Field(default=None, max_length=80)
 
 
+REFERRAL_ATTORNEY_FEATURES = {
+    "dashboard": {"label": "Dashboard", "description": "Referral workspace home and submission link."},
+    "pipeline": {"label": "Case Pipeline", "description": "View the private referral pipeline and its case statuses."},
+    "clients": {"label": "Clients", "description": "View clients connected to this attorney's own referrals."},
+    "documents": {"label": "Case Documents", "description": "Open and upload documents for this attorney's own referral cases."},
+}
+
+
+class ReferralAttorneyFeatureAccessUpdate(BaseModel):
+    feature_access: dict[str, bool]
+
+
 class ReferralPartnerMessageCreate(BaseModel):
     channel: Literal["email", "sms"]
     subject: str = Field(default="", max_length=200)
@@ -300,6 +312,67 @@ async def create_referral_attorney_workspace(
         "email_sent": email_sent,
         "message": "Referral attorney workspace created. The invitation contains the temporary password and private referral form link.",
     }
+
+
+@router.get("/attorney-workspaces/{partner_id}/features")
+async def get_referral_attorney_feature_access(partner_id: str, authorization: str = Header(default=None)):
+    """Return owner-managed feature visibility for one referral attorney workspace."""
+    profile = await _get_current_user(authorization)
+    _require_owner(profile)
+    partner = await _get_referral_partner_or_404(partner_id)
+    if not partner.get("portal_user_id"):
+        raise HTTPException(status_code=422, detail="This referral partner does not have a portal workspace.")
+    stored = partner.get("feature_access") or {}
+    return {
+        "partner_id": partner_id,
+        "features": [
+            {"key": key, **meta, "enabled": bool(stored.get(key, True))}
+            for key, meta in REFERRAL_ATTORNEY_FEATURES.items()
+        ],
+    }
+
+
+@router.put("/attorney-workspaces/{partner_id}/features")
+async def update_referral_attorney_feature_access(
+    partner_id: str,
+    body: ReferralAttorneyFeatureAccessUpdate,
+    authorization: str = Header(default=None),
+):
+    """Allow the LegalFlow owner to enable or disable portal features for one referral attorney."""
+    profile = await _get_current_user(authorization)
+    _require_owner(profile)
+    partner = await _get_referral_partner_or_404(partner_id)
+    if not partner.get("portal_user_id"):
+        raise HTTPException(status_code=422, detail="This referral partner does not have a portal workspace.")
+    unknown = set(body.feature_access) - set(REFERRAL_ATTORNEY_FEATURES)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown referral workspace feature: {sorted(unknown)[0]}")
+    current = partner.get("feature_access") or {}
+    updated = {**current, **{key: bool(value) for key, value in body.feature_access.items()}}
+    response = get_supabase().table("referral_partners").update({"feature_access": updated}).eq("id", partner_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=500, detail="Could not update referral attorney feature access.")
+    return {
+        "partner_id": partner_id,
+        "features": [
+            {"key": key, **meta, "enabled": bool(updated.get(key, True))}
+            for key, meta in REFERRAL_ATTORNEY_FEATURES.items()
+        ],
+    }
+
+
+@router.get("/portal/features")
+async def get_portal_feature_access(authorization: str = Header(default=None)):
+    """Return the active referral attorney's own enabled feature map for sidebar and route gates."""
+    profile = await _get_current_user(authorization)
+    if profile.get("role") != "affiliate":
+        raise HTTPException(status_code=403, detail="Referral portal access required")
+    partner_response = get_supabase().table("referral_partners").select("feature_access").eq("portal_user_id", profile["id"]).eq("portal_active", True).limit(1).execute()
+    partner = (partner_response.data or [None])[0]
+    if not partner:
+        raise HTTPException(status_code=404, detail="Referral workspace not found")
+    stored = partner.get("feature_access") or {}
+    return {key: bool(stored.get(key, True)) for key in REFERRAL_ATTORNEY_FEATURES}
 
 
 @router.get("/portal/workspace")
