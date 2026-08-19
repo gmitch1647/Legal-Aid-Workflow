@@ -83,11 +83,13 @@ export default function CaseReferralForm() {
   const [workspace, setWorkspace] = useState(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(Boolean(referralSlug));
   const [files, setFiles] = useState([]);
+  const [complaint, setComplaint] = useState(null);
   const [certified, setCertified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const fileInputRef = useRef(null);
+  const complaintInputRef = useRef(null);
 
   useEffect(() => {
     if (!referralSlug) return;
@@ -167,7 +169,7 @@ export default function CaseReferralForm() {
     ];
     const missing = required.find(([, value]) => !String(value || '').trim());
     if (missing) return `Complete the required field: ${missing[0]}.`;
-    if (!files.length) return 'Upload at least one supporting document.';
+    if (!files.length && !complaint) return 'Upload a complaint or at least one supporting document.';
     if (!certified) return 'Confirm the referral information is accurate before submitting.';
     return '';
   }
@@ -188,6 +190,7 @@ export default function CaseReferralForm() {
       if (referralSlug) payload.append('referral_slug', referralSlug);
       payload.append('certification', String(certified));
       files.forEach((file) => payload.append('files', file));
+      if (complaint) payload.append('complaint', complaint);
       await submitCaseReferralForm(payload);
       setSubmitted(true);
     } catch (submissionError) {
@@ -298,7 +301,15 @@ export default function CaseReferralForm() {
                     className="w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
                   />
                 </div>
-                <SelectField label="Who would you like to get help from?" required value={form.requested_assistance} onChange={(event) => update('requested_assistance', event.target.value)} options={ASSISTANCE_OPTIONS} placeholder="Select a review team" />
+                {workspace ? (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-semibold text-slate-700">Submission Routing <Required /></label>
+                    <div className="flex min-h-11 items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-900">Main LegalFlow — Esther Oise</div>
+                    <p className="mt-1 text-xs text-slate-500">This private link always sends the referral to the main LegalFlow workspace and assigns Esther Oise for review.</p>
+                  </div>
+                ) : (
+                  <SelectField label="Who would you like to get help from?" required value={form.requested_assistance} onChange={(event) => update('requested_assistance', event.target.value)} options={ASSISTANCE_OPTIONS} placeholder="Select a review team" />
+                )}
                 {workspace ? (
                   <div>
                     <label className="mb-1.5 block text-sm font-semibold text-slate-700">Referral Organization / Affiliate Name <Required /></label>
@@ -312,7 +323,40 @@ export default function CaseReferralForm() {
             </section>
 
             <section>
-              <SectionHeading title="Supporting Documents" description="Upload the documents that support this referral. They will be saved to the submitted case for review." />
+              <SectionHeading title="Complaint Document" description="Upload the complaint separately when one is already available. It will be saved as the case complaint and PDF complaints receive a Word download copy." />
+              <div className="mt-5 rounded-2xl border border-violet-200 bg-violet-50/50 p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">Complaint upload <span className="font-normal text-slate-500">(optional)</span></p>
+                    <p className="mt-1 text-xs text-slate-600">PDF, DOC, DOCX, TXT, PNG, JPG, or JPEG · One file · 10 MB maximum</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => complaintInputRef.current?.click()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-semibold text-violet-800 transition hover:bg-violet-100">
+                      <Upload className="h-4 w-4" /> {complaint ? 'Replace complaint' : 'Upload complaint'}
+                    </button>
+                    {complaint && <button type="button" onClick={() => setComplaint(null)} className="rounded-lg p-2 text-slate-500 transition hover:bg-white hover:text-red-600" aria-label="Remove complaint"><X className="h-4 w-4" /></button>}
+                  </div>
+                </div>
+                <input
+                  ref={complaintInputRef}
+                  className="hidden"
+                  type="file"
+                  accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    const issue = fileError(file);
+                    if (issue) { setError(issue); return; }
+                    setError('');
+                    setComplaint(file);
+                  }}
+                />
+                {complaint && <div className="mt-4 flex items-center gap-3 rounded-lg border border-violet-200 bg-white px-3 py-2.5"><FileText className="h-5 w-5 shrink-0 text-violet-700" /><span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">{complaint.name}</span><span className="shrink-0 text-xs text-slate-500">{(complaint.size / 1024 / 1024).toFixed(1)} MB</span></div>}
+              </div>
+            </section>
+
+            <section>
+              <SectionHeading title="Supporting Documents" description="Upload additional documents that support this referral. They will be saved to the submitted case for review." />
               <div
                 role="button"
                 tabIndex={0}

@@ -57,23 +57,67 @@ async def _prepare_referral_documents(files: list[UploadFile]) -> list[dict]:
     return prepared
 
 
-def _store_prepared_referral_documents(case_id: str, documents: list[dict]) -> int:
-    """Store validated referral files under the newly submitted case without public links."""
+async def _prepare_referral_complaint(complaint: UploadFile | None) -> dict | None:
+    """Validate one optional complaint separately from supporting documents."""
+    if not complaint or not getattr(complaint, "filename", None):
+        return None
+    return (await _prepare_referral_documents([complaint]))[0]
+
+
+def _store_prepared_referral_documents(
+    case_id: str,
+    documents: list[dict],
+    *,
+    complaint: dict | None = None,
+) -> int:
+    """Store public-referral files without public URLs, preserving complaint semantics."""
     supabase = get_supabase()
+    items = [(document, "other") for document in documents]
+    if complaint:
+        items.append((complaint, "complaint"))
+
     uploaded = 0
-    for document in documents:
-        storage_path = f"cases/{case_id}/case-submission/{uuid4().hex}_{document['safe_name']}"
+    for document, category in items:
+        folder = "complaints" if category == "complaint" else "case-submission"
+        storage_path = f"cases/{case_id}/{folder}/{uuid4().hex}_{document['safe_name']}"
         supabase.storage.from_("documents").upload(
             storage_path,
             document["content"],
             {"content-type": document["content_type"]},
         )
+
+        word_document_path = None
+        if category == "complaint" and document["file_type"] == "pdf":
+            try:
+                from pathlib import Path
+                from utils.complaint_word_converter import complaint_word_file_name, pdf_bytes_to_docx
+
+                word_file_name = complaint_word_file_name(document["safe_name"])
+                word_document_path = str(Path(storage_path).with_name(word_file_name))
+                supabase.storage.from_("documents").upload(
+                    word_document_path,
+                    pdf_bytes_to_docx(document["content"]),
+                    {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+                )
+            except Exception as exc:
+                logger.exception("Could not create Word derivative for referral complaint %s", document["file_name"])
+                try:
+                    supabase.storage.from_("documents").remove([storage_path])
+                except Exception:
+                    logger.warning("Could not clean up intake complaint source after conversion failure")
+                raise HTTPException(
+                    status_code=422,
+                    detail="The complaint PDF could not be converted to a Word document. Upload a Word complaint or a readable PDF and try again.",
+                ) from exc
+
         supabase.table("case_documents").insert({
             "case_id": case_id,
             "file_name": document["file_name"],
             "file_type": document["file_type"],
+            "file_size": len(document["content"]),
             "storage_path": storage_path,
-            "document_category": "other",
+            "word_document_path": word_document_path,
+            "document_category": category,
         }).execute()
         uploaded += 1
     return uploaded
@@ -337,13 +381,21 @@ async def submit_intake(body: IntakeSubmission):
             except Exception:
                 pass
 
-    # Notify attorney
+    # The main LegalFlow owner is notified for all submissions. Partner-link
+    # referrals also notify their configured working attorney (Esther for Ethan's
+    # workspace) without trusting a public recipient field.
     try:
         from utils.notifications import notify_attorney_new_submission
         if case_id:
             notify_attorney_new_submission(case_id=case_id, client_name=name)
+            if referral_workspace and referral_workspace.get("assigned_attorney_id"):
+                notify_attorney_new_submission(
+                    case_id=case_id,
+                    client_name=name,
+                    attorney_id=referral_workspace["assigned_attorney_id"],
+                )
     except Exception:
-        pass
+        logger.exception("Could not create one or more intake submission notifications")
 
     # ── 3. Push contact to SuiteDash ─────────────────────────────────
     suitedash_synced = False
@@ -498,7 +550,8 @@ async def submit_case_referral(
     requested_assistance: str = Form(...),
     referral_slug: str = Form(""),
     certification: str = Form(...),
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(default=[]),
+    complaint: UploadFile | None = File(default=None),
 ):
     """Public Case Referral Hub endpoint; every completed submission enters Submitted."""
     required_values = {
@@ -523,9 +576,15 @@ async def submit_case_referral(
     if str(certification).strip().lower() not in {"true", "1", "yes", "on"}:
         raise HTTPException(status_code=422, detail="Confirm that the referral information is accurate before submitting.")
 
-    prepared_documents = await _prepare_referral_documents(files)
+    prepared_complaint = await _prepare_referral_complaint(complaint)
+    prepared_documents = await _prepare_referral_documents(files) if files else []
+    if not prepared_documents and not prepared_complaint:
+        raise HTTPException(status_code=422, detail="Upload a complaint or at least one supporting document to submit this referral.")
     resolved_referral_slug = referral_slug.strip() if isinstance(referral_slug, str) else ""
     referral_workspace = _active_referral_partner_for_slug(resolved_referral_slug) if resolved_referral_slug else None
+    # A private partner link has a fixed internal destination. It is never
+    # controlled by the public “who should help” field.
+    locked_assistance = "Main LegalFlow — Esther Oise" if referral_workspace else requested_assistance.strip()
     body = IntakeSubmission(
         first_name=first_name.strip(),
         last_name=last_name.strip(),
@@ -542,7 +601,7 @@ async def submit_case_referral(
         adverse_party=adverse_party.strip(),
         brief_description=brief_description.strip(),
         affiliate_name=(referral_workspace.get("full_name") if referral_workspace else affiliate_name.strip()),
-        requested_assistance=requested_assistance.strip(),
+        requested_assistance=locked_assistance,
         referral_slug=referral_workspace.get("submission_slug") if referral_workspace else None,
         sync_to_suitedash=False,
     )
@@ -552,7 +611,12 @@ async def submit_case_referral(
         raise HTTPException(status_code=500, detail="The case submission could not be created.")
 
     try:
-        result["files_uploaded"] = _store_prepared_referral_documents(case_id, prepared_documents)
+        result["files_uploaded"] = _store_prepared_referral_documents(
+            case_id,
+            prepared_documents,
+            complaint=prepared_complaint,
+        )
+        result["complaint_uploaded"] = bool(prepared_complaint)
     except Exception as exc:
         logger.exception("Case referral documents could not be stored for case %s", case_id)
         raise HTTPException(status_code=500, detail="The case was created but supporting documents could not be stored. Please contact LegalFlow support.") from exc

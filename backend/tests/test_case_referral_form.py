@@ -133,6 +133,48 @@ class CaseReferralFormTests(unittest.TestCase):
         self.assertEqual(submitted_body.referral_slug, "ethan-babb-referrals")
         self.assertFalse(submitted_body.sync_to_suitedash)
 
+    def test_partner_referral_accepts_complaint_and_locks_main_legalflow_esther_routing(self):
+        created = {"case_id": "case-submitted-complaint", "status": "success"}
+        submit_mock = AsyncMock(return_value=created.copy())
+        store_mock = unittest.mock.Mock(return_value=1)
+        workspace = {
+            "id": "partner-ethan",
+            "full_name": "Ethan Babb",
+            "submission_slug": "ethan-babb-referrals",
+            "assigned_attorney_id": "esther-profile",
+            "pipeline_id": "ethan-pipeline",
+        }
+        with patch.object(self.intake, "submit_intake", submit_mock), patch.object(self.intake, "_store_prepared_referral_documents", store_mock), patch.object(self.intake, "_active_referral_partner_for_slug", return_value=workspace):
+            result = asyncio.run(self.intake.submit_case_referral(
+                first_name="Referral",
+                last_name="Client",
+                email="referral.client@example.com",
+                phone="5555551212",
+                date_of_birth="1990-01-01",
+                address="10 Main Street",
+                city="Atlanta",
+                state="Georgia",
+                zip_code="30301",
+                case_type="FCRA",
+                violation_type="E8",
+                specific_violation="",
+                adverse_party="Example Furnisher",
+                brief_description="Incorrect reporting after a dispute.",
+                affiliate_name="Untrusted Public Value",
+                requested_assistance="No preference",
+                referral_slug="ethan-babb-referrals",
+                certification="true",
+                files=[],
+                complaint=self.upload("existing-complaint.pdf"),
+            ))
+
+        self.assertTrue(result["complaint_uploaded"])
+        submitted_body = submit_mock.await_args.args[0]
+        self.assertEqual(submitted_body.requested_assistance, "Main LegalFlow — Esther Oise")
+        self.assertEqual(submitted_body.affiliate_name, "Ethan Babb")
+        self.assertEqual(submitted_body.referral_slug, "ethan-babb-referrals")
+        self.assertEqual(store_mock.call_args.kwargs["complaint"]["file_name"], "existing-complaint.pdf")
+
 
 if __name__ == "__main__":
     unittest.main()
