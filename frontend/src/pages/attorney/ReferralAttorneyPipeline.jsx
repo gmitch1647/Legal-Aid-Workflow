@@ -31,8 +31,10 @@ export default function ReferralAttorneyPipeline() {
 
   const byStage = useMemo(() => {
     const grouped = new Map((workspace?.stages || []).map((stage) => [stage.slug, []]));
-    (workspace?.cases || []).forEach((caseItem) => {
-      if (!grouped.has(caseItem.status)) grouped.set(caseItem.status, []);
+    const allowedStages = new Set((workspace?.stages || []).map((stage) => stage.slug));
+    (workspace?.cases || []).filter((caseItem) => (
+      caseItem.pipeline_id === workspace?.pipeline_id && allowedStages.has(caseItem.status)
+    )).forEach((caseItem) => {
       grouped.get(caseItem.status).push(caseItem);
     });
     return grouped;

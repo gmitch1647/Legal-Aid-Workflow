@@ -61,6 +61,8 @@ const ReferralAttorneyPipeline = React.lazy(() => import('./pages/attorney/Refer
 const ReferralAttorneyClients = React.lazy(() => import('./pages/attorney/ReferralAttorneyClients'));
 const ReferralAttorneyDocuments = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocuments'));
 const ReferralAttorneyDocumentExchange = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocumentExchange'));
+const ReferralAttorneyClientProfile = React.lazy(() => import('./pages/attorney/ReferralAttorneyClientProfile'));
+const ReferralAttorneyCaseWorkspace = React.lazy(() => import('./pages/attorney/ReferralAttorneyCaseWorkspace'));
 const ReferralAttorneyWorkspaces = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspaces'));
 const Communications = React.lazy(() => import('./pages/attorney/Communications'));
 const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
@@ -774,6 +776,8 @@ export default function App() {
             <Route path="forms" element={<FormsPage />} />
             <Route path="referral-attorneys" element={<ReferralAttorneyWorkspaces />} />
             <Route path="clients" element={<AffiliateClientsPage />} />
+            <Route path="referral-clients/:clientId" element={<AttorneyRolePage allowedRoles={['affiliate']}><ReferralAttorneyClientProfile /></AttorneyRolePage>} />
+            <Route path="referral-cases/:caseId" element={<AttorneyRolePage allowedRoles={['affiliate']}><ReferralAttorneyCaseWorkspace /></AttorneyRolePage>} />
             <Route path="clients/:id" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><ClientProfile /></AttorneyRolePage>} />
             <Route path="referrals/:id" element={<ReferralPartnerProfile />} />
             <Route path="communications" element={<Communications />} />

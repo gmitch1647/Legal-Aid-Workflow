@@ -49,6 +49,21 @@ def _fetch_case_and_verify(case_id: str, profile: dict) -> dict:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this case.",
         )
+    if profile.get("role") == "affiliate":
+        partner_response = (
+            supabase.table("referral_partners")
+            .select("id")
+            .eq("portal_user_id", profile["id"])
+            .eq("portal_active", True)
+            .limit(1)
+            .execute()
+        )
+        partner = (partner_response.data or [None])[0]
+        if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to messages for this referral case.",
+            )
     return case
 
 
@@ -131,8 +146,8 @@ async def send_message(
     # Determine the recipient (the *other* party)
     sender_name = profile.get("full_name", "Someone")
 
-    if profile["role"] == "attorney":
-        # Notify the client
+    if profile.get("role") in {"attorney", "staff_attorney", "affiliate"}:
+        # Attorneys and referral attorneys can message the client for a case they are authorized to access.
         recipient_id = case["client_id"]
     else:
         # Notify the attorney -- find the first attorney profile

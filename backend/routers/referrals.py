@@ -400,6 +400,7 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
         supabase.table("cases")
         .select("id,status,created_at,updated_at,client_id")
         .eq("referral_partner_id", partner["id"])
+        .eq("pipeline_id", partner["pipeline_id"])
         .order("created_at", desc=True)
         .limit(250)
         .execute()
