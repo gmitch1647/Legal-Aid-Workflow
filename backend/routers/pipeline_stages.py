@@ -105,6 +105,20 @@ def _affiliate_pipeline_id(supabase, profile: dict) -> str | None:
     return partner.get("pipeline_id") if partner else None
 
 
+def _is_referral_pipeline(supabase, pipeline_id: str | None) -> bool:
+    """Referral boards own their stages; they must never inherit shared firm stages."""
+    if not pipeline_id:
+        return False
+    partner_response = (
+        supabase.table("referral_partners")
+        .select("id")
+        .eq("pipeline_id", pipeline_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(partner_response.data)
+
+
 @router.get("/pipelines")
 async def list_pipelines(authorization: str = Header(...)):
     """Return permitted pipelines; affiliates receive only their own referral board."""
@@ -216,14 +230,6 @@ async def list_stages(pipeline_id: Optional[str] = None, authorization: str = He
         pipeline_id = affiliate_pipeline_id
 
     if pipeline_id and pipeline_id != "all":
-        # Get shared stages + pipeline-specific stages
-        shared = (
-            supabase.table("pipeline_stages")
-            .select("*")
-            .is_("pipeline_id", "null")
-            .order("position")
-            .execute()
-        )
         specific = (
             supabase.table("pipeline_stages")
             .select("*")
@@ -231,13 +237,27 @@ async def list_stages(pipeline_id: Optional[str] = None, authorization: str = He
             .order("position")
             .execute()
         )
+        # Referral boards are completely separate from the firm's shared stage set.
+        if _is_referral_pipeline(supabase, pipeline_id):
+            return specific.data or []
+
+        shared = (
+            supabase.table("pipeline_stages")
+            .select("*")
+            .is_("pipeline_id", "null")
+            .order("position")
+            .execute()
+        )
         all_stages = (shared.data or []) + (specific.data or [])
         all_stages.sort(key=lambda s: s.get("position", 0))
         return all_stages
     else:
+        # The default board is the firm's shared main pipeline. Private referral
+        # stages must not appear here merely because no explicit pipeline was chosen.
         result = (
             supabase.table("pipeline_stages")
             .select("*")
+            .is_("pipeline_id", "null")
             .order("position")
             .execute()
         )
@@ -322,13 +342,30 @@ async def delete_stage(
     if not stage.data:
         raise HTTPException(status_code=404, detail="Stage not found.")
 
-    # Move any cases in this stage to a default status before deleting
-    slug = stage.data[0].get("slug", "")
-    if slug:
-        try:
-            supabase.table("cases").update({"status": "submitted"}).eq("status", slug).execute()
-        except Exception:
-            pass
+    stage_record = stage.data[0]
+    stage_pipeline_id = stage_record.get("pipeline_id")
+    if not stage_pipeline_id and stage_record.get("is_system"):
+        raise HTTPException(status_code=400, detail="Core firm pipeline stages cannot be deleted.")
+
+    # A private stage can affect only cases in its own pipeline. Move those cases to
+    # the first remaining stage in that same board, never to the firm's shared Submitted stage.
+    slug = stage_record.get("slug", "")
+    if stage_pipeline_id:
+        remaining = (
+            supabase.table("pipeline_stages")
+            .select("slug")
+            .eq("pipeline_id", stage_pipeline_id)
+            .order("position")
+            .execute()
+        )
+        fallback = next((item.get("slug") for item in (remaining.data or []) if item.get("slug") != slug), None)
+        if not fallback:
+            raise HTTPException(status_code=400, detail="A pipeline must keep at least one stage.")
+        if slug:
+            supabase.table("cases").update({"status": fallback}).eq("status", slug).eq("pipeline_id", stage_pipeline_id).execute()
+    elif slug:
+        # Non-system shared stages are limited to firm cases with no private pipeline.
+        supabase.table("cases").update({"status": "submitted"}).eq("status", slug).is_("pipeline_id", "null").execute()
 
     supabase.table("pipeline_stages").delete().eq("id", stage_id).execute()
     return {"deleted": True}

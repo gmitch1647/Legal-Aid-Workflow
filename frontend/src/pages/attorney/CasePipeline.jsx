@@ -783,7 +783,7 @@ export default function CasePipeline() {
                         <MessageSquare className="w-2.5 h-2.5 text-purple-600" />
                       </span>
                     )}
-                    {col.id && (
+                    {col.id && !col.is_system && (
                       <button
                         onClick={() => handleDeleteStage(col.id, col.label)}
                         className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition"
