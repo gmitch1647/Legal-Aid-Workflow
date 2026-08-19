@@ -67,6 +67,7 @@ REFERRAL_ATTORNEY_FEATURES = {
     "pipeline": {"label": "Case Pipeline", "description": "View the private referral pipeline and its case statuses."},
     "clients": {"label": "Clients", "description": "View clients connected to this attorney's own referrals."},
     "documents": {"label": "Case Documents", "description": "Open and upload documents for this attorney's own referral cases."},
+    "document_exchange": {"label": "Document Exchange", "description": "Exchange case documents and draft versions directly with the assigned attorney."},
 }
 
 

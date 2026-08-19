@@ -115,8 +115,9 @@ def _owner_reviewer_id(supabase) -> Optional[str]:
 
 
 def _document_exchange_participants(supabase, case: dict, profile: dict) -> tuple[dict, dict]:
-    """Return client and active owner, authorizing only owner + the assigned attorney."""
-    _require_staff(profile)
+    """Return case participants, allowing a referral attorney only on the attorney's own referral case."""
+    if profile.get("role") != "affiliate":
+        _require_staff(profile)
     client_response = (
         supabase.table("profiles")
         .select("id,full_name,assigned_attorney_id")
@@ -130,10 +131,26 @@ def _document_exchange_participants(supabase, case: dict, profile: dict) -> tupl
     owner_id = _owner_reviewer_id(supabase)
     if not owner_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Configure the LegalFlow owner before using Document Exchange.")
+    affiliate_id = None
+    if profile.get("role") == "affiliate":
+        partner_response = (
+            supabase.table("referral_partners")
+            .select("id")
+            .eq("portal_user_id", profile["id"])
+            .eq("portal_active", True)
+            .limit(1)
+            .execute()
+        )
+        partner = (partner_response.data or [None])[0]
+        if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This Document Exchange is available only for your own referral cases.")
+        affiliate_id = profile["id"]
     allowed = {str(owner_id), str(client["assigned_attorney_id"])}
+    if affiliate_id:
+        allowed.add(str(affiliate_id))
     if str(profile.get("id")) not in allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the LegalFlow owner and this client's assigned attorney can use this document exchange.")
-    return client, {"id": owner_id}
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the LegalFlow owner, assigned attorney, or the originating referral attorney can use this document exchange.")
+    return client, {"id": owner_id, "affiliate_id": affiliate_id}
 
 
 def _fetch_case_with_access(case_id: str, profile: dict) -> dict:
@@ -850,13 +867,17 @@ async def deliver_discovery_documents_to_assigned_attorney(
 # ---------------------------------------------------------------------------
 
 
-def _exchange_status_for(sender_id: str, owner_id: str, stage: str) -> str:
+def _exchange_status_for(sender_id: str, owner_id: str, stage: str, affiliate_id: str | None = None) -> str:
     if stage in {"final_attorney_version", "filed_served"}:
         return "finalized"
+    if affiliate_id and str(sender_id) == str(affiliate_id):
+        return "awaiting_attorney"
     return "awaiting_attorney" if str(sender_id) == str(owner_id) else "awaiting_owner"
 
 
-def _recipient_for_exchange(profile_id: str, owner_id: str, attorney_id: str) -> str:
+def _recipient_for_exchange(profile_id: str, owner_id: str, attorney_id: str, affiliate_id: str | None = None) -> str:
+    if affiliate_id:
+        return attorney_id if str(profile_id) == str(affiliate_id) else affiliate_id
     return attorney_id if str(profile_id) == str(owner_id) else owner_id
 
 
@@ -1031,7 +1052,7 @@ async def create_case_document_exchange(
     supabase = get_supabase()
     client, owner = _document_exchange_participants(supabase, case, profile)
     documents = _selected_exchange_documents(supabase, case_id, payload.document_ids)
-    recipient_id = _recipient_for_exchange(profile["id"], owner["id"], client["assigned_attorney_id"])
+    recipient_id = _recipient_for_exchange(profile["id"], owner["id"], client["assigned_attorney_id"], owner.get("affiliate_id"))
     recipient_response = supabase.table("profiles").select("id,full_name,email,role").eq("id", recipient_id).limit(1).execute()
     recipient = (recipient_response.data or [None])[0]
     if not recipient:
@@ -1048,7 +1069,7 @@ async def create_case_document_exchange(
         "assigned_attorney_id": client["assigned_attorney_id"],
         "title": clean_title,
         "document_type": payload.document_type,
-        "status": _exchange_status_for(profile["id"], owner["id"], payload.stage),
+        "status": _exchange_status_for(profile["id"], owner["id"], payload.stage, owner.get("affiliate_id")),
         "created_by": profile["id"],
         "last_activity_at": now,
         "created_at": now,
@@ -1095,7 +1116,7 @@ async def add_case_document_exchange_package(
     if thread.get("status") == "archived":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This Document Exchange thread is archived.")
     documents = _selected_exchange_documents(supabase, case_id, payload.document_ids)
-    recipient_id = _recipient_for_exchange(profile["id"], owner["id"], client["assigned_attorney_id"])
+    recipient_id = _recipient_for_exchange(profile["id"], owner["id"], client["assigned_attorney_id"], owner.get("affiliate_id"))
     recipient_response = supabase.table("profiles").select("id,full_name,email,role").eq("id", recipient_id).limit(1).execute()
     recipient = (recipient_response.data or [None])[0]
     if not recipient:
@@ -1131,7 +1152,7 @@ async def add_case_document_exchange_package(
         for item in documents
     ]).execute()
     thread_update = {
-        "status": _exchange_status_for(profile["id"], owner["id"], payload.stage),
+        "status": _exchange_status_for(profile["id"], owner["id"], payload.stage, owner.get("affiliate_id")),
         "last_activity_at": now,
         "updated_at": now,
     }

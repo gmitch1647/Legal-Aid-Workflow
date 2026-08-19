@@ -60,6 +60,7 @@ const ReferralAttorneyWorkspace = React.lazy(() => import('./pages/attorney/Refe
 const ReferralAttorneyPipeline = React.lazy(() => import('./pages/attorney/ReferralAttorneyPipeline'));
 const ReferralAttorneyClients = React.lazy(() => import('./pages/attorney/ReferralAttorneyClients'));
 const ReferralAttorneyDocuments = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocuments'));
+const ReferralAttorneyDocumentExchange = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocumentExchange'));
 const ReferralAttorneyWorkspaces = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspaces'));
 const Communications = React.lazy(() => import('./pages/attorney/Communications'));
 const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
@@ -469,7 +470,7 @@ function ClientProfileSearch() {
 function TopBar({ onMenuToggle }) {
   const { profile, signOut } = useAuth();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const canSearchClients = ['attorney', 'staff_attorney', 'affiliate'].includes(profile?.role);
+  const canSearchClients = ['attorney', 'staff_attorney'].includes(profile?.role);
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-6">
@@ -618,6 +619,7 @@ const allAttorneyLinks = [
   { to: '/attorney/pipeline', label: 'My Case Pipeline', icon: Kanban, roles: ['affiliate'], feature: 'pipeline' },
   { to: '/attorney/clients', label: 'My Clients', icon: Users, roles: ['affiliate'], feature: 'clients' },
   { to: '/attorney/documents', label: 'My Case Documents', icon: FolderSync, roles: ['affiliate'], feature: 'documents' },
+  { to: '/attorney/document-exchange', label: 'Document Exchange', icon: FolderSync, roles: ['affiliate'], feature: 'document_exchange' },
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
@@ -649,6 +651,11 @@ function AffiliatePipelinePage() {
 function AffiliateClientsPage() {
   const { profile } = useAuth();
   return profile?.role === 'affiliate' ? <ReferralAttorneyClients /> : <ClientList />;
+}
+
+function AffiliateDocumentExchangePage() {
+  const { profile } = useAuth();
+  return profile?.role === 'affiliate' ? <ReferralAttorneyDocumentExchange /> : <DocumentExchange />;
 }
 
 function AttorneyLayout() {
@@ -752,7 +759,7 @@ export default function App() {
             <Route path="draft" element={<DraftComplaint />} />
             <Route path="disputes" element={<DisputeLetters />} />
             <Route path="esign" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><ESignatures /></AttorneyRolePage>} />
-            <Route path="document-exchange" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><DocumentExchange /></AttorneyRolePage>} />
+            <Route path="document-exchange" element={<AffiliateDocumentExchangePage />} />
             <Route path="documents" element={<AttorneyRolePage allowedRoles={['affiliate']}><ReferralAttorneyDocuments /></AttorneyRolePage>} />
             <Route path="w9" element={<W9Requests />} />
             <Route path="closing-statements" element={<ClosingStatements />} />

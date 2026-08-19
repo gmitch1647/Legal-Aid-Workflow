@@ -68,7 +68,7 @@ class _Query:
 class _Supabase:
     def __init__(self):
         self.rows = {
-            "cases": [{"id": "case-1", "client_id": "client-1", "case_number": "LF-2026-001", "plaintiff_name": "Jada Wiggins"}],
+            "cases": [{"id": "case-1", "client_id": "client-1", "case_number": "LF-2026-001", "plaintiff_name": "Jada Wiggins", "referral_partner_id": "partner-1"}],
             "profiles": [
                 {"id": "client-1", "full_name": "Jada Wiggins", "assigned_attorney_id": "attorney-1", "role": "client"},
                 {"id": "owner-1", "full_name": "Gary Mitchell", "email": "gary@example.test", "role": "attorney"},
@@ -76,6 +76,7 @@ class _Supabase:
                 {"id": "attorney-2", "full_name": "Other Attorney", "email": "other@example.test", "role": "staff_attorney"},
             ],
             "settlement_package_reviewers": [{"owner_profile_id": "owner-1", "active": True}],
+            "referral_partners": [{"id": "partner-1", "portal_user_id": "affiliate-1", "portal_active": True}],
             "case_documents": [
                 {"id": "doc-1", "case_id": "case-1", "file_name": "Interrogatories Draft.docx", "document_category": "other", "storage_path": "cases/case-1/interrogatories.docx"},
                 {"id": "doc-2", "case_id": "case-1", "file_name": "Interrogatories Completed.docx", "document_category": "other", "storage_path": "cases/case-1/interrogatories-completed.docx"},
@@ -91,10 +92,11 @@ class _Supabase:
         return _Query(self.rows[name])
 
 
-CASE = {"id": "case-1", "client_id": "client-1", "case_number": "LF-2026-001", "plaintiff_name": "Jada Wiggins"}
+CASE = {"id": "case-1", "client_id": "client-1", "case_number": "LF-2026-001", "plaintiff_name": "Jada Wiggins", "referral_partner_id": "partner-1"}
 OWNER = {"id": "owner-1", "role": "attorney", "full_name": "Gary Mitchell"}
 ATTORNEY = {"id": "attorney-1", "role": "staff_attorney", "full_name": "Esther Oise"}
 OTHER_ATTORNEY = {"id": "attorney-2", "role": "staff_attorney", "full_name": "Other Attorney"}
+AFFILIATE = {"id": "affiliate-1", "role": "affiliate", "full_name": "Ethan Babb"}
 
 
 class DocumentExchangeTests(unittest.TestCase):
@@ -160,6 +162,14 @@ class DocumentExchangeTests(unittest.TestCase):
             self._create(supabase, profile=OTHER_ATTORNEY)
         self.assertEqual(raised.exception.status_code, 403)
         self.assertEqual(supabase.rows["case_document_exchange_threads"], [])
+
+    def test_referral_attorney_can_send_only_to_assigned_attorney_on_own_referral_case(self):
+        supabase = _Supabase()
+        result, email = self._create(supabase, profile=AFFILIATE)
+        thread = result["thread"]
+        self.assertEqual(thread["status"], "awaiting_attorney")
+        self.assertEqual(thread["packages"][0]["recipient_id"], "attorney-1")
+        self.assertEqual(email.await_args.kwargs["to"], "esther@example.test")
 
     def test_pii_document_is_blocked_from_document_exchange(self):
         supabase = _Supabase()
