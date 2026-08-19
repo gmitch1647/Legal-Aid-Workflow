@@ -163,7 +163,10 @@ export default function CasePipeline() {
 
       // Filter cases by pipeline if one is selected
       if (activePipeline && activePipeline !== 'all') {
-        list = list.filter((c) => c.pipeline_id === activePipeline || !c.pipeline_id);
+        // A selected board must contain only cases explicitly assigned to that
+        // pipeline. Unassigned legacy firm cases remain visible only on the
+        // default main pipeline rather than leaking into private referral boards.
+        list = list.filter((c) => c.pipeline_id === activePipeline);
       }
 
       setCases(list);
