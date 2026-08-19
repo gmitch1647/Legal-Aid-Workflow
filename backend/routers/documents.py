@@ -157,6 +157,21 @@ def _fetch_case_with_access(case_id: str, profile: dict) -> dict:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this case.",
         )
+    if profile.get("role") == "affiliate":
+        partner_response = (
+            supabase.table("referral_partners")
+            .select("id")
+            .eq("portal_user_id", profile["id"])
+            .eq("portal_active", True)
+            .limit(1)
+            .execute()
+        )
+        partner = (partner_response.data or [None])[0]
+        if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to documents for this referral case.",
+            )
     return case
 
 

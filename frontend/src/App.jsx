@@ -57,6 +57,9 @@ const ClientList = React.lazy(() => import('./pages/attorney/ClientList'));
 const ClientProfile = React.lazy(() => import('./pages/attorney/ClientProfile'));
 const ReferralPartnerProfile = React.lazy(() => import('./pages/attorney/ReferralPartnerProfile'));
 const ReferralAttorneyWorkspace = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspace'));
+const ReferralAttorneyPipeline = React.lazy(() => import('./pages/attorney/ReferralAttorneyPipeline'));
+const ReferralAttorneyClients = React.lazy(() => import('./pages/attorney/ReferralAttorneyClients'));
+const ReferralAttorneyDocuments = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocuments'));
 const ReferralAttorneyWorkspaces = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspaces'));
 const Communications = React.lazy(() => import('./pages/attorney/Communications'));
 const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
@@ -190,6 +193,14 @@ function ProtectedRoute({ allowedRoles, children }) {
 // ---------------------------------------------------------------------------
 // Root Redirect
 // ---------------------------------------------------------------------------
+function AttorneyRolePage({ allowedRoles, children }) {
+  const { profile } = useAuth();
+  if (!allowedRoles.includes(profile?.role)) {
+    return <Navigate to={profile?.role === 'affiliate' ? '/attorney/referral-workspace' : '/attorney/dashboard'} replace />;
+  }
+  return children;
+}
+
 function RootRedirect() {
   const { user, profile, loading } = useAuth();
 
@@ -603,7 +614,10 @@ function Sidebar({ links, open, onClose }) {
 // ---------------------------------------------------------------------------
 const allAttorneyLinks = [
   { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['attorney', 'staff_attorney'] },
-  { to: '/attorney/referral-workspace', label: 'Referral Workspace', icon: FolderSync, roles: ['affiliate'] },
+  { to: '/attorney/referral-workspace', label: 'Dashboard', icon: LayoutDashboard, roles: ['affiliate'] },
+  { to: '/attorney/pipeline', label: 'My Case Pipeline', icon: Kanban, roles: ['affiliate'] },
+  { to: '/attorney/clients', label: 'My Clients', icon: Users, roles: ['affiliate'] },
+  { to: '/attorney/documents', label: 'My Case Documents', icon: FolderSync, roles: ['affiliate'] },
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
@@ -625,6 +639,16 @@ const allAttorneyLinks = [
 function AttorneyHomeRedirect() {
   const { profile } = useAuth();
   return <Navigate to={profile?.role === 'affiliate' ? 'referral-workspace' : 'dashboard'} replace />;
+}
+
+function AffiliatePipelinePage() {
+  const { profile } = useAuth();
+  return profile?.role === 'affiliate' ? <ReferralAttorneyPipeline /> : <CasePipeline />;
+}
+
+function AffiliateClientsPage() {
+  const { profile } = useAuth();
+  return profile?.role === 'affiliate' ? <ReferralAttorneyClients /> : <ClientList />;
 }
 
 function AttorneyLayout() {
@@ -709,17 +733,18 @@ export default function App() {
             }
           >
             <Route index element={<AttorneyHomeRedirect />} />
-            <Route path="dashboard" element={<AttorneyDashboard />} />
-            <Route path="referral-workspace" element={<ReferralAttorneyWorkspace />} />
+            <Route path="dashboard" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><AttorneyDashboard /></AttorneyRolePage>} />
+            <Route path="referral-workspace" element={<AttorneyRolePage allowedRoles={['affiliate']}><ReferralAttorneyWorkspace /></AttorneyRolePage>} />
             <Route path="draft" element={<DraftComplaint />} />
             <Route path="disputes" element={<DisputeLetters />} />
-            <Route path="esign" element={<ESignatures />} />
-            <Route path="document-exchange" element={<DocumentExchange />} />
+            <Route path="esign" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><ESignatures /></AttorneyRolePage>} />
+            <Route path="document-exchange" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><DocumentExchange /></AttorneyRolePage>} />
+            <Route path="documents" element={<AttorneyRolePage allowedRoles={['affiliate']}><ReferralAttorneyDocuments /></AttorneyRolePage>} />
             <Route path="w9" element={<W9Requests />} />
             <Route path="closing-statements" element={<ClosingStatements />} />
             <Route path="settlements" element={<SettlementCenter />} />
-            <Route path="pipeline" element={<CasePipeline />} />
-            <Route path="cases/:id" element={<CaseDetail />} />
+            <Route path="pipeline" element={<AffiliatePipelinePage />} />
+            <Route path="cases/:id" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><CaseDetail /></AttorneyRolePage>} />
             <Route path="agents" element={<AgentChat />} />
             <Route path="calendar" element={<CalendarPage />} />
             <Route path="payout-overview" element={<PayoutOverview />} />
@@ -727,8 +752,8 @@ export default function App() {
             <Route path="payouts" element={<AttorneyPayouts />} />
             <Route path="forms" element={<FormsPage />} />
             <Route path="referral-attorneys" element={<ReferralAttorneyWorkspaces />} />
-            <Route path="clients" element={<ClientList />} />
-            <Route path="clients/:id" element={<ClientProfile />} />
+            <Route path="clients" element={<AffiliateClientsPage />} />
+            <Route path="clients/:id" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><ClientProfile /></AttorneyRolePage>} />
             <Route path="referrals/:id" element={<ReferralPartnerProfile />} />
             <Route path="communications" element={<Communications />} />
             <Route path="settings" element={<AttorneySettings />} />

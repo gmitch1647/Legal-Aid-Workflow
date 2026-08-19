@@ -89,16 +89,34 @@ class PipelineUpdate(BaseModel):
 # PIPELINES — CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("/pipelines")
-async def list_pipelines():
-    """Return all pipelines ordered by position."""
-    supabase = get_supabase()
-    result = (
-        supabase.table("pipelines")
-        .select("*")
-        .order("position")
+def _affiliate_pipeline_id(supabase, profile: dict) -> str | None:
+    """Return the single active referral pipeline available to an affiliate."""
+    if profile.get("role") != "affiliate":
+        return None
+    partner_response = (
+        supabase.table("referral_partners")
+        .select("pipeline_id")
+        .eq("portal_user_id", profile["id"])
+        .eq("portal_active", True)
+        .limit(1)
         .execute()
     )
+    partner = (partner_response.data or [None])[0]
+    return partner.get("pipeline_id") if partner else None
+
+
+@router.get("/pipelines")
+async def list_pipelines(authorization: str = Header(...)):
+    """Return permitted pipelines; affiliates receive only their own referral board."""
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+    query = supabase.table("pipelines").select("*").order("position")
+    if profile.get("role") == "affiliate":
+        pipeline_id = _affiliate_pipeline_id(supabase, profile)
+        if not pipeline_id:
+            return []
+        query = query.eq("id", pipeline_id)
+    result = query.execute()
     return result.data or []
 
 
@@ -185,10 +203,17 @@ async def delete_pipeline(
 # ---------------------------------------------------------------------------
 
 @router.get("")
-async def list_stages(pipeline_id: Optional[str] = None):
-    """Return pipeline stages. If pipeline_id is given, returns shared
-    stages (pipeline_id IS NULL) plus stages for that specific pipeline."""
+async def list_stages(pipeline_id: Optional[str] = None, authorization: str = Header(...)):
+    """Return permitted pipeline stages. Affiliates can see only their own board."""
+    profile = await _get_current_user(authorization)
     supabase = get_supabase()
+    affiliate_pipeline_id = _affiliate_pipeline_id(supabase, profile)
+    if profile.get("role") == "affiliate":
+        if not affiliate_pipeline_id:
+            return []
+        if pipeline_id not in (None, "all", affiliate_pipeline_id):
+            raise HTTPException(status_code=403, detail="You do not have access to this pipeline.")
+        pipeline_id = affiliate_pipeline_id
 
     if pipeline_id and pipeline_id != "all":
         # Get shared stages + pipeline-specific stages

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertCircle,
   CheckCircle2,
   ClipboardCopy,
   ExternalLink,
+  FileText,
   FolderKanban,
   Loader2,
   RefreshCw,
@@ -88,11 +90,11 @@ export default function ReferralAttorneyWorkspace() {
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full border border-indigo-300/25 bg-indigo-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-indigo-200">
-              <ShieldCheck className="h-3.5 w-3.5" /> Restricted Referral Workspace
+              <ShieldCheck className="h-3.5 w-3.5" /> Attorney Referral Workspace
             </span>
             <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">{workspace?.partner_name} Referrals</h1>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              Submit and monitor only the cases you refer to LegalFlow. The assigned LegalFlow attorney manages case work and updates the referral stages below.
+              Manage your LegalFlow referrals from one workspace. You can see your pipeline, clients, documents, and case activity while Esther Oise handles the assigned legal work.
             </p>
           </div>
           <button onClick={() => loadWorkspace(true)} disabled={refreshing} className="inline-flex items-center justify-center gap-2 self-start rounded-lg border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20 disabled:opacity-60">
@@ -102,6 +104,12 @@ export default function ReferralAttorneyWorkspace() {
       </section>
 
       {error && <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><AlertCircle className="h-5 w-5 shrink-0" />{error}</div>}
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <Link to="/attorney/pipeline" className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><FolderKanban className="h-6 w-6 text-indigo-700" /><h2 className="mt-3 font-bold text-slate-900">My Case Pipeline</h2><p className="mt-1 text-sm text-slate-600">Track every case submitted through your dedicated referral pipeline.</p></Link>
+        <Link to="/attorney/clients" className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><Users className="h-6 w-6 text-indigo-700" /><h2 className="mt-3 font-bold text-slate-900">My Clients</h2><p className="mt-1 text-sm text-slate-600">Review only clients connected to your own LegalFlow referrals.</p></Link>
+        <Link to="/attorney/documents" className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><FileText className="h-6 w-6 text-indigo-700" /><h2 className="mt-3 font-bold text-slate-900">My Case Documents</h2><p className="mt-1 text-sm text-slate-600">Open and upload documents for your referred cases.</p></Link>
+      </section>
 
       <section className="grid gap-4 lg:grid-cols-[1fr_auto]">
         <div className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm">
