@@ -399,11 +399,14 @@ async def list_cases(
         return [
             {
                 "id": case.get("id"),
+                "client_id": case.get("client_id"),
                 "status": case.get("status"),
                 "created_at": case.get("created_at"),
                 "updated_at": case.get("updated_at"),
                 "client_name": case.get("client_name"),
                 "plaintiff_name": case.get("plaintiff_name"),
+                "client": case.get("client"),
+                "client_email": (case.get("client") or {}).get("email"),
             }
             for case in enriched
         ]
