@@ -1139,6 +1139,20 @@ export async function submitIntakeForm(formData) {
   return response.json();
 }
 
+export async function submitCaseReferralForm(formData) {
+  // Public Case Referral Hub endpoint. It validates supporting documents and creates a Submitted case.
+  const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+  const response = await fetch(`${BASE}/intake/referral-submit`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Case referral could not be submitted' }));
+    throw new Error(err.detail || 'Case referral could not be submitted');
+  }
+  return response.json();
+}
+
 export async function inviteStaffAttorney(data) {
   return request('/auth/invite-attorney', {
     method: 'POST',

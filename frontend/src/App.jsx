@@ -41,6 +41,7 @@ import { getCases, getNotifications, markNotificationRead } from './lib/api';
 // ---------------------------------------------------------------------------
 const Login = React.lazy(() => import('./pages/Login'));
 const IntakeForm = React.lazy(() => import('./pages/IntakeForm'));
+const CaseReferralForm = React.lazy(() => import('./pages/CaseReferralForm'));
 const SignDocument = React.lazy(() => import('./pages/SignDocument'));
 const Privacy = React.lazy(() => import('./pages/Privacy'));
 const Terms = React.lazy(() => import('./pages/Terms'));
@@ -680,6 +681,7 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/intake" element={<IntakeForm />} />
           <Route path="/intake/:slug" element={<IntakeForm />} />
+          <Route path="/case-referral" element={<CaseReferralForm />} />
           <Route path="/sign/:token" element={<SignDocument />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/terms" element={<Terms />} />

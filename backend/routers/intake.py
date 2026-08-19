@@ -5,7 +5,9 @@ Also includes form management endpoints for attorneys.
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
@@ -17,6 +19,64 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+REFERRAL_ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "txt", "png", "jpg", "jpeg"}
+REFERRAL_MAX_FILES = 10
+REFERRAL_MAX_FILE_BYTES = 10 * 1024 * 1024
+
+
+async def _prepare_referral_documents(files: list[UploadFile]) -> list[dict]:
+    """Validate public referral uploads before creating a client or case record."""
+    candidates = [upload for upload in files if upload and upload.filename]
+    if not candidates:
+        raise HTTPException(status_code=422, detail="Upload at least one supporting document to submit this referral.")
+    if len(candidates) > REFERRAL_MAX_FILES:
+        raise HTTPException(status_code=422, detail=f"Upload no more than {REFERRAL_MAX_FILES} supporting documents at one time.")
+
+    prepared = []
+    for upload in candidates:
+        original_name = os.path.basename(upload.filename or "")
+        extension = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
+        if extension not in REFERRAL_ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=422, detail=f"{original_name or 'This file'} is not an accepted supporting-document type.")
+
+        content = await upload.read()
+        if not content:
+            raise HTTPException(status_code=422, detail=f"{original_name} is empty.")
+        if len(content) > REFERRAL_MAX_FILE_BYTES:
+            raise HTTPException(status_code=422, detail=f"{original_name} exceeds the 10 MB file limit.")
+
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", original_name).strip("._") or f"supporting_document.{extension}"
+        prepared.append({
+            "file_name": original_name,
+            "safe_name": safe_name,
+            "file_type": extension,
+            "content_type": upload.content_type or "application/octet-stream",
+            "content": content,
+        })
+    return prepared
+
+
+def _store_prepared_referral_documents(case_id: str, documents: list[dict]) -> int:
+    """Store validated referral files under the newly submitted case without public links."""
+    supabase = get_supabase()
+    uploaded = 0
+    for document in documents:
+        storage_path = f"cases/{case_id}/case-submission/{uuid4().hex}_{document['safe_name']}"
+        supabase.storage.from_("documents").upload(
+            storage_path,
+            document["content"],
+            {"content-type": document["content_type"]},
+        )
+        supabase.table("case_documents").insert({
+            "case_id": case_id,
+            "file_name": document["file_name"],
+            "file_type": document["file_type"],
+            "storage_path": storage_path,
+            "document_category": "other",
+        }).execute()
+        uploaded += 1
+    return uploaded
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +178,8 @@ class IntakeSubmission(BaseModel):
     adverse_party: Optional[str] = None
     brief_description: Optional[str] = None
     affiliate_name: Optional[str] = None
+    requested_assistance: Optional[str] = None
+    sync_to_suitedash: bool = True
 
 
 @router.post("/submit", status_code=status.HTTP_201_CREATED)
@@ -199,7 +261,8 @@ async def submit_intake(body: IntakeSubmission):
         f"Type of Violation: {body.violation_type or 'Not specified'}\n"
         f"Specific Violation: {body.specific_violation or 'Not specified'}\n"
         f"Adverse Party: {', '.join(defendants) if defendants else 'Not specified'}\n"
-        f"Affiliate: {body.affiliate_name or 'N/A'}\n\n"
+        f"Referral Organization: {body.affiliate_name or 'N/A'}\n"
+        f"Requested Assistance: {body.requested_assistance or 'LegalFlow Intake Team'}\n\n"
         f"=== SOURCE ===\n"
         f"Submitted via: LegalFlow Intake Form\n"
         f"Submitted at: {now}\n\n"
@@ -246,7 +309,7 @@ async def submit_intake(body: IntakeSubmission):
     sd_public = os.environ.get("SUITEDASH_API_KEY", "")
     sd_secret = os.environ.get("SUITEDASH_SECRET_KEY", "")
 
-    if sd_public and sd_secret:
+    if body.sync_to_suitedash and sd_public and sd_secret:
         try:
             sd_payload = {
                 "first_name": body.first_name,
@@ -311,9 +374,11 @@ async def submit_intake_with_files(
     violation_type: str = Form(""),
     specific_violation: str = Form(""),
     adverse_party: str = Form(""),
-    brief_description: str = Form(""),
+            brief_description: str = Form(""),
     affiliate_name: str = Form(""),
+    requested_assistance: str = Form(""),
     files: list[UploadFile] = File(default=[]),
+
 ):
     """Same as /submit but accepts multipart form data with file uploads."""
     # First create the case via the JSON endpoint
@@ -323,6 +388,8 @@ async def submit_intake_with_files(
         zip_code=zip_code, case_type=case_type, violation_type=violation_type,
         specific_violation=specific_violation, adverse_party=adverse_party,
         brief_description=brief_description, affiliate_name=affiliate_name,
+        requested_assistance=requested_assistance,
+        sync_to_suitedash=False,
     )
     result = await submit_intake(body)
     case_id = result.get("case_id")
@@ -356,4 +423,83 @@ async def submit_intake_with_files(
                 logger.warning(f"File upload failed for {file.filename}: {e}")
 
     result["files_uploaded"] = files_uploaded
+    return result
+
+
+@router.post("/referral-submit", status_code=status.HTTP_201_CREATED)
+async def submit_case_referral(
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
+    date_of_birth: str = Form(...),
+    address: str = Form(...),
+    city: str = Form(...),
+    state: str = Form(...),
+    zip_code: str = Form(...),
+    case_type: str = Form(...),
+    violation_type: str = Form(...),
+    specific_violation: str = Form(""),
+    adverse_party: str = Form(...),
+    brief_description: str = Form(""),
+    affiliate_name: str = Form(...),
+    requested_assistance: str = Form(...),
+    certification: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    """Public Case Referral Hub endpoint; every completed submission enters Submitted."""
+    required_values = {
+        "Client first name": first_name,
+        "Client last name": last_name,
+        "Client email": email,
+        "Client phone": phone,
+        "Client date of birth": date_of_birth,
+        "Client address": address,
+        "City": city,
+        "State": state,
+        "ZIP code": zip_code,
+        "Case type": case_type,
+        "Type of violation": violation_type,
+        "Adverse party": adverse_party,
+        "Referral organization": affiliate_name,
+        "Requested assistance": requested_assistance,
+    }
+    missing = [label for label, value in required_values.items() if not str(value or "").strip()]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Complete the required field: {missing[0]}.")
+    if str(certification).strip().lower() not in {"true", "1", "yes", "on"}:
+        raise HTTPException(status_code=422, detail="Confirm that the referral information is accurate before submitting.")
+
+    prepared_documents = await _prepare_referral_documents(files)
+    body = IntakeSubmission(
+        first_name=first_name.strip(),
+        last_name=last_name.strip(),
+        email=email.strip(),
+        phone=phone.strip(),
+        date_of_birth=date_of_birth.strip(),
+        address=address.strip(),
+        city=city.strip(),
+        state=state.strip(),
+        zip_code=zip_code.strip(),
+        case_type=case_type.strip(),
+        violation_type=violation_type.strip(),
+        specific_violation=specific_violation.strip(),
+        adverse_party=adverse_party.strip(),
+        brief_description=brief_description.strip(),
+        affiliate_name=affiliate_name.strip(),
+        requested_assistance=requested_assistance.strip(),
+        sync_to_suitedash=False,
+    )
+    result = await submit_intake(body)
+    case_id = result.get("case_id")
+    if not case_id:
+        raise HTTPException(status_code=500, detail="The case submission could not be created.")
+
+    try:
+        result["files_uploaded"] = _store_prepared_referral_documents(case_id, prepared_documents)
+    except Exception as exc:
+        logger.exception("Case referral documents could not be stored for case %s", case_id)
+        raise HTTPException(status_code=500, detail="The case was created but supporting documents could not be stored. Please contact LegalFlow support.") from exc
+
+    result["message"] = f"Thank you {body.first_name}. Your referral is now in Case Submission for review."
     return result

@@ -75,6 +75,10 @@ export default function Forms() {
     navigator.clipboard.writeText(url);
   }
 
+  function copyCaseReferralLink() {
+    navigator.clipboard.writeText(`${window.location.origin}/case-referral`);
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -112,6 +116,27 @@ export default function Forms() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-5 shadow-sm">
+          <div className="mb-3 flex items-start justify-between">
+            <div>
+              <h3 className="font-semibold text-slate-900">Case Referral Hub</h3>
+              <p className="mt-0.5 text-xs text-slate-600">Public referral form with required documents that creates a Case Submission record.</p>
+            </div>
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Active</span>
+          </div>
+          <div className="mb-4 text-xs text-slate-500">/case-referral · Supporting documents required</div>
+          <div className="flex items-center gap-2">
+            <button onClick={copyCaseReferralLink}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 transition">
+              <Copy className="h-3.5 w-3.5" /> Copy Link
+            </button>
+            <a href="/case-referral" target="_blank" rel="noopener"
+              className="inline-flex items-center justify-center rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100 transition"
+              title="Preview Case Referral Hub">
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        </div>
         {forms.map(form => (
           <div key={form.id} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition">
             <div className="flex items-start justify-between mb-3">
