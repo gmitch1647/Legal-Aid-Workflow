@@ -194,6 +194,21 @@ def _fetch_case(case_id: str, *, profile: dict | None = None) -> dict:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this case.",
         )
+    if profile and profile.get("role") == "affiliate":
+        partner_resp = (
+            supabase.table("referral_partners")
+            .select("id")
+            .eq("portal_user_id", profile["id"])
+            .eq("portal_active", True)
+            .limit(1)
+            .execute()
+        )
+        partner = (partner_resp.data or [None])[0]
+        if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this referral case.",
+            )
     return case
 
 
@@ -298,16 +313,19 @@ async def list_cases(
         else:
             return []
     elif profile["role"] == "affiliate":
-        # Affiliates see only cases for clients they referred
-        partner_resp = supabase.table("referral_partners").select("id").eq("portal_user_id", profile["id"]).limit(1).execute()
+        # Referral partners see only cases explicitly attributed to their partner record.
+        # Case-level attribution prevents an existing client’s unrelated cases from leaking
+        # into the partner portal.
+        partner_resp = (
+            supabase.table("referral_partners")
+            .select("id")
+            .eq("portal_user_id", profile["id"])
+            .eq("portal_active", True)
+            .limit(1)
+            .execute()
+        )
         if partner_resp.data:
-            partner_id = partner_resp.data[0]["id"]
-            referred_clients = supabase.table("profiles").select("id").eq("referral_partner_id", partner_id).execute()
-            client_ids = [c["id"] for c in (referred_clients.data or [])]
-            if client_ids:
-                query = query.in_("client_id", client_ids)
-            else:
-                return []
+            query = query.eq("referral_partner_id", partner_resp.data[0]["id"])
         else:
             return []
     # Apply an optional client filter after the role-based access scope above.
@@ -377,6 +395,18 @@ async def list_cases(
 
         enriched.append(case)
 
+    if profile.get("role") == "affiliate":
+        return [
+            {
+                "id": case.get("id"),
+                "status": case.get("status"),
+                "created_at": case.get("created_at"),
+                "updated_at": case.get("updated_at"),
+                "client_name": case.get("client_name"),
+                "plaintiff_name": case.get("plaintiff_name"),
+            }
+            for case in enriched
+        ]
     return enriched
 
 
@@ -390,6 +420,8 @@ async def get_case_detail(case_id: str, authorization: str = Header(...)):
     """Full case detail including client profile, defendants, documents,
     agent outputs, and the current complaint."""
     profile = await get_current_user(authorization)
+    if profile.get("role") == "affiliate":
+        raise HTTPException(status_code=403, detail="Referral portal users can view only the limited referral status workspace.")
     case = _fetch_case(case_id, profile=profile)
     supabase = get_supabase()
 

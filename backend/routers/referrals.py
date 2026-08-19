@@ -6,13 +6,15 @@ import html
 import logging
 import os
 import re
+import secrets
+import string
 import uuid
 from email.utils import parseaddr
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from utils.supabase_client import get_supabase
 
@@ -31,6 +33,16 @@ def _require_attorney(profile: dict):
         raise HTTPException(status_code=403, detail="Attorney access required")
 
 
+def _require_owner(profile: dict):
+    if profile.get("role") != "attorney":
+        raise HTTPException(status_code=403, detail="Only the LegalFlow owner can manage referral attorney workspaces")
+
+
+def _workspace_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return slug[:70]
+
+
 class ReferralPartnerCreate(BaseModel):
     full_name: str
     company: Optional[str] = ""
@@ -39,6 +51,15 @@ class ReferralPartnerCreate(BaseModel):
     referral_fee_type: str = "percentage"
     referral_fee_amount: float = 0
     notes: Optional[str] = ""
+
+
+class ReferralAttorneyWorkspaceCreate(BaseModel):
+    full_name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default="", max_length=200)
+    assigned_attorney_id: str
+    submission_slug: Optional[str] = Field(default=None, max_length=80)
 
 
 class ReferralPartnerMessageCreate(BaseModel):
@@ -99,6 +120,217 @@ def _safe_inbound_text(text: str | None, html_body: str | None = None) -> str:
         content = re.sub(r"<[^>]+>", " ", str(html_body))
         content = html.unescape(re.sub(r"\s+", " ", content)).strip()
     return content[:10_000]
+
+
+@router.post("/attorney-workspaces", status_code=status.HTTP_201_CREATED)
+async def create_referral_attorney_workspace(
+    body: ReferralAttorneyWorkspaceCreate,
+    authorization: str = Header(default=None),
+):
+    """Create a restricted referral-attorney account and its isolated pipeline."""
+    profile = await _get_current_user(authorization)
+    _require_owner(profile)
+    supabase = get_supabase()
+
+    attorney_response = (
+        supabase.table("profiles")
+        .select("id,full_name,role")
+        .eq("id", body.assigned_attorney_id)
+        .limit(1)
+        .execute()
+    )
+    assigned_attorney = (attorney_response.data or [None])[0]
+    if not assigned_attorney or assigned_attorney.get("role") not in ("attorney", "staff_attorney"):
+        raise HTTPException(status_code=422, detail="Choose an active LegalFlow attorney to work this referral pipeline.")
+
+    existing = (
+        supabase.table("referral_partners")
+        .select("id")
+        .eq("email", str(body.email).lower())
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        raise HTTPException(status_code=409, detail="A referral partner with this email already exists.")
+
+    base_slug = _workspace_slug(body.submission_slug or f"{body.full_name}-referrals")
+    if not base_slug:
+        raise HTTPException(status_code=422, detail="A referral submission link is required.")
+    slug_exists = supabase.table("referral_partners").select("id").eq("submission_slug", base_slug).limit(1).execute()
+    if slug_exists.data:
+        raise HTTPException(status_code=409, detail="That referral submission link is already in use.")
+
+    pipeline_slug = _workspace_slug(f"{base_slug}-pipeline")
+    pipeline_exists = supabase.table("pipelines").select("id").eq("slug", pipeline_slug).limit(1).execute()
+    if pipeline_exists.data:
+        raise HTTPException(status_code=409, detail="A referral pipeline with this name already exists.")
+
+    pipeline = supabase.table("pipelines").insert({
+        "name": f"{body.full_name} Referrals",
+        "slug": pipeline_slug,
+        "description": f"Private referral pipeline submitted by {body.full_name} and worked by {assigned_attorney.get('full_name') or 'the assigned attorney'}.",
+        "color": "indigo",
+        "is_default": False,
+        "position": 999,
+    }).execute()
+    if not pipeline.data:
+        raise HTTPException(status_code=500, detail="Could not create the referral pipeline.")
+    pipeline_id = pipeline.data[0]["id"]
+
+    stage_definitions = [
+        ("Submitted by Ethan", "submitted", "slate"),
+        ("Esther Review", "esther-review", "blue"),
+        ("Documents Requested", "documents-requested", "amber"),
+        ("Investigating", "investigating", "purple"),
+        ("Accepted", "accepted", "emerald"),
+        ("Declined", "declined", "red"),
+        ("Engagement Sent", "engagement-sent", "cyan"),
+        ("Active Case", "active-case", "indigo"),
+        ("Settlement / Closed", "settlement-closed", "green"),
+    ]
+    for position, (name, suffix, color) in enumerate(stage_definitions):
+        supabase.table("pipeline_stages").insert({
+            "name": name,
+            "slug": f"{base_slug}-{suffix}",
+            "position": position,
+            "color": color,
+            "description": f"{body.full_name} referral workflow stage",
+            "pipeline_id": pipeline_id,
+            "is_system": False,
+        }).execute()
+
+    temp_password = "".join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(16))
+    try:
+        auth_response = supabase.auth.admin.create_user({
+            "email": str(body.email),
+            "password": temp_password,
+            "email_confirm": True,
+            "user_metadata": {"full_name": body.full_name},
+        })
+        portal_user_id = str(auth_response.user.id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not create the referral attorney login: {exc}")
+
+    try:
+        supabase.table("profiles").insert({
+            "id": portal_user_id,
+            "email": str(body.email),
+            "full_name": body.full_name,
+            "phone": body.phone or "",
+            "firm_name": body.company or "",
+            "role": "affiliate",
+        }).execute()
+        partner = supabase.table("referral_partners").insert({
+            "full_name": body.full_name,
+            "company": body.company or "",
+            "email": str(body.email),
+            "phone": body.phone or "",
+            "referral_fee_type": "percentage",
+            "referral_fee_amount": 0,
+            "created_by": profile["id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "portal_user_id": portal_user_id,
+            "portal_active": True,
+            "assigned_attorney_id": body.assigned_attorney_id,
+            "pipeline_id": pipeline_id,
+            "submission_slug": base_slug,
+        }).execute()
+        if not partner.data:
+            raise RuntimeError("Referral partner insert returned no record.")
+    except Exception as exc:
+        try:
+            supabase.auth.admin.delete_user(portal_user_id)
+        except Exception:
+            logger.warning("Could not roll back referral portal user %s", portal_user_id)
+        raise HTTPException(status_code=500, detail=f"Could not create the referral attorney workspace: {exc}")
+
+    frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
+    referral_url = f"{frontend_url}/case-referral/{base_slug}"
+    portal_url = f"{frontend_url}/login"
+    email_sent = False
+    try:
+        from utils.email_service import send_email
+        email_sent = await send_email(
+            to=str(body.email),
+            subject="Your LegalFlow referral workspace is ready",
+            body=(
+                "<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.6;'>"
+                f"<h2>Welcome to LegalFlow, {html.escape(body.full_name)}.</h2>"
+                "<p>Your restricted referral workspace is ready. You can submit and track only your referral cases.</p>"
+                f"<p><strong>Login:</strong> <a href='{portal_url}'>{portal_url}</a></p>"
+                f"<p><strong>Email:</strong> {html.escape(str(body.email))}</p>"
+                f"<p><strong>Temporary Password:</strong> {html.escape(temp_password)}</p>"
+                f"<p><strong>Private referral form:</strong> <a href='{referral_url}'>{referral_url}</a></p>"
+                "<p>Please change your password after your first login.</p></div>"
+            ),
+            idempotency_key=f"referral-attorney-workspace:{portal_user_id}",
+        )
+    except Exception:
+        logger.exception("Could not send referral attorney invitation for %s", body.email)
+
+    return {
+        "partner": partner.data[0],
+        "pipeline": pipeline.data[0],
+        "assigned_attorney": {"id": assigned_attorney["id"], "full_name": assigned_attorney.get("full_name")},
+        "referral_url": referral_url,
+        "portal_url": portal_url,
+        "email_sent": email_sent,
+        "message": "Referral attorney workspace created. The invitation contains the temporary password and private referral form link.",
+    }
+
+
+@router.get("/portal/workspace")
+async def get_referral_attorney_workspace(authorization: str = Header(default=None)):
+    """Return the minimal, partner-owned referral dashboard for an affiliate portal user."""
+    profile = await _get_current_user(authorization)
+    if profile.get("role") != "affiliate":
+        raise HTTPException(status_code=403, detail="Referral portal access required")
+
+    supabase = get_supabase()
+    partner_response = (
+        supabase.table("referral_partners")
+        .select("id,full_name,pipeline_id,submission_slug,portal_active")
+        .eq("portal_user_id", profile["id"])
+        .eq("portal_active", True)
+        .limit(1)
+        .execute()
+    )
+    partner = (partner_response.data or [None])[0]
+    if not partner:
+        raise HTTPException(status_code=404, detail="Referral workspace not found")
+
+    case_response = (
+        supabase.table("cases")
+        .select("id,status,created_at,updated_at,client_id")
+        .eq("referral_partner_id", partner["id"])
+        .order("created_at", desc=True)
+        .limit(250)
+        .execute()
+    )
+    cases = case_response.data or []
+    for case in cases:
+        client_response = supabase.table("profiles").select("full_name").eq("id", case["client_id"]).limit(1).execute()
+        client = (client_response.data or [None])[0]
+        case["client_name"] = (client or {}).get("full_name") or "Client"
+        case.pop("client_id", None)
+
+    stage_response = (
+        supabase.table("pipeline_stages")
+        .select("id,name,slug,color,position")
+        .eq("pipeline_id", partner.get("pipeline_id"))
+        .order("position")
+        .execute()
+        if partner.get("pipeline_id") else None
+    )
+    stages = stage_response.data if stage_response else []
+    frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
+    return {
+        "partner_name": partner.get("full_name"),
+        "referral_url": f"{frontend_url}/case-referral/{partner.get('submission_slug')}",
+        "pipeline_id": partner.get("pipeline_id"),
+        "stages": stages or [],
+        "cases": cases,
+    }
 
 
 @router.get("")

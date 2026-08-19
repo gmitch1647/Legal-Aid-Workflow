@@ -79,6 +79,25 @@ def _store_prepared_referral_documents(case_id: str, documents: list[dict]) -> i
     return uploaded
 
 
+def _active_referral_partner_for_slug(slug: str) -> dict:
+    """Return the active partner workspace for a public referral-form slug."""
+    cleaned_slug = re.sub(r"[^a-z0-9-]+", "", str(slug or "").strip().lower())
+    if not cleaned_slug:
+        raise HTTPException(status_code=404, detail="Referral workspace not found.")
+    partner_response = (
+        get_supabase().table("referral_partners")
+        .select("id,full_name,assigned_attorney_id,pipeline_id,submission_slug,portal_active")
+        .eq("submission_slug", cleaned_slug)
+        .eq("portal_active", True)
+        .limit(1)
+        .execute()
+    )
+    partner = (partner_response.data or [None])[0]
+    if not partner:
+        raise HTTPException(status_code=404, detail="Referral workspace not found.")
+    return partner
+
+
 # ---------------------------------------------------------------------------
 # Form Management (attorney-only)
 # ---------------------------------------------------------------------------
@@ -179,6 +198,7 @@ class IntakeSubmission(BaseModel):
     brief_description: Optional[str] = None
     affiliate_name: Optional[str] = None
     requested_assistance: Optional[str] = None
+    referral_slug: Optional[str] = None
     sync_to_suitedash: bool = True
 
 
@@ -190,6 +210,11 @@ async def submit_intake(body: IntakeSubmission):
     supabase = get_supabase()
     now = datetime.now(timezone.utc).isoformat()
     name = f"{body.first_name} {body.last_name}".strip()
+    referral_workspace = _active_referral_partner_for_slug(body.referral_slug) if body.referral_slug else None
+    if referral_workspace:
+        # The dedicated partner link is the source of truth; do not trust a public
+        # form field to choose or impersonate a referral partner.
+        body.affiliate_name = referral_workspace.get("full_name") or body.affiliate_name
 
     # ── 1. Create client in LegalFlow ────────────────────────────────
     # Check if client already exists
@@ -280,6 +305,22 @@ async def submit_intake(body: IntakeSubmission):
     }).execute()
 
     case_id = case_resp.data[0]["id"] if case_resp.data else None
+
+    if referral_workspace and case_id:
+        # Keep Ethan's referral records in the private partner pipeline while the
+        # client is assigned to Esther for the legal work. The owner retains
+        # firm-wide visibility through the existing attorney role.
+        partner_id = referral_workspace["id"]
+        client_update = {"referral_partner_id": partner_id}
+        if referral_workspace.get("assigned_attorney_id"):
+            client_update["assigned_attorney_id"] = referral_workspace["assigned_attorney_id"]
+        supabase.table("profiles").update(client_update).eq("id", profile_id).execute()
+
+        case_update = {"referral_partner_id": partner_id}
+        if referral_workspace.get("pipeline_id"):
+            case_update["pipeline_id"] = referral_workspace["pipeline_id"]
+            case_update["status"] = f"{referral_workspace.get('submission_slug')}-submitted"
+        supabase.table("cases").update(case_update).eq("id", case_id).execute()
 
     # Link defendants
     if case_id:
@@ -426,6 +467,17 @@ async def submit_intake_with_files(
     return result
 
 
+@router.get("/referral-config/{referral_slug}")
+async def get_referral_workspace_config(referral_slug: str):
+    """Public display configuration for one active referral partner form."""
+    partner = _active_referral_partner_for_slug(referral_slug)
+    return {
+        "partner_name": partner.get("full_name") or "Referral Partner",
+        "submission_slug": partner.get("submission_slug"),
+        "requested_assistance": "LegalFlow Intake Team",
+    }
+
+
 @router.post("/referral-submit", status_code=status.HTTP_201_CREATED)
 async def submit_case_referral(
     first_name: str = Form(...),
@@ -444,6 +496,7 @@ async def submit_case_referral(
     brief_description: str = Form(""),
     affiliate_name: str = Form(...),
     requested_assistance: str = Form(...),
+    referral_slug: str = Form(""),
     certification: str = Form(...),
     files: list[UploadFile] = File(...),
 ):
@@ -471,6 +524,8 @@ async def submit_case_referral(
         raise HTTPException(status_code=422, detail="Confirm that the referral information is accurate before submitting.")
 
     prepared_documents = await _prepare_referral_documents(files)
+    resolved_referral_slug = referral_slug.strip() if isinstance(referral_slug, str) else ""
+    referral_workspace = _active_referral_partner_for_slug(resolved_referral_slug) if resolved_referral_slug else None
     body = IntakeSubmission(
         first_name=first_name.strip(),
         last_name=last_name.strip(),
@@ -486,8 +541,9 @@ async def submit_case_referral(
         specific_violation=specific_violation.strip(),
         adverse_party=adverse_party.strip(),
         brief_description=brief_description.strip(),
-        affiliate_name=affiliate_name.strip(),
+        affiliate_name=(referral_workspace.get("full_name") if referral_workspace else affiliate_name.strip()),
         requested_assistance=requested_assistance.strip(),
+        referral_slug=referral_workspace.get("submission_slug") if referral_workspace else None,
         sync_to_suitedash=False,
     )
     result = await submit_intake(body)

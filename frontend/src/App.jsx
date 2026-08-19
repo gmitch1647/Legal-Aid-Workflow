@@ -56,6 +56,8 @@ const CaseDetail = React.lazy(() => import('./pages/attorney/CaseDetail'));
 const ClientList = React.lazy(() => import('./pages/attorney/ClientList'));
 const ClientProfile = React.lazy(() => import('./pages/attorney/ClientProfile'));
 const ReferralPartnerProfile = React.lazy(() => import('./pages/attorney/ReferralPartnerProfile'));
+const ReferralAttorneyWorkspace = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspace'));
+const ReferralAttorneyWorkspaces = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspaces'));
 const Communications = React.lazy(() => import('./pages/attorney/Communications'));
 const AttorneySettings = React.lazy(() => import('./pages/attorney/Settings'));
 const AgentChat = React.lazy(() => import('./pages/attorney/AgentChat'));
@@ -600,23 +602,30 @@ function Sidebar({ links, open, onClose }) {
 // Attorney Layout
 // ---------------------------------------------------------------------------
 const allAttorneyLinks = [
-  { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/referral-workspace', label: 'Referral Workspace', icon: FolderSync, roles: ['affiliate'] },
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/document-exchange', label: 'Document Exchange', icon: FolderSync, roles: ['attorney', 'staff_attorney'] },
-  { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/agents', label: 'Agent Chat', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/calendar', label: 'Calendar', icon: CalendarDays, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/payout-overview', label: 'Payout Overview', icon: BarChart3, roles: ['attorney'] },
   { to: '/attorney/commissions', label: 'Commissions', icon: DollarSign, roles: ['attorney'] },
   { to: '/attorney/payouts', label: 'Attorney Payouts', icon: DollarSign, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/forms', label: 'Forms', icon: FileText, roles: ['attorney'] },
-  { to: '/attorney/clients', label: 'Clients', icon: Users, roles: ['attorney', 'staff_attorney', 'affiliate'] },
+  { to: '/attorney/referral-attorneys', label: 'Referral Attorneys', icon: Users, roles: ['attorney'] },
+  { to: '/attorney/clients', label: 'Clients', icon: Users, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/communications', label: 'Communications', icon: MessageSquare, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/settings', label: 'Settings', icon: Settings, roles: ['attorney'] },
 ];
+
+function AttorneyHomeRedirect() {
+  const { profile } = useAuth();
+  return <Navigate to={profile?.role === 'affiliate' ? 'referral-workspace' : 'dashboard'} replace />;
+}
 
 function AttorneyLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -682,6 +691,7 @@ export default function App() {
           <Route path="/intake" element={<IntakeForm />} />
           <Route path="/intake/:slug" element={<IntakeForm />} />
           <Route path="/case-referral" element={<CaseReferralForm />} />
+          <Route path="/case-referral/:referralSlug" element={<CaseReferralForm />} />
           <Route path="/sign/:token" element={<SignDocument />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/terms" element={<Terms />} />
@@ -698,8 +708,9 @@ export default function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route index element={<AttorneyHomeRedirect />} />
             <Route path="dashboard" element={<AttorneyDashboard />} />
+            <Route path="referral-workspace" element={<ReferralAttorneyWorkspace />} />
             <Route path="draft" element={<DraftComplaint />} />
             <Route path="disputes" element={<DisputeLetters />} />
             <Route path="esign" element={<ESignatures />} />
@@ -715,6 +726,7 @@ export default function App() {
             <Route path="commissions" element={<CommissionsPage />} />
             <Route path="payouts" element={<AttorneyPayouts />} />
             <Route path="forms" element={<FormsPage />} />
+            <Route path="referral-attorneys" element={<ReferralAttorneyWorkspaces />} />
             <Route path="clients" element={<ClientList />} />
             <Route path="clients/:id" element={<ClientProfile />} />
             <Route path="referrals/:id" element={<ReferralPartnerProfile />} />

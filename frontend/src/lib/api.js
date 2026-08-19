@@ -1139,6 +1139,10 @@ export async function submitIntakeForm(formData) {
   return response.json();
 }
 
+export async function getReferralWorkspaceConfig(referralSlug) {
+  return request(`/intake/referral-config/${encodeURIComponent(referralSlug)}`);
+}
+
 export async function submitCaseReferralForm(formData) {
   // Public Case Referral Hub endpoint. It validates supporting documents and creates a Submitted case.
   const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
@@ -1192,6 +1196,17 @@ export async function assignAttorneyToClient(clientId, attorneyId) {
 
 export async function getReferralPartners() {
   return request('/referrals');
+}
+
+export async function createReferralAttorneyWorkspace(data) {
+  return request('/referrals/attorney-workspaces', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getReferralAttorneyWorkspace() {
+  return request('/referrals/portal/workspace');
 }
 
 export async function getReferralPartner(id) {

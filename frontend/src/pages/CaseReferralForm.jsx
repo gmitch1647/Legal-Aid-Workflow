@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   AlertCircle,
   CheckCircle2,
@@ -10,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import AddressAutocomplete from '../components/AddressAutocomplete';
-import { submitCaseReferralForm } from '../lib/api';
+import { getReferralWorkspaceConfig, submitCaseReferralForm } from '../lib/api';
 
 const CASE_TYPES = [
   'FCRA',
@@ -77,13 +78,37 @@ function fileError(file) {
 }
 
 export default function CaseReferralForm() {
+  const { referralSlug } = useParams();
   const [form, setForm] = useState(EMPTY_FORM);
+  const [workspace, setWorkspace] = useState(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(Boolean(referralSlug));
   const [files, setFiles] = useState([]);
   const [certified, setCertified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!referralSlug) return;
+    let active = true;
+    setWorkspaceLoading(true);
+    getReferralWorkspaceConfig(referralSlug)
+      .then((config) => {
+        if (!active) return;
+        setWorkspace(config);
+        setForm((current) => ({
+          ...current,
+          affiliate_name: config.partner_name || current.affiliate_name,
+          requested_assistance: config.requested_assistance || current.requested_assistance,
+        }));
+      })
+      .catch((loadError) => {
+        if (active) setError(loadError.message || 'This referral workspace is unavailable.');
+      })
+      .finally(() => { if (active) setWorkspaceLoading(false); });
+    return () => { active = false; };
+  }, [referralSlug]);
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -160,6 +185,7 @@ export default function CaseReferralForm() {
     try {
       const payload = new FormData();
       Object.entries(form).forEach(([field, value]) => payload.append(field, value || ''));
+      if (referralSlug) payload.append('referral_slug', referralSlug);
       payload.append('certification', String(certified));
       files.forEach((file) => payload.append('files', file));
       await submitCaseReferralForm(payload);
@@ -203,7 +229,7 @@ export default function CaseReferralForm() {
           <p className="mt-4 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-300">LegalFlow</p>
           <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Case Referral Hub</h1>
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-300">
-            Submit a new case referral below. Please ensure the client information and supporting documents are complete before submitting.
+            {workspace ? `Submit a new referral through ${workspace.partner_name}'s private LegalFlow workspace. The assigned attorney will review it in the dedicated referral pipeline.` : 'Submit a new case referral below. Please ensure the client information and supporting documents are complete before submitting.'}
           </p>
         </header>
 
@@ -273,7 +299,15 @@ export default function CaseReferralForm() {
                   />
                 </div>
                 <SelectField label="Who would you like to get help from?" required value={form.requested_assistance} onChange={(event) => update('requested_assistance', event.target.value)} options={ASSISTANCE_OPTIONS} placeholder="Select a review team" />
-                <TextField label="Referral Organization / Affiliate Name" required value={form.affiliate_name} onChange={(event) => update('affiliate_name', event.target.value)} placeholder="Name of the referring organization" />
+                {workspace ? (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-semibold text-slate-700">Referral Organization / Affiliate Name <Required /></label>
+                    <div className="flex min-h-11 items-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-sm font-semibold text-indigo-900">{workspace.partner_name}</div>
+                    <p className="mt-1 text-xs text-slate-500">This private link records the correct referral source automatically.</p>
+                  </div>
+                ) : (
+                  <TextField label="Referral Organization / Affiliate Name" required value={form.affiliate_name} onChange={(event) => update('affiliate_name', event.target.value)} placeholder="Name of the referring organization" />
+                )}
               </div>
             </section>
 
@@ -335,7 +369,7 @@ export default function CaseReferralForm() {
 
             <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center">
               <p className="text-xs leading-5 text-slate-500">Submitted information is confidential and is used only for LegalFlow case review.</p>
-              <button type="submit" disabled={submitting} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">
+              <button type="submit" disabled={submitting || workspaceLoading || Boolean(referralSlug && !workspace)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">
                 {submitting ? <><Loader2 className="h-4 w-4 animate-spin" />Submitting referral…</> : 'Submit Case Referral'}
               </button>
             </div>
