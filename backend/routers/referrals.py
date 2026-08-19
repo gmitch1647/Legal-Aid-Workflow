@@ -161,43 +161,53 @@ async def create_referral_attorney_workspace(
         raise HTTPException(status_code=409, detail="That referral submission link is already in use.")
 
     pipeline_slug = _workspace_slug(f"{base_slug}-pipeline")
-    pipeline_exists = supabase.table("pipelines").select("id").eq("slug", pipeline_slug).limit(1).execute()
-    if pipeline_exists.data:
-        raise HTTPException(status_code=409, detail="A referral pipeline with this name already exists.")
-
-    pipeline = supabase.table("pipelines").insert({
-        "name": f"{body.full_name} Referrals",
-        "slug": pipeline_slug,
-        "description": f"Private referral pipeline submitted by {body.full_name} and worked by {assigned_attorney.get('full_name') or 'the assigned attorney'}.",
-        "color": "indigo",
-        "is_default": False,
-        "position": 999,
-    }).execute()
-    if not pipeline.data:
-        raise HTTPException(status_code=500, detail="Could not create the referral pipeline.")
-    pipeline_id = pipeline.data[0]["id"]
-
-    stage_definitions = [
-        ("Submitted by Ethan", "submitted", "slate"),
-        ("Esther Review", "esther-review", "blue"),
-        ("Documents Requested", "documents-requested", "amber"),
-        ("Investigating", "investigating", "purple"),
-        ("Accepted", "accepted", "emerald"),
-        ("Declined", "declined", "red"),
-        ("Engagement Sent", "engagement-sent", "cyan"),
-        ("Active Case", "active-case", "indigo"),
-        ("Settlement / Closed", "settlement-closed", "green"),
-    ]
-    for position, (name, suffix, color) in enumerate(stage_definitions):
-        supabase.table("pipeline_stages").insert({
-            "name": name,
-            "slug": f"{base_slug}-{suffix}",
-            "position": position,
-            "color": color,
-            "description": f"{body.full_name} referral workflow stage",
-            "pipeline_id": pipeline_id,
-            "is_system": False,
+    existing_pipeline = supabase.table("pipelines").select("id,name,slug").eq("slug", pipeline_slug).limit(1).execute()
+    pipeline_created = False
+    if existing_pipeline.data:
+        # A prior failed invitation may have created the isolated pipeline before its
+        # Auth user or referral-partner record was created. It is safe to reuse only
+        # while no referral partner claims the pipeline.
+        pipeline_record = existing_pipeline.data[0]
+        pipeline_in_use = supabase.table("referral_partners").select("id").eq("pipeline_id", pipeline_record["id"]).limit(1).execute()
+        if pipeline_in_use.data:
+            raise HTTPException(status_code=409, detail="A referral pipeline with this name is already assigned to another referral attorney.")
+    else:
+        pipeline = supabase.table("pipelines").insert({
+            "name": f"{body.full_name} Referrals",
+            "slug": pipeline_slug,
+            "description": f"Private referral pipeline submitted by {body.full_name} and worked by {assigned_attorney.get('full_name') or 'the assigned attorney'}.",
+            "color": "indigo",
+            "is_default": False,
+            "position": 999,
         }).execute()
+        if not pipeline.data:
+            raise HTTPException(status_code=500, detail="Could not create the referral pipeline.")
+        pipeline_record = pipeline.data[0]
+        pipeline_created = True
+
+    pipeline_id = pipeline_record["id"]
+    if pipeline_created:
+        stage_definitions = [
+            ("Submitted by Ethan", "submitted", "slate"),
+            ("Esther Review", "esther-review", "blue"),
+            ("Documents Requested", "documents-requested", "amber"),
+            ("Investigating", "investigating", "purple"),
+            ("Accepted", "accepted", "emerald"),
+            ("Declined", "declined", "red"),
+            ("Engagement Sent", "engagement-sent", "cyan"),
+            ("Active Case", "active-case", "indigo"),
+            ("Settlement / Closed", "settlement-closed", "green"),
+        ]
+        for position, (name, suffix, color) in enumerate(stage_definitions):
+            supabase.table("pipeline_stages").insert({
+                "name": name,
+                "slug": f"{base_slug}-{suffix}",
+                "position": position,
+                "color": color,
+                "description": f"{body.full_name} referral workflow stage",
+                "pipeline_id": pipeline_id,
+                "is_system": False,
+            }).execute()
 
     temp_password = "".join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(16))
     try:
@@ -209,6 +219,12 @@ async def create_referral_attorney_workspace(
         })
         portal_user_id = str(auth_response.user.id)
     except Exception as exc:
+        if pipeline_created:
+            try:
+                supabase.table("pipeline_stages").delete().eq("pipeline_id", pipeline_id).execute()
+                supabase.table("pipelines").delete().eq("id", pipeline_id).execute()
+            except Exception:
+                logger.warning("Could not roll back referral pipeline %s", pipeline_id)
         raise HTTPException(status_code=400, detail=f"Could not create the referral attorney login: {exc}")
 
     try:
@@ -239,9 +255,16 @@ async def create_referral_attorney_workspace(
             raise RuntimeError("Referral partner insert returned no record.")
     except Exception as exc:
         try:
+            supabase.table("profiles").delete().eq("id", portal_user_id).execute()
             supabase.auth.admin.delete_user(portal_user_id)
         except Exception:
             logger.warning("Could not roll back referral portal user %s", portal_user_id)
+        if pipeline_created:
+            try:
+                supabase.table("pipeline_stages").delete().eq("pipeline_id", pipeline_id).execute()
+                supabase.table("pipelines").delete().eq("id", pipeline_id).execute()
+            except Exception:
+                logger.warning("Could not roll back referral pipeline %s", pipeline_id)
         raise HTTPException(status_code=500, detail=f"Could not create the referral attorney workspace: {exc}")
 
     frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
@@ -270,7 +293,7 @@ async def create_referral_attorney_workspace(
 
     return {
         "partner": partner.data[0],
-        "pipeline": pipeline.data[0],
+        "pipeline": pipeline_record,
         "assigned_attorney": {"id": assigned_attorney["id"], "full_name": assigned_attorney.get("full_name")},
         "referral_url": referral_url,
         "portal_url": portal_url,
