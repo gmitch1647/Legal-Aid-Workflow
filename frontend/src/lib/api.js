@@ -1213,6 +1213,32 @@ export async function getReferralAttorneyPortalFeatures() {
   return request('/referrals/portal/features');
 }
 
+export async function updateReferralAttorneyPortalPassword(data) {
+  return request('/referrals/portal/password', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getReferralAttorneyPortalTeam() {
+  return request('/referrals/portal/team');
+}
+
+export async function inviteReferralAttorneyPortalTeamMember(data) {
+  return request('/referrals/portal/team', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function resendReferralAttorneyPortalTeamInvitation(memberId) {
+  return request(`/referrals/portal/team/${memberId}/resend-invitation`, { method: 'POST' });
+}
+
+export async function revokeReferralAttorneyPortalTeamMember(memberId) {
+  return request(`/referrals/portal/team/${memberId}`, { method: 'DELETE' });
+}
+
 export async function getReferralAttorneyFeatureAccess(partnerId) {
   return request(`/referrals/attorney-workspaces/${partnerId}/features`);
 }

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from utils.email_service import send_email
 from utils.supabase_client import get_supabase
+from utils.referral_portal_access import get_referral_portal_partner
 
 logger = logging.getLogger(__name__)
 
@@ -133,15 +134,7 @@ def _document_exchange_participants(supabase, case: dict, profile: dict) -> tupl
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Configure the LegalFlow owner before using Document Exchange.")
     affiliate_id = None
     if profile.get("role") == "affiliate":
-        partner_response = (
-            supabase.table("referral_partners")
-            .select("id")
-            .eq("portal_user_id", profile["id"])
-            .eq("portal_active", True)
-            .limit(1)
-            .execute()
-        )
-        partner = (partner_response.data or [None])[0]
+        partner = get_referral_portal_partner(supabase, profile)
         if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This Document Exchange is available only for your own referral cases.")
         affiliate_id = profile["id"]
@@ -175,15 +168,7 @@ def _fetch_case_with_access(case_id: str, profile: dict) -> dict:
             detail="You do not have access to this case.",
         )
     if profile.get("role") == "affiliate":
-        partner_response = (
-            supabase.table("referral_partners")
-            .select("id")
-            .eq("portal_user_id", profile["id"])
-            .eq("portal_active", True)
-            .limit(1)
-            .execute()
-        )
-        partner = (partner_response.data or [None])[0]
+        partner = get_referral_portal_partner(supabase, profile)
         if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

@@ -61,6 +61,7 @@ const ReferralAttorneyPipeline = React.lazy(() => import('./pages/attorney/Refer
 const ReferralAttorneyClients = React.lazy(() => import('./pages/attorney/ReferralAttorneyClients'));
 const ReferralAttorneyDocuments = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocuments'));
 const ReferralAttorneyDocumentExchange = React.lazy(() => import('./pages/attorney/ReferralAttorneyDocumentExchange'));
+const ReferralAttorneySettings = React.lazy(() => import('./pages/attorney/ReferralAttorneySettings'));
 const ReferralAttorneyClientProfile = React.lazy(() => import('./pages/attorney/ReferralAttorneyClientProfile'));
 const ReferralAttorneyCaseWorkspace = React.lazy(() => import('./pages/attorney/ReferralAttorneyCaseWorkspace'));
 const ReferralAttorneyWorkspaces = React.lazy(() => import('./pages/attorney/ReferralAttorneyWorkspaces'));
@@ -622,6 +623,7 @@ const allAttorneyLinks = [
   { to: '/attorney/clients', label: 'My Clients', icon: Users, roles: ['affiliate'], feature: 'clients' },
   { to: '/attorney/documents', label: 'My Case Documents', icon: FolderSync, roles: ['affiliate'], feature: 'documents' },
   { to: '/attorney/document-exchange', label: 'Document Exchange', icon: FolderSync, roles: ['affiliate'], feature: 'document_exchange' },
+  { to: '/attorney/settings', label: 'Settings', icon: Settings, roles: ['affiliate'] },
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
@@ -658,6 +660,13 @@ function AffiliateClientsPage() {
 function AffiliateDocumentExchangePage() {
   const { profile } = useAuth();
   return profile?.role === 'affiliate' ? <ReferralAttorneyDocumentExchange /> : <DocumentExchange />;
+}
+
+function AffiliateSettingsPage() {
+  const { profile } = useAuth();
+  return profile?.role === 'affiliate'
+    ? <ReferralAttorneySettings />
+    : <AttorneyRolePage allowedRoles={['attorney']}><AttorneySettings /></AttorneyRolePage>;
 }
 
 function AttorneyLayout() {
@@ -781,7 +790,7 @@ export default function App() {
             <Route path="clients/:id" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><ClientProfile /></AttorneyRolePage>} />
             <Route path="referrals/:id" element={<ReferralPartnerProfile />} />
             <Route path="communications" element={<Communications />} />
-            <Route path="settings" element={<AttorneySettings />} />
+            <Route path="settings" element={<AffiliateSettingsPage />} />
           </Route>
 
           {/* Client portal */}

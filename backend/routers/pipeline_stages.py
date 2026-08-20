@@ -14,6 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel
 
 from utils.supabase_client import get_supabase
+from utils.referral_portal_access import get_referral_portal_partner
 
 logger = logging.getLogger(__name__)
 
@@ -90,18 +91,8 @@ class PipelineUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _affiliate_pipeline_id(supabase, profile: dict) -> str | None:
-    """Return the single active referral pipeline available to an affiliate."""
-    if profile.get("role") != "affiliate":
-        return None
-    partner_response = (
-        supabase.table("referral_partners")
-        .select("pipeline_id")
-        .eq("portal_user_id", profile["id"])
-        .eq("portal_active", True)
-        .limit(1)
-        .execute()
-    )
-    partner = (partner_response.data or [None])[0]
+    """Return the single active referral pipeline available to an affiliate or active teammate."""
+    partner = get_referral_portal_partner(supabase, profile)
     return partner.get("pipeline_id") if partner else None
 
 

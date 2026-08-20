@@ -20,6 +20,7 @@ from models.schemas import (
     RevisionRequest,
 )
 from utils.supabase_client import get_supabase
+from utils.referral_portal_access import get_referral_portal_partner
 from utils.notifications import (
     create_notification,
     notify_attorney_new_submission,
@@ -195,15 +196,7 @@ def _fetch_case(case_id: str, *, profile: dict | None = None) -> dict:
             detail="You do not have access to this case.",
         )
     if profile and profile.get("role") == "affiliate":
-        partner_resp = (
-            supabase.table("referral_partners")
-            .select("id")
-            .eq("portal_user_id", profile["id"])
-            .eq("portal_active", True)
-            .limit(1)
-            .execute()
-        )
-        partner = (partner_resp.data or [None])[0]
+        partner = get_referral_portal_partner(supabase, profile)
         if not partner or str(case.get("referral_partner_id")) != str(partner.get("id")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -313,19 +306,11 @@ async def list_cases(
         else:
             return []
     elif profile["role"] == "affiliate":
-        # Referral partners see only cases explicitly attributed to their partner record.
-        # Case-level attribution prevents an existing client’s unrelated cases from leaking
-        # into the partner portal.
-        partner_resp = (
-            supabase.table("referral_partners")
-            .select("id")
-            .eq("portal_user_id", profile["id"])
-            .eq("portal_active", True)
-            .limit(1)
-            .execute()
-        )
-        if partner_resp.data:
-            query = query.eq("referral_partner_id", partner_resp.data[0]["id"])
+        # Referral attorneys and their active team members see only cases explicitly
+        # attributed to their one private partner workspace.
+        partner = get_referral_portal_partner(supabase, profile)
+        if partner:
+            query = query.eq("referral_partner_id", partner["id"])
         else:
             return []
     # Apply an optional client filter after the role-based access scope above.

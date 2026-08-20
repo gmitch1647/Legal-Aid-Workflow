@@ -16,7 +16,8 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from utils.supabase_client import get_supabase
+from utils.supabase_client import SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SUPABASE_URL, get_supabase
+from utils.referral_portal_access import get_referral_portal_partner, is_referral_portal_owner
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,31 @@ class ReferralAttorneyFeatureAccessUpdate(BaseModel):
     feature_access: dict[str, bool]
 
 
+class ReferralPortalPasswordUpdate(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        if not any(char.islower() for char in value) or not any(char.isupper() for char in value) or not any(char.isdigit() for char in value):
+            raise ValueError("Use at least 12 characters with an uppercase letter, lowercase letter, and number.")
+        return value
+
+
+class ReferralPortalTeamInvite(BaseModel):
+    full_name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_team_member_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Team member name is required.")
+        return cleaned
+
+
 class ReferralPartnerMessageCreate(BaseModel):
     channel: Literal["email", "sms"]
     subject: str = Field(default="", max_length=200)
@@ -121,6 +147,46 @@ async def _get_referral_partner_or_404(partner_id: str) -> dict:
     if not response.data:
         raise HTTPException(status_code=404, detail="Referral partner not found")
     return response.data[0]
+
+
+def _portal_partner_or_404(supabase, profile: dict) -> dict:
+    """Resolve the caller's one active private referral workspace."""
+    if profile.get("role") != "affiliate":
+        raise HTTPException(status_code=403, detail="Referral portal access required")
+    partner = get_referral_portal_partner(supabase, profile)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Referral workspace not found")
+    return partner
+
+
+def _require_portal_owner(partner: dict, profile: dict) -> None:
+    if not is_referral_portal_owner(partner, profile):
+        raise HTTPException(status_code=403, detail="Only the referral attorney who owns this workspace can manage the team.")
+
+
+def _generate_portal_password() -> str:
+    return "".join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(16))
+
+
+async def _verify_current_portal_password(profile: dict, password: str) -> None:
+    """Require the current password before an authenticated user changes it."""
+    api_key = SUPABASE_ANON_KEY or SUPABASE_SERVICE_KEY
+    email = str(profile.get("email") or "").strip()
+    if not SUPABASE_URL or not api_key or not email:
+        raise HTTPException(status_code=503, detail="Password changes are not configured. Please contact LegalFlow support.")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"{SUPABASE_URL.rstrip('/')}/auth/v1/token?grant_type=password",
+                headers={"apikey": api_key, "Content-Type": "application/json"},
+                json={"email": email, "password": password},
+            )
+    except Exception as exc:
+        logger.exception("Could not verify referral portal password for %s", profile.get("id"))
+        raise HTTPException(status_code=503, detail="Password verification is temporarily unavailable. Please try again.") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=403, detail="Your current password is incorrect.")
 
 
 def _email_address(value: str | None) -> str:
@@ -388,16 +454,226 @@ async def update_referral_attorney_feature_access(
     }
 
 
+@router.put("/portal/password")
+async def update_referral_portal_password(
+    body: ReferralPortalPasswordUpdate,
+    authorization: str = Header(default=None),
+):
+    """Let an authenticated referral-portal user change only their own password."""
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+    _portal_partner_or_404(supabase, profile)
+    if body.current_password == body.new_password:
+        raise HTTPException(status_code=422, detail="Choose a new password that is different from your current password.")
+    await _verify_current_portal_password(profile, body.current_password)
+    try:
+        supabase.auth.admin.update_user_by_id(profile["id"], {"password": body.new_password})
+    except Exception as exc:
+        logger.exception("Could not update referral portal password for %s", profile.get("id"))
+        raise HTTPException(status_code=500, detail="Could not update your password. Please try again.") from exc
+    return {"updated": True, "message": "Your password was updated."}
+
+
+@router.get("/portal/team")
+async def list_referral_portal_team(authorization: str = Header(default=None)):
+    """Return the referral attorney's active and revoked team accounts."""
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+    partner = _portal_partner_or_404(supabase, profile)
+    _require_portal_owner(partner, profile)
+    response = (
+        supabase.table("referral_portal_team_members")
+        .select("id,profile_id,status,created_at,revoked_at")
+        .eq("referral_partner_id", partner["id"])
+        .order("created_at", desc=True)
+        .execute()
+    )
+    members = response.data or []
+    for member in members:
+        member_profile = (
+            supabase.table("profiles")
+            .select("id,full_name,email")
+            .eq("id", member["profile_id"])
+            .limit(1)
+            .execute()
+        )
+        details = (member_profile.data or [None])[0] or {}
+        member["full_name"] = details.get("full_name") or "Team member"
+        member["email"] = details.get("email") or ""
+    return {"can_manage_team": True, "members": members}
+
+
+async def _send_referral_portal_team_invitation(
+    *,
+    recipient_email: str,
+    recipient_name: str,
+    temp_password: str,
+    partner_name: str,
+    member_id: str,
+) -> bool:
+    """Email credentials for an isolated referral-team account."""
+    from utils.email_service import send_email
+
+    frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
+    return await send_email(
+        to=recipient_email,
+        subject=f"You have been added to {partner_name}'s LegalFlow referral portal",
+        body=(
+            "<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.6;'>"
+            f"<h2>Welcome to {html.escape(partner_name)}'s LegalFlow referral portal.</h2>"
+            "<p>You can access only this referral workspace, its attributed clients, and its case documents. "
+            "You cannot access LegalFlow firm cases or any other referral workspace.</p>"
+            f"<p><strong>Login:</strong> <a href='{frontend_url}/login'>{frontend_url}/login</a></p>"
+            f"<p><strong>Email:</strong> {html.escape(recipient_email)}</p>"
+            f"<p><strong>Temporary Password:</strong> {html.escape(temp_password)}</p>"
+            "<p>Please sign in and change your password from Settings immediately.</p>"
+            "</div>"
+        ),
+        idempotency_key=f"referral-portal-team-invite:{member_id}:{uuid.uuid4()}",
+    )
+
+
+@router.post("/portal/team", status_code=status.HTTP_201_CREATED)
+async def invite_referral_portal_team_member(
+    body: ReferralPortalTeamInvite,
+    authorization: str = Header(default=None),
+):
+    """Allow only the referral attorney to invite a team member into this one workspace."""
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+    partner = _portal_partner_or_404(supabase, profile)
+    _require_portal_owner(partner, profile)
+    email = str(body.email).strip().lower()
+
+    existing_profile = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
+    if existing_profile.data:
+        raise HTTPException(status_code=409, detail="A LegalFlow account already uses this email. Choose a different email or contact LegalFlow support.")
+
+    temp_password = _generate_portal_password()
+    portal_user_id = None
+    member_id = str(uuid.uuid4())
+    try:
+        auth_response = supabase.auth.admin.create_user({
+            "email": email,
+            "password": temp_password,
+            "email_confirm": True,
+            "user_metadata": {"full_name": body.full_name},
+        })
+        portal_user_id = str(auth_response.user.id)
+        supabase.table("profiles").insert({
+            "id": portal_user_id,
+            "email": email,
+            "full_name": body.full_name,
+            "role": "affiliate",
+        }).execute()
+        membership_response = supabase.table("referral_portal_team_members").insert({
+            "id": member_id,
+            "referral_partner_id": partner["id"],
+            "profile_id": portal_user_id,
+            "invited_by": profile["id"],
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        member = (membership_response.data or [{}])[0]
+    except Exception as exc:
+        if portal_user_id:
+            try:
+                supabase.table("profiles").delete().eq("id", portal_user_id).execute()
+                supabase.auth.admin.delete_user(portal_user_id)
+            except Exception:
+                logger.warning("Could not roll back referral team account %s", portal_user_id)
+        logger.exception("Could not create referral portal team member for partner %s", partner.get("id"))
+        raise HTTPException(status_code=500, detail="Could not add the team member. Please try again.") from exc
+
+    email_sent = False
+    try:
+        email_sent = await _send_referral_portal_team_invitation(
+            recipient_email=email,
+            recipient_name=body.full_name,
+            temp_password=temp_password,
+            partner_name=str(partner.get("full_name") or "your referral attorney"),
+            member_id=member_id,
+        )
+    except Exception:
+        logger.exception("Could not send referral team invitation to %s", email)
+    return {
+        "member": {**member, "full_name": body.full_name, "email": email},
+        "email_sent": email_sent,
+        "message": "Team member added to this private referral workspace."
+        if email_sent else "Team member added, but the invitation email could not be delivered. Use Resend Invitation to send fresh credentials.",
+    }
+
+
+@router.post("/portal/team/{member_id}/resend-invitation")
+async def resend_referral_portal_team_invitation(member_id: str, authorization: str = Header(default=None)):
+    """Reset and email fresh credentials for one active referral team member."""
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+    partner = _portal_partner_or_404(supabase, profile)
+    _require_portal_owner(partner, profile)
+    membership_response = (
+        supabase.table("referral_portal_team_members")
+        .select("id,profile_id,status")
+        .eq("id", member_id)
+        .eq("referral_partner_id", partner["id"])
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    member = (membership_response.data or [None])[0]
+    if not member:
+        raise HTTPException(status_code=404, detail="Active team member not found.")
+    member_profile_response = supabase.table("profiles").select("full_name,email").eq("id", member["profile_id"]).limit(1).execute()
+    member_profile = (member_profile_response.data or [None])[0]
+    if not member_profile or not member_profile.get("email"):
+        raise HTTPException(status_code=409, detail="This team member does not have a valid email address.")
+    temp_password = _generate_portal_password()
+    try:
+        supabase.auth.admin.update_user_by_id(member["profile_id"], {"password": temp_password})
+        email_sent = await _send_referral_portal_team_invitation(
+            recipient_email=str(member_profile["email"]),
+            recipient_name=str(member_profile.get("full_name") or "Team member"),
+            temp_password=temp_password,
+            partner_name=str(partner.get("full_name") or "your referral attorney"),
+            member_id=member_id,
+        )
+    except Exception as exc:
+        logger.exception("Could not resend referral team invitation %s", member_id)
+        raise HTTPException(status_code=500, detail="Could not resend the invitation. Please try again.") from exc
+    if not email_sent:
+        raise HTTPException(status_code=502, detail="Credentials were reset, but the invitation email could not be delivered. Please try again shortly.")
+    return {"sent": True, "message": "A fresh invitation and temporary password were emailed."}
+
+
+@router.delete("/portal/team/{member_id}")
+async def revoke_referral_portal_team_member(member_id: str, authorization: str = Header(default=None)):
+    """Immediately revoke one team account's server-side access to this portal."""
+    profile = await _get_current_user(authorization)
+    supabase = get_supabase()
+    partner = _portal_partner_or_404(supabase, profile)
+    _require_portal_owner(partner, profile)
+    response = (
+        supabase.table("referral_portal_team_members")
+        .update({
+            "status": "revoked",
+            "revoked_at": datetime.now(timezone.utc).isoformat(),
+            "revoked_by": profile["id"],
+        })
+        .eq("id", member_id)
+        .eq("referral_partner_id", partner["id"])
+        .eq("status", "active")
+        .execute()
+    )
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Active team member not found.")
+    return {"revoked": True, "message": "The team member can no longer access this referral workspace."}
+
+
 @router.get("/portal/features")
 async def get_portal_feature_access(authorization: str = Header(default=None)):
-    """Return the active referral attorney's own enabled feature map for sidebar and route gates."""
+    """Return enabled feature visibility for a referral attorney or active teammate."""
     profile = await _get_current_user(authorization)
-    if profile.get("role") != "affiliate":
-        raise HTTPException(status_code=403, detail="Referral portal access required")
-    partner_response = get_supabase().table("referral_partners").select("feature_access").eq("portal_user_id", profile["id"]).eq("portal_active", True).limit(1).execute()
-    partner = (partner_response.data or [None])[0]
-    if not partner:
-        raise HTTPException(status_code=404, detail="Referral workspace not found")
+    partner = _portal_partner_or_404(get_supabase(), profile)
     stored = partner.get("feature_access") or {}
     return {key: bool(stored.get(key, True)) for key in REFERRAL_ATTORNEY_FEATURES}
 
@@ -410,17 +686,7 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
         raise HTTPException(status_code=403, detail="Referral portal access required")
 
     supabase = get_supabase()
-    partner_response = (
-        supabase.table("referral_partners")
-        .select("id,full_name,pipeline_id,submission_slug,portal_active")
-        .eq("portal_user_id", profile["id"])
-        .eq("portal_active", True)
-        .limit(1)
-        .execute()
-    )
-    partner = (partner_response.data or [None])[0]
-    if not partner:
-        raise HTTPException(status_code=404, detail="Referral workspace not found")
+    partner = _portal_partner_or_404(supabase, profile)
 
     case_response = (
         supabase.table("cases")
@@ -456,6 +722,7 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
         "partner_name": partner.get("full_name"),
         "referral_url": f"{frontend_url}/case-referral/{partner.get('submission_slug')}",
         "pipeline_id": partner.get("pipeline_id"),
+        "can_manage_team": is_referral_portal_owner(partner, profile),
         "stages": stages or [],
         "cases": cases,
     }
