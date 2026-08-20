@@ -359,18 +359,18 @@ export default function CaseReferralForm() {
             </section>
 
             <section>
-              <SectionHeading title="Secure Information Form" description="Upload the client’s Secure Information Form when available. It is stored as a private PII document within this case and is not included in public referral links." />
+              <SectionHeading title="Client’s Sensitive Information Form" description="Upload the client’s Sensitive Information Form when available. It is stored as a private PII document within this case and is not included in public referral links." />
               <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">Secure Information Form <span className="font-normal text-slate-500">(optional)</span></p>
+                    <p className="text-sm font-semibold text-slate-900">Client’s Sensitive Information Form <span className="font-normal text-slate-500">(optional)</span></p>
                     <p className="mt-1 text-xs text-slate-600">PDF, DOC, DOCX, TXT, PNG, JPG, or JPEG · One file · 10 MB maximum</p>
                   </div>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => secureInformationFormInputRef.current?.click()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100">
                       <ShieldCheck className="h-4 w-4" /> {secureInformationForm ? 'Replace form' : 'Upload form'}
                     </button>
-                    {secureInformationForm && <button type="button" onClick={() => setSecureInformationForm(null)} className="rounded-lg p-2 text-slate-500 transition hover:bg-white hover:text-red-600" aria-label="Remove Secure Information Form"><X className="h-4 w-4" /></button>}
+                    {secureInformationForm && <button type="button" onClick={() => setSecureInformationForm(null)} className="rounded-lg p-2 text-slate-500 transition hover:bg-white hover:text-red-600" aria-label="Remove Client’s Sensitive Information Form"><X className="h-4 w-4" /></button>}
                   </div>
                 </div>
                 <input
