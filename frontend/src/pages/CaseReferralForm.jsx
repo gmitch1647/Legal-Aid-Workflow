@@ -84,12 +84,14 @@ export default function CaseReferralForm() {
   const [workspaceLoading, setWorkspaceLoading] = useState(Boolean(referralSlug));
   const [files, setFiles] = useState([]);
   const [complaint, setComplaint] = useState(null);
+  const [secureInformationForm, setSecureInformationForm] = useState(null);
   const [certified, setCertified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const fileInputRef = useRef(null);
   const complaintInputRef = useRef(null);
+  const secureInformationFormInputRef = useRef(null);
 
   useEffect(() => {
     if (!referralSlug) return;
@@ -191,6 +193,7 @@ export default function CaseReferralForm() {
       payload.append('certification', String(certified));
       files.forEach((file) => payload.append('files', file));
       if (complaint) payload.append('complaint', complaint);
+      if (secureInformationForm) payload.append('secure_information_form', secureInformationForm);
       await submitCaseReferralForm(payload);
       setSubmitted(true);
     } catch (submissionError) {
@@ -352,6 +355,39 @@ export default function CaseReferralForm() {
                   }}
                 />
                 {complaint && <div className="mt-4 flex items-center gap-3 rounded-lg border border-violet-200 bg-white px-3 py-2.5"><FileText className="h-5 w-5 shrink-0 text-violet-700" /><span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">{complaint.name}</span><span className="shrink-0 text-xs text-slate-500">{(complaint.size / 1024 / 1024).toFixed(1)} MB</span></div>}
+              </div>
+            </section>
+
+            <section>
+              <SectionHeading title="Secure Information Form" description="Upload the client’s Secure Information Form when available. It is stored as a private PII document within this case and is not included in public referral links." />
+              <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">Secure Information Form <span className="font-normal text-slate-500">(optional)</span></p>
+                    <p className="mt-1 text-xs text-slate-600">PDF, DOC, DOCX, TXT, PNG, JPG, or JPEG · One file · 10 MB maximum</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => secureInformationFormInputRef.current?.click()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100">
+                      <ShieldCheck className="h-4 w-4" /> {secureInformationForm ? 'Replace form' : 'Upload form'}
+                    </button>
+                    {secureInformationForm && <button type="button" onClick={() => setSecureInformationForm(null)} className="rounded-lg p-2 text-slate-500 transition hover:bg-white hover:text-red-600" aria-label="Remove Secure Information Form"><X className="h-4 w-4" /></button>}
+                  </div>
+                </div>
+                <input
+                  ref={secureInformationFormInputRef}
+                  className="hidden"
+                  type="file"
+                  accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    const issue = fileError(file);
+                    if (issue) { setError(issue); return; }
+                    setError('');
+                    setSecureInformationForm(file);
+                  }}
+                />
+                {secureInformationForm && <div className="mt-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-white px-3 py-2.5"><ShieldCheck className="h-5 w-5 shrink-0 text-amber-700" /><span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">{secureInformationForm.name}</span><span className="shrink-0 text-xs text-slate-500">{(secureInformationForm.size / 1024 / 1024).toFixed(1)} MB</span></div>}
               </div>
             </section>
 

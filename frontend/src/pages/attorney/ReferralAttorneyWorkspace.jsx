@@ -160,7 +160,7 @@ export default function ReferralAttorneyWorkspace() {
                     <div className="mt-3 space-y-3">
                       {cases.map((caseItem) => (
                         <article key={caseItem.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                          <p className="font-semibold text-slate-800">{caseItem.client_name}</p>
+                          <p className="font-semibold text-slate-800">{caseItem.case_title || caseItem.client_name || 'Client'}</p>
                           <p className="mt-1 text-xs text-slate-500">Submitted {displayDate(caseItem.created_at)}</p>
                           <p className="mt-2 text-xs text-slate-400">LegalFlow will update the status as the case progresses.</p>
                         </article>

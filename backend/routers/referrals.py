@@ -71,6 +71,32 @@ REFERRAL_ATTORNEY_FEATURES = {
 }
 
 
+def _case_title(client_name: str | None, defendant_names: list[str]) -> str:
+    """Show referral cases as the client versus the adverse party, never the working attorney."""
+    plaintiff = str(client_name or "Client").strip() or "Client"
+    defendants = [str(item).strip() for item in defendant_names if str(item or "").strip()]
+    return f"{plaintiff} v. {', '.join(defendants)}" if defendants else plaintiff
+
+
+def _case_defendant_names(supabase, case_id: str) -> list[str]:
+    """Resolve a case's defendants for the restricted referral workspace display."""
+    try:
+        links = supabase.table("case_defendants").select("defendant_id").eq("case_id", case_id).execute()
+        names: list[str] = []
+        for link in links.data or []:
+            defendant_id = link.get("defendant_id")
+            if not defendant_id:
+                continue
+            defendant = supabase.table("defendants").select("name").eq("id", defendant_id).limit(1).execute()
+            name = ((defendant.data or [None])[0] or {}).get("name")
+            if name:
+                names.append(str(name))
+        return names
+    except Exception:
+        logger.exception("Could not resolve defendants for referral case %s", case_id)
+        return []
+
+
 class ReferralAttorneyFeatureAccessUpdate(BaseModel):
     feature_access: dict[str, bool]
 
@@ -409,7 +435,11 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
     for case in cases:
         client_response = supabase.table("profiles").select("full_name").eq("id", case["client_id"]).limit(1).execute()
         client = (client_response.data or [None])[0]
-        case["client_name"] = (client or {}).get("full_name") or "Client"
+        client_name = (client or {}).get("full_name") or "Client"
+        defendant_names = _case_defendant_names(supabase, case["id"])
+        case["client_name"] = client_name
+        case["defendant_names"] = defendant_names
+        case["case_title"] = _case_title(client_name, defendant_names)
         case.pop("client_id", None)
 
     stage_response = (

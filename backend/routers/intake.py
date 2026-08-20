@@ -64,21 +64,31 @@ async def _prepare_referral_complaint(complaint: UploadFile | None) -> dict | No
     return (await _prepare_referral_documents([complaint]))[0]
 
 
+async def _prepare_secure_information_form(secure_information_form: UploadFile | None) -> dict | None:
+    """Validate the optional secure client-information form as one private case file."""
+    if not secure_information_form or not getattr(secure_information_form, "filename", None):
+        return None
+    return (await _prepare_referral_documents([secure_information_form]))[0]
+
+
 def _store_prepared_referral_documents(
     case_id: str,
     documents: list[dict],
     *,
     complaint: dict | None = None,
+    secure_information_form: dict | None = None,
 ) -> int:
-    """Store public-referral files without public URLs, preserving complaint semantics."""
+    """Store public-referral files without public URLs, preserving special document categories."""
     supabase = get_supabase()
     items = [(document, "other") for document in documents]
     if complaint:
         items.append((complaint, "complaint"))
+    if secure_information_form:
+        items.append((secure_information_form, "pii"))
 
     uploaded = 0
     for document, category in items:
-        folder = "complaints" if category == "complaint" else "case-submission"
+        folder = "complaints" if category == "complaint" else "secure-information" if category == "pii" else "case-submission"
         storage_path = f"cases/{case_id}/{folder}/{uuid4().hex}_{document['safe_name']}"
         supabase.storage.from_("documents").upload(
             storage_path,
@@ -552,6 +562,7 @@ async def submit_case_referral(
     certification: str = Form(...),
     files: list[UploadFile] = File(default=[]),
     complaint: UploadFile | None = File(default=None),
+    secure_information_form: UploadFile | None = File(default=None),
 ):
     """Public Case Referral Hub endpoint; every completed submission enters Submitted."""
     required_values = {
@@ -577,9 +588,10 @@ async def submit_case_referral(
         raise HTTPException(status_code=422, detail="Confirm that the referral information is accurate before submitting.")
 
     prepared_complaint = await _prepare_referral_complaint(complaint)
+    prepared_secure_information_form = await _prepare_secure_information_form(secure_information_form)
     prepared_documents = await _prepare_referral_documents(files) if files else []
-    if not prepared_documents and not prepared_complaint:
-        raise HTTPException(status_code=422, detail="Upload a complaint or at least one supporting document to submit this referral.")
+    if not prepared_documents and not prepared_complaint and not prepared_secure_information_form:
+        raise HTTPException(status_code=422, detail="Upload a complaint, Secure Information Form, or at least one supporting document to submit this referral.")
     resolved_referral_slug = referral_slug.strip() if isinstance(referral_slug, str) else ""
     referral_workspace = _active_referral_partner_for_slug(resolved_referral_slug) if resolved_referral_slug else None
     # A private partner link has a fixed internal destination. It is never
@@ -615,8 +627,10 @@ async def submit_case_referral(
             case_id,
             prepared_documents,
             complaint=prepared_complaint,
+            secure_information_form=prepared_secure_information_form,
         )
         result["complaint_uploaded"] = bool(prepared_complaint)
+        result["secure_information_form_uploaded"] = bool(prepared_secure_information_form)
     except Exception as exc:
         logger.exception("Case referral documents could not be stored for case %s", case_id)
         raise HTTPException(status_code=500, detail="The case was created but supporting documents could not be stored. Please contact LegalFlow support.") from exc
