@@ -6,10 +6,10 @@ from __future__ import annotations
 def get_referral_portal_partner(supabase, profile: dict) -> dict | None:
     """Return the active partner workspace available to this affiliate user.
 
-    A referral attorney owns a workspace through ``portal_user_id``. Invited
-    staff are granted access only through an active membership record. Both
-    paths return the same partner record, which keeps every downstream case
-    filter anchored to ``cases.referral_partner_id``.
+    The referral attorney owns a workspace through ``portal_user_id``. Invited
+    staff and co-owners are granted access only through an active membership
+    record. Every path returns the same partner record, keeping downstream case
+    filters anchored to ``cases.referral_partner_id``.
     """
     if profile.get("role") != "affiliate" or not profile.get("id"):
         return None
@@ -28,7 +28,7 @@ def get_referral_portal_partner(supabase, profile: dict) -> dict | None:
 
     membership_response = (
         supabase.table("referral_portal_team_members")
-        .select("referral_partner_id")
+        .select("referral_partner_id,access_level")
         .eq("profile_id", profile["id"])
         .eq("status", "active")
         .limit(1)
@@ -49,6 +49,26 @@ def get_referral_portal_partner(supabase, profile: dict) -> dict | None:
     return (partner_response.data or [None])[0]
 
 
-def is_referral_portal_owner(partner: dict | None, profile: dict) -> bool:
-    """Return whether the affiliate is the referral attorney who owns the workspace."""
-    return bool(partner and profile.get("id") and str(partner.get("portal_user_id")) == str(profile.get("id")))
+def get_referral_portal_access_level(supabase, partner: dict | None, profile: dict) -> str | None:
+    """Return ``owner``, ``co_owner``, or ``member`` for one active workspace."""
+    if not partner or profile.get("role") != "affiliate" or not profile.get("id"):
+        return None
+    if str(partner.get("portal_user_id")) == str(profile.get("id")):
+        return "owner"
+
+    membership_response = (
+        supabase.table("referral_portal_team_members")
+        .select("access_level")
+        .eq("referral_partner_id", partner["id"])
+        .eq("profile_id", profile["id"])
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    membership = (membership_response.data or [None])[0]
+    return str(membership.get("access_level") or "member") if membership else None
+
+
+def is_referral_portal_owner(supabase, partner: dict | None, profile: dict) -> bool:
+    """Return whether this user is the original owner or a designated co-owner."""
+    return get_referral_portal_access_level(supabase, partner, profile) in {"owner", "co_owner"}

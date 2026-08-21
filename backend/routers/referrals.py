@@ -17,7 +17,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from utils.supabase_client import SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SUPABASE_URL, get_supabase
-from utils.referral_portal_access import get_referral_portal_partner, is_referral_portal_owner
+from utils.referral_portal_access import get_referral_portal_access_level, get_referral_portal_partner, is_referral_portal_owner
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ class ReferralPortalPasswordUpdate(BaseModel):
 class ReferralPortalTeamInvite(BaseModel):
     full_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
+    access_level: Literal["member", "co_owner"] = "member"
 
     @field_validator("full_name")
     @classmethod
@@ -159,8 +160,8 @@ def _portal_partner_or_404(supabase, profile: dict) -> dict:
     return partner
 
 
-def _require_portal_owner(partner: dict, profile: dict) -> None:
-    if not is_referral_portal_owner(partner, profile):
+def _require_portal_owner(supabase, partner: dict, profile: dict) -> None:
+    if not is_referral_portal_owner(supabase, partner, profile):
         raise HTTPException(status_code=403, detail="Only the referral attorney who owns this workspace can manage the team.")
 
 
@@ -480,10 +481,10 @@ async def list_referral_portal_team(authorization: str = Header(default=None)):
     profile = await _get_current_user(authorization)
     supabase = get_supabase()
     partner = _portal_partner_or_404(supabase, profile)
-    _require_portal_owner(partner, profile)
+    _require_portal_owner(supabase, partner, profile)
     response = (
         supabase.table("referral_portal_team_members")
-        .select("id,profile_id,status,created_at,revoked_at")
+        .select("id,profile_id,status,access_level,created_at,revoked_at")
         .eq("referral_partner_id", partner["id"])
         .order("created_at", desc=True)
         .execute()
@@ -510,24 +511,29 @@ async def _send_referral_portal_team_invitation(
     temp_password: str,
     partner_name: str,
     member_id: str,
+    access_level: str = "member",
 ) -> bool:
     """Email credentials for an isolated referral-team account."""
     from utils.email_service import send_email
 
     frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
+    access_note = (
+        "<p>You have been added as a co-owner. You can manage this portal's team and settings, as well as its attributed clients, cases, and documents. You cannot access LegalFlow firm cases or another referral workspace.</p>"
+        if access_level == "co_owner" else
+        "<p>You can access only this referral workspace, its attributed clients, and its case documents. You cannot access LegalFlow firm cases or any other referral workspace.</p>"
+    )
     return await send_email(
         to=recipient_email,
         subject=f"You have been added to {partner_name}'s LegalFlow referral portal",
         body=(
             "<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.6;'>"
-            f"<h2>Welcome to {html.escape(partner_name)}'s LegalFlow referral portal.</h2>"
-            "<p>You can access only this referral workspace, its attributed clients, and its case documents. "
-            "You cannot access LegalFlow firm cases or any other referral workspace.</p>"
-            f"<p><strong>Login:</strong> <a href='{frontend_url}/login'>{frontend_url}/login</a></p>"
-            f"<p><strong>Email:</strong> {html.escape(recipient_email)}</p>"
-            f"<p><strong>Temporary Password:</strong> {html.escape(temp_password)}</p>"
-            "<p>Please sign in and change your password from Settings immediately.</p>"
-            "</div>"
+            + f"<h2>Welcome to {html.escape(partner_name)}'s LegalFlow referral portal.</h2>"
+            + access_note
+            + f"<p><strong>Login:</strong> <a href='{frontend_url}/login'>{frontend_url}/login</a></p>"
+            + f"<p><strong>Email:</strong> {html.escape(recipient_email)}</p>"
+            + f"<p><strong>Temporary Password:</strong> {html.escape(temp_password)}</p>"
+            + "<p>Please sign in and change your password from Settings immediately.</p>"
+            + "</div>"
         ),
         idempotency_key=f"referral-portal-team-invite:{member_id}:{uuid.uuid4()}",
     )
@@ -542,7 +548,7 @@ async def invite_referral_portal_team_member(
     profile = await _get_current_user(authorization)
     supabase = get_supabase()
     partner = _portal_partner_or_404(supabase, profile)
-    _require_portal_owner(partner, profile)
+    _require_portal_owner(supabase, partner, profile)
     email = str(body.email).strip().lower()
 
     existing_profile = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
@@ -572,6 +578,7 @@ async def invite_referral_portal_team_member(
             "profile_id": portal_user_id,
             "invited_by": profile["id"],
             "status": "active",
+            "access_level": body.access_level,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
         member = (membership_response.data or [{}])[0]
@@ -593,14 +600,15 @@ async def invite_referral_portal_team_member(
             temp_password=temp_password,
             partner_name=str(partner.get("full_name") or "your referral attorney"),
             member_id=member_id,
+            access_level=body.access_level,
         )
     except Exception:
         logger.exception("Could not send referral team invitation to %s", email)
     return {
         "member": {**member, "full_name": body.full_name, "email": email},
         "email_sent": email_sent,
-        "message": "Team member added to this private referral workspace."
-        if email_sent else "Team member added, but the invitation email could not be delivered. Use Resend Invitation to send fresh credentials.",
+        "message": ("Co-owner added to this private referral workspace." if body.access_level == "co_owner" else "Team member added to this private referral workspace.")
+        if email_sent else "Account added, but the invitation email could not be delivered. Use Resend Invitation to send fresh credentials.",
     }
 
 
@@ -610,10 +618,10 @@ async def resend_referral_portal_team_invitation(member_id: str, authorization: 
     profile = await _get_current_user(authorization)
     supabase = get_supabase()
     partner = _portal_partner_or_404(supabase, profile)
-    _require_portal_owner(partner, profile)
+    _require_portal_owner(supabase, partner, profile)
     membership_response = (
         supabase.table("referral_portal_team_members")
-        .select("id,profile_id,status")
+        .select("id,profile_id,status,access_level")
         .eq("id", member_id)
         .eq("referral_partner_id", partner["id"])
         .eq("status", "active")
@@ -636,6 +644,7 @@ async def resend_referral_portal_team_invitation(member_id: str, authorization: 
             temp_password=temp_password,
             partner_name=str(partner.get("full_name") or "your referral attorney"),
             member_id=member_id,
+            access_level=str(member.get("access_level") or "member"),
         )
     except Exception as exc:
         logger.exception("Could not resend referral team invitation %s", member_id)
@@ -651,7 +660,7 @@ async def revoke_referral_portal_team_member(member_id: str, authorization: str 
     profile = await _get_current_user(authorization)
     supabase = get_supabase()
     partner = _portal_partner_or_404(supabase, profile)
-    _require_portal_owner(partner, profile)
+    _require_portal_owner(supabase, partner, profile)
     response = (
         supabase.table("referral_portal_team_members")
         .update({
@@ -722,7 +731,8 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
         "partner_name": partner.get("full_name"),
         "referral_url": f"{frontend_url}/case-referral/{partner.get('submission_slug')}",
         "pipeline_id": partner.get("pipeline_id"),
-        "can_manage_team": is_referral_portal_owner(partner, profile),
+        "can_manage_team": is_referral_portal_owner(supabase, partner, profile),
+        "portal_access_level": get_referral_portal_access_level(supabase, partner, profile),
         "stages": stages or [],
         "cases": cases,
     }
