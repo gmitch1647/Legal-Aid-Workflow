@@ -92,7 +92,7 @@ export default function ReferralAttorneyWorkspace() {
             <span className="inline-flex items-center gap-2 rounded-full border border-indigo-300/25 bg-indigo-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-indigo-200">
               <ShieldCheck className="h-3.5 w-3.5" /> Attorney Referral Workspace
             </span>
-            <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">{workspace?.partner_name} Referrals</h1>
+            <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">{workspace?.partner_name}</h1>
             <p className="mt-3 text-sm leading-6 text-slate-300">
               Manage your LegalFlow referrals from one workspace. You can see your pipeline, clients, documents, and case activity while Esther Oise handles the assigned legal work.
             </p>
