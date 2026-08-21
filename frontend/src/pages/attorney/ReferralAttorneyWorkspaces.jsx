@@ -17,6 +17,7 @@ import {
   getStaffAttorneys,
   getReferralAttorneyFeatureAccess,
   updateReferralAttorneyFeatureAccess,
+  inviteReferralAttorneyWorkspaceCoOwner,
 } from '../../lib/api';
 
 const EMPTY_FORM = {
@@ -148,7 +149,7 @@ export default function ReferralAttorneyWorkspaces() {
 
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center gap-3 border-b border-slate-200 px-6 py-4"><FolderKanban className="h-5 w-5 text-indigo-700" /><div><h2 className="font-bold text-slate-900">Active Referral Attorney Workspaces</h2><p className="text-sm text-slate-500">Each workspace has its own pipeline and public referral link.</p></div></div>
-        {!workspaces.length ? <div className="p-10 text-center text-sm text-slate-500">No referral attorney workspaces have been created yet.</div> : <div className="grid gap-4 p-5 md:grid-cols-2">{workspaces.map((partner) => <article key={partner.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold text-slate-900">{partner.full_name}</h3><p className="mt-1 text-sm text-slate-500">{partner.company || partner.email || 'Referral attorney'}</p></div><span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Active</span></div><div className="mt-4 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">{referralUrl(partner.submission_slug) || 'Private link is being configured.'}</div><ReferralAttorneyFeatureControls partner={partner} onError={setError} />
+        {!workspaces.length ? <div className="p-10 text-center text-sm text-slate-500">No referral attorney workspaces have been created yet.</div> : <div className="grid gap-4 p-5 md:grid-cols-2">{workspaces.map((partner) => <article key={partner.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold text-slate-900">{partner.full_name}</h3><p className="mt-1 text-sm text-slate-500">{partner.company || partner.email || 'Referral attorney'}</p></div><span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Active</span></div><div className="mt-4 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">{referralUrl(partner.submission_slug) || 'Private link is being configured.'}</div><ReferralAttorneyFeatureControls partner={partner} onError={setError} /><ReferralPortalCoOwnerControls partner={partner} onError={setError} />
                           <div className="mt-3 flex gap-2"><button disabled={!partner.submission_slug} onClick={() => copyLink(partner.submission_slug)} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">{copied === partner.submission_slug ? <><CheckCircle2 className="h-3.5 w-3.5" /> Copied</> : <><ClipboardCopy className="h-3.5 w-3.5" /> Copy Link</>}</button>{partner.submission_slug && <a href={referralUrl(partner.submission_slug)} target="_blank" rel="noopener" className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-700 hover:bg-slate-100" title="Open referral form"><ExternalLink className="h-3.5 w-3.5" /></a>}</div></article>)}</div>}
       </section>
     </div>
@@ -185,6 +186,41 @@ function ReferralAttorneyFeatureControls({ partner, onError }) {
     <p className="text-xs font-bold uppercase tracking-wide text-indigo-800">Attorney workspace features</p>
     <p className="mt-1 text-xs text-slate-600">Turn Ethan’s case-scoped tools on or off. Changes apply when he refreshes LegalFlow.</p>
     {loading ? <p className="mt-2 text-xs text-slate-500">Loading feature controls…</p> : <div className="mt-3 grid gap-2 sm:grid-cols-2">{features.map((feature) => <button key={feature.key} type="button" onClick={() => toggle(feature)} disabled={savingKey === feature.key} className={`flex items-center justify-between rounded-md border px-2.5 py-2 text-left text-xs transition ${feature.enabled ? 'border-emerald-200 bg-white text-slate-700' : 'border-slate-200 bg-slate-100 text-slate-500'} disabled:opacity-60`}><span><span className="block font-semibold">{feature.label}</span><span className="block text-[11px] leading-4 opacity-80">{feature.description}</span></span><span className={`ml-2 rounded-full px-2 py-0.5 font-bold ${feature.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>{savingKey === feature.key ? '…' : feature.enabled ? 'On' : 'Off'}</span></button>)}</div>}
+  </div>;
+}
+
+function ReferralPortalCoOwnerControls({ partner, onError }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ full_name: '', email: '' });
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    onError('');
+    setSuccess('');
+    try {
+      setSaving(true);
+      const result = await inviteReferralAttorneyWorkspaceCoOwner(partner.id, form);
+      setSuccess(result.message || 'Portal co-owner added.');
+      setForm({ full_name: '', email: '' });
+      setOpen(false);
+    } catch (error) {
+      onError(error.message || 'Could not add the portal co-owner.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
+    <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">Portal co-owners</p>
+    <p className="mt-1 text-xs leading-5 text-slate-600">A co-owner can manage this portal’s team and settings, but remains restricted to this one referral workspace.</p>
+    {success && <p className="mt-2 rounded-md bg-white px-2.5 py-2 text-xs font-medium text-emerald-800">{success}</p>}
+    {!open ? <button type="button" onClick={() => setOpen(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-white px-2.5 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"><UserPlus className="h-3.5 w-3.5" />Add co-owner</button> : <form onSubmit={submit} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+      <input required value={form.full_name} onChange={(event) => setForm((current) => ({ ...current, full_name: event.target.value }))} placeholder="Co-owner name" className="input !bg-white !py-2 text-xs" />
+      <input required type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} placeholder="email@firm.com" className="input !bg-white !py-2 text-xs" />
+      <div className="flex gap-2"><button type="button" onClick={() => { setOpen(false); setForm({ full_name: '', email: '' }); }} className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700">Cancel</button><button type="submit" disabled={saving} className="rounded-md bg-emerald-700 px-2.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-60">{saving ? 'Adding…' : 'Invite'}</button></div>
+    </form>}
   </div>;
 }
 

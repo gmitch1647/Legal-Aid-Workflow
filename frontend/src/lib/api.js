@@ -1239,6 +1239,13 @@ export async function revokeReferralAttorneyPortalTeamMember(memberId) {
   return request(`/referrals/portal/team/${memberId}`, { method: 'DELETE' });
 }
 
+export async function inviteReferralAttorneyWorkspaceCoOwner(partnerId, data) {
+  return request(`/referrals/attorney-workspaces/${partnerId}/co-owners`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function getReferralAttorneyFeatureAccess(partnerId) {
   return request(`/referrals/attorney-workspaces/${partnerId}/features`);
 }

@@ -455,6 +455,81 @@ async def update_referral_attorney_feature_access(
     }
 
 
+@router.post("/attorney-workspaces/{partner_id}/co-owners", status_code=status.HTTP_201_CREATED)
+async def invite_referral_portal_co_owner(
+    partner_id: str,
+    body: ReferralPortalTeamInvite,
+    authorization: str = Header(default=None),
+):
+    """Let the LegalFlow owner add a co-owner to one existing referral portal."""
+    profile = await _get_current_user(authorization)
+    _require_owner(profile)
+    supabase = get_supabase()
+    partner = await _get_referral_partner_or_404(partner_id)
+    if not partner.get("portal_user_id") or not partner.get("portal_active"):
+        raise HTTPException(status_code=422, detail="This referral partner does not have an active portal workspace.")
+
+    email = str(body.email).strip().lower()
+    existing_profile = supabase.table("profiles").select("id").eq("email", email).limit(1).execute()
+    if existing_profile.data:
+        raise HTTPException(status_code=409, detail="A LegalFlow account already uses this email. Choose a different email or contact LegalFlow support.")
+
+    temp_password = _generate_portal_password()
+    portal_user_id = None
+    member_id = str(uuid.uuid4())
+    try:
+        auth_response = supabase.auth.admin.create_user({
+            "email": email,
+            "password": temp_password,
+            "email_confirm": True,
+            "user_metadata": {"full_name": body.full_name},
+        })
+        portal_user_id = str(auth_response.user.id)
+        supabase.table("profiles").insert({
+            "id": portal_user_id,
+            "email": email,
+            "full_name": body.full_name,
+            "role": "affiliate",
+        }).execute()
+        membership_response = supabase.table("referral_portal_team_members").insert({
+            "id": member_id,
+            "referral_partner_id": partner["id"],
+            "profile_id": portal_user_id,
+            "invited_by": profile["id"],
+            "status": "active",
+            "access_level": "co_owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        member = (membership_response.data or [{}])[0]
+    except Exception as exc:
+        if portal_user_id:
+            try:
+                supabase.table("profiles").delete().eq("id", portal_user_id).execute()
+                supabase.auth.admin.delete_user(portal_user_id)
+            except Exception:
+                logger.warning("Could not roll back referral co-owner account %s", portal_user_id)
+        logger.exception("Could not create referral portal co-owner for partner %s", partner.get("id"))
+        raise HTTPException(status_code=500, detail="Could not add the portal co-owner. Please try again.") from exc
+
+    email_sent = False
+    try:
+        email_sent = await _send_referral_portal_team_invitation(
+            recipient_email=email,
+            recipient_name=body.full_name,
+            temp_password=temp_password,
+            partner_name=str(partner.get("full_name") or "your referral attorney"),
+            member_id=member_id,
+            access_level="co_owner",
+        )
+    except Exception:
+        logger.exception("Could not send referral co-owner invitation to %s", email)
+    return {
+        "member": {**member, "full_name": body.full_name, "email": email},
+        "email_sent": email_sent,
+        "message": "Portal co-owner added." if email_sent else "Portal co-owner added, but the invitation email could not be delivered. Use the portal team controls to resend credentials.",
+    }
+
+
 @router.put("/portal/password")
 async def update_referral_portal_password(
     body: ReferralPortalPasswordUpdate,
