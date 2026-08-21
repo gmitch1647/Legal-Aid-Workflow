@@ -161,7 +161,6 @@ export default function ReferralAttorneySettings() {
 
   const canManageTeam = Boolean(workspace?.can_manage_team);
   const activeMembers = team.filter((member) => member.status === 'active');
-  const formerMembers = team.filter((member) => member.status !== 'active');
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -223,7 +222,6 @@ export default function ReferralAttorneySettings() {
             {!activeMembers.length ? <p className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No team members have been added yet.</p> : <div className="mt-3 space-y-3">{activeMembers.map((member) => <article key={member.id} className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="font-semibold text-slate-900">{member.full_name}</p><p className="mt-1 flex items-center gap-1.5 truncate text-sm text-slate-600"><Mail className="h-3.5 w-3.5 shrink-0" />{member.email}</p><p className="mt-1 text-xs text-slate-500">Added {formatDate(member.created_at)} · Private workspace access only</p></div><div className="flex shrink-0 gap-2"><button type="button" onClick={() => resendInvite(member)} disabled={resendingId === member.id} className="btn-secondary gap-2 text-xs">{resendingId === member.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}Resend</button><button type="button" onClick={() => revokeMember(member)} disabled={revokingId === member.id} className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60">{revokingId === member.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}Remove</button></div></article>)}</div>}
           </div>
 
-          {!!formerMembers.length && <div className="mt-6 border-t border-slate-100 pt-5"><h3 className="text-sm font-bold text-slate-700">Removed members</h3><div className="mt-3 space-y-2">{formerMembers.map((member) => <div key={member.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500"><span>{member.full_name} · {member.email}</span><span>Removed {formatDate(member.revoked_at)}</span></div>)}</div></div>}
         </section>
       ) : (
         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 shadow-sm"><div className="flex gap-3"><Users className="h-5 w-5 shrink-0 text-slate-500" /><p>Only the referral attorney who owns this workspace can add or remove portal team members. You can still change your own password above.</p></div></section>
