@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, FolderSync, Loader2, RefreshCw } from 'lucide-react';
-import { getCases, getDocuments } from '../../lib/api';
+import { getCases, getDocuments, getReferralAttorneyWorkspace } from '../../lib/api';
 import DocumentExchangePanel from '../../components/DocumentExchangePanel';
 
 export default function ReferralAttorneyDocumentExchange() {
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [documents, setDocuments] = useState([]);
+  const [referralUrl, setReferralUrl] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [error, setError] = useState('');
@@ -15,9 +16,10 @@ export default function ReferralAttorneyDocumentExchange() {
     try {
       setLoading(true);
       setError('');
-      const result = await getCases();
+      const [result, workspace] = await Promise.all([getCases(), getReferralAttorneyWorkspace()]);
       const list = Array.isArray(result) ? result : result?.items || result?.cases || [];
       setCases(list);
+      setReferralUrl(workspace?.referral_url || '');
       setSelectedCaseId((current) => current || list[0]?.id || '');
     } catch (loadError) {
       setError(loadError.message || 'Could not load your referral cases.');
@@ -59,7 +61,7 @@ export default function ReferralAttorneyDocumentExchange() {
 
       {error && <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="h-5 w-5 shrink-0" />{error}</div>}
 
-      {!cases.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center"><FolderSync className="mx-auto h-9 w-9 text-slate-300" /><p className="mt-3 text-sm text-slate-500">Your document threads will appear after you submit a referral.</p></div> : <>
+      {!cases.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center"><FolderSync className="mx-auto h-9 w-9 text-slate-300" /><h2 className="mt-3 font-semibold text-slate-800">No referral cases are available for Document Exchange yet.</h2><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">Document Exchange is case-specific. Once a referral is submitted to this private workspace, its documents can be uploaded, sent to Esther, and returned in the same case thread.</p>{referralUrl && <a href={referralUrl} target="_blank" rel="noreferrer" className="btn-primary mt-5 inline-flex">Open my private referral form</a>}</div> : <>
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <label className="label">Select referral case</label>
           <select className="input" value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)}>
