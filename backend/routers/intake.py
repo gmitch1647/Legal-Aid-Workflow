@@ -90,11 +90,18 @@ def _store_prepared_referral_documents(
     for document, category in items:
         folder = "complaints" if category == "complaint" else "secure-information" if category == "pii" else "case-submission"
         storage_path = f"cases/{case_id}/{folder}/{uuid4().hex}_{document['safe_name']}"
-        supabase.storage.from_("documents").upload(
-            storage_path,
-            document["content"],
-            {"content-type": document["content_type"]},
-        )
+        try:
+            supabase.storage.from_("documents").upload(
+                path=storage_path,
+                file=document["content"],
+                file_options={
+                    "content-type": document["content_type"],
+                    "upsert": "false",
+                },
+            )
+        except Exception:
+            logger.exception("Could not upload referral document %s", document["file_name"])
+            raise
 
         word_document_path = None
         if category == "complaint" and document["file_type"] == "pdf":
@@ -105,9 +112,12 @@ def _store_prepared_referral_documents(
                 word_file_name = complaint_word_file_name(document["safe_name"])
                 word_document_path = str(Path(storage_path).with_name(word_file_name))
                 supabase.storage.from_("documents").upload(
-                    word_document_path,
-                    pdf_bytes_to_docx(document["content"]),
-                    {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+                    path=word_document_path,
+                    file=pdf_bytes_to_docx(document["content"]),
+                    file_options={
+                        "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "upsert": "false",
+                    },
                 )
             except Exception as exc:
                 logger.exception("Could not create Word derivative for referral complaint %s", document["file_name"])
