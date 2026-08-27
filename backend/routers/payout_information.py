@@ -152,6 +152,59 @@ def _is_owner_reviewer(supabase, profile: dict) -> bool:
     return bool(profile.get("id") and profile.get("id") == _owner_profile_id(supabase))
 
 
+async def _notify_payout_information_completed(supabase, payout_request: dict) -> None:
+    """Notify the configured LegalFlow owner after secure banking submission.
+
+    The email intentionally contains no routing number, account number, bank name,
+    or other payment details. Delivery is best effort and never invalidates a
+    successfully stored submission.
+    """
+    try:
+        owner_id = _owner_profile_id(supabase)
+        if not owner_id:
+            logger.warning("No active payout owner configured for request %s", payout_request.get("id"))
+            return
+        owner_response = (
+            supabase.table("profiles")
+            .select("id,email,full_name")
+            .eq("id", owner_id)
+            .limit(1)
+            .execute()
+        )
+        owner = (owner_response.data or [None])[0]
+        owner_email = str((owner or {}).get("email") or "").strip()
+        if not owner_email:
+            logger.warning("Payout owner %s has no email for request %s", owner_id, payout_request.get("id"))
+            return
+
+        client_response = (
+            supabase.table("profiles")
+            .select("full_name")
+            .eq("id", payout_request.get("client_id"))
+            .limit(1)
+            .execute()
+        )
+        client_name = str(((client_response.data or [{}])[0]).get("full_name") or "The client").strip()
+        case_id = str(payout_request.get("case_id") or "").strip()
+        case_line = f"<p><strong>Case ID:</strong> {escape(case_id)}</p>" if case_id else ""
+        delivered = await send_email(
+            to=owner_email,
+            subject="Banking Form Signed",
+            body=(
+                f"<p>Hello {escape(str((owner or {}).get('full_name') or 'there'))},</p>"
+                f"<p><strong>{escape(client_name)}</strong> has completed the secure banking-information form.</p>"
+                f"{case_line}"
+                "<p>Open LegalFlow to review the submission through the authorized payout-information workflow.</p>"
+                "<p style=\"font-size:12px;color:#64748b;\">For security, this email does not include banking details.</p>"
+            ),
+            idempotency_key=f"payout-information-completed:{payout_request.get('id')}",
+        )
+        if not delivered:
+            logger.warning("Could not deliver payout completion notification for request %s", payout_request.get("id"))
+    except Exception:
+        logger.exception("Could not send payout completion notification for request %s", payout_request.get("id"))
+
+
 def _payment_access_for_request(supabase, payout_request_id: str) -> Optional[dict]:
     response = (
         supabase.table("payout_attorney_payment_access")
@@ -585,6 +638,7 @@ async def submit_public_payout_information(
         logger.exception("Public payout-information submission failed for request %s", payout_request.get("id"))
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not save your payout information securely. Please try again.") from exc
 
+    await _notify_payout_information_completed(supabase, payout_request)
     return {"status": "completed", "account_number_last4": body.account_number[-4:]}
 
 
@@ -656,6 +710,7 @@ async def submit_payout_information(
         logger.exception("Payout-information submission failed for request %s", payout_request_id)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not save your payout information securely. Please try again.") from exc
 
+    await _notify_payout_information_completed(supabase, payout_request)
     return {"request_id": payout_request_id, "status": "completed", "account_number_last4": body.account_number[-4:]}
 
 
