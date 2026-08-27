@@ -150,7 +150,7 @@ def _active_referral_partner_for_slug(slug: str) -> dict:
         raise HTTPException(status_code=404, detail="Referral workspace not found.")
     partner_response = (
         get_supabase().table("referral_partners")
-        .select("id,full_name,assigned_attorney_id,pipeline_id,submission_slug,portal_active")
+        .select("id,full_name,assigned_attorney_id,pipeline_id,portal_user_id,submission_slug,portal_active")
         .eq("submission_slug", cleaned_slug)
         .eq("portal_active", True)
         .limit(1)
@@ -401,19 +401,58 @@ async def submit_intake(body: IntakeSubmission):
             except Exception:
                 pass
 
-    # The main LegalFlow owner is notified for all submissions. Partner-link
-    # referrals also notify their configured working attorney (Esther for Ethan's
-    # workspace) without trusting a public recipient field.
+    # Keep in-app notifications and send email to every configured recipient.
+    # A private referral workspace notifies its portal owner and assigned working
+    # attorney; ordinary submissions notify the main LegalFlow attorney.
     try:
         from utils.notifications import notify_attorney_new_submission
+        from utils.email_service import send_case_submitted_notification
+
         if case_id:
             notify_attorney_new_submission(case_id=case_id, client_name=name)
-            if referral_workspace and referral_workspace.get("assigned_attorney_id"):
+
+            recipient_ids = []
+            if referral_workspace:
+                for profile_id in (
+                    referral_workspace.get("portal_user_id"),
+                    referral_workspace.get("assigned_attorney_id"),
+                ):
+                    if profile_id and profile_id not in recipient_ids:
+                        recipient_ids.append(profile_id)
+            else:
+                owner_response = (
+                    supabase.table("profiles")
+                    .select("id")
+                    .eq("role", "attorney")
+                    .limit(1)
+                    .execute()
+                )
+                recipient_ids = [owner_response.data[0]["id"]] if owner_response.data else []
+
+            for recipient_id in recipient_ids:
                 notify_attorney_new_submission(
                     case_id=case_id,
                     client_name=name,
-                    attorney_id=referral_workspace["assigned_attorney_id"],
+                    attorney_id=recipient_id,
                 )
+
+            if recipient_ids:
+                recipient_response = (
+                    supabase.table("profiles")
+                    .select("id,email")
+                    .in_("id", recipient_ids)
+                    .execute()
+                )
+                sent_emails = set()
+                for recipient in recipient_response.data or []:
+                    email = str(recipient.get("email") or "").strip().lower()
+                    if not email or email in sent_emails:
+                        continue
+                    sent_emails.add(email)
+                    await send_case_submitted_notification(
+                        attorney_email=email,
+                        client_name=name,
+                    )
     except Exception:
         logger.exception("Could not create one or more intake submission notifications")
 
