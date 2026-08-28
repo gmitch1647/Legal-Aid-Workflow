@@ -205,6 +205,71 @@ async def _notify_payout_information_completed(supabase, payout_request: dict) -
         logger.exception("Could not send payout completion notification for request %s", payout_request.get("id"))
 
 
+async def _notify_payment_recorded(
+    supabase,
+    payout_request: dict,
+    payment: dict,
+    actor_profile: dict,
+) -> None:
+    """Email the client and owner after payment is recorded, without bank details."""
+    try:
+        case = _case_or_404(supabase, payout_request.get("case_id")) if payout_request.get("case_id") else {}
+        client_response = (
+            supabase.table("profiles")
+            .select("full_name,email")
+            .eq("id", payout_request.get("client_id"))
+            .limit(1)
+            .execute()
+        )
+        client = (client_response.data or [None])[0]
+        owner_id = _owner_profile_id(supabase)
+        owner_response = (
+            supabase.table("profiles")
+            .select("full_name,email")
+            .eq("id", owner_id)
+            .limit(1)
+            .execute()
+            if owner_id else None
+        )
+        owner = (owner_response.data or [None])[0] if owner_response else None
+        recipients = []
+        for profile in (client, owner):
+            email = str((profile or {}).get("email") or "").strip()
+            if email and email.lower() not in {item[0].lower() for item in recipients}:
+                recipients.append((email, profile))
+        if not recipients:
+            logger.warning("No recipients for payment notification on request %s", payout_request.get("id"))
+            return
+
+        amount = payment.get("payment_amount")
+        try:
+            amount_label = f"${float(amount):,.2f}" if amount is not None else "an amount not specified"
+        except (TypeError, ValueError):
+            amount_label = "an amount not specified"
+        matter = str(case.get("case_number") or case.get("plaintiff_name") or "your matter").strip()
+        firm_name = str(actor_profile.get("firm_name") or "LegalFlow").strip()
+        paid_at = str(payment.get("payment_sent_at") or "").strip()
+        paid_date = paid_at[:10] if paid_at else "today"
+        subject = f"Payment sent for {matter}"
+        for recipient_email, recipient_profile in recipients:
+            delivered = await send_email(
+                to=recipient_email,
+                subject=subject,
+                body=(
+                    f"<p>Hello {escape(str((recipient_profile or {}).get('full_name') or 'there'))},</p>"
+                    f"<p>A payment of <strong>{escape(amount_label)}</strong> has been recorded for the matter <strong>{escape(matter)}</strong>.</p>"
+                    f"<p><strong>Law firm:</strong> {escape(firm_name)}<br />"
+                    f"<strong>Payment date:</strong> {escape(paid_date)}</p>"
+                    "<p>This confirms that the payment was recorded as sent by the attorney. For security, this email does not include banking details.</p>"
+                ),
+                idempotency_key=f"client-payment-recorded:{payout_request.get('id')}:{recipient_email.lower()}",
+            )
+            if not delivered:
+                logger.warning("Payment notification was not delivered to %s for request %s", recipient_email, payout_request.get("id"))
+    except Exception:
+        logger.exception("Could not send payment-recorded notifications for request %s", payout_request.get("id"))
+
+
 def _payment_access_for_request(supabase, payout_request_id: str) -> Optional[dict]:
     response = (
         supabase.table("payout_attorney_payment_access")
@@ -937,5 +1002,11 @@ async def mark_payout_payment_sent(
         "id": str(uuid.uuid4()), "request_id": payout_request_id, "actor_id": profile["id"],
         "action": "payment_marked_sent", "actor_ip": actor_ip, "ip_source": ip_source, "created_at": now,
     }).execute()
+    await _notify_payment_recorded(
+        supabase,
+        payout_request,
+        {"payment_amount": body.payment_amount, "payment_sent_at": sent_at},
+        profile,
+    )
     summary = _safe_summary(payout_request, _submission_for_request(supabase, payout_request_id))
     return _append_payment_access(summary, _payment_access_for_request(supabase, payout_request_id), profile, False)
