@@ -18,6 +18,7 @@ import {
   revealPayoutInformation,
   releasePayoutInformationToAttorney,
   revokePayoutInformationAttorneyAccess,
+  markPayoutPaymentSent,
 } from '../lib/api';
 
 const STATUS_STYLE = {
@@ -42,6 +43,8 @@ export default function PayoutInformationPanel({ caseId }) {
   const [revealed, setRevealed] = useState(null);
   const [releasingId, setReleasingId] = useState('');
   const [revokingId, setRevokingId] = useState('');
+  const [markingPaymentId, setMarkingPaymentId] = useState('');
+  const [paymentForms, setPaymentForms] = useState({});
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [form, setForm] = useState({
@@ -131,6 +134,23 @@ export default function PayoutInformationPanel({ caseId }) {
     }
   }
 
+  function paymentForm(requestId) {
+    return paymentForms[requestId] || { payment_amount: '', payment_sent_at: new Date().toISOString().slice(0, 10), payment_reference: '', payment_note: '' };
+  }
+
+  async function markPaymentSent(event, item) {
+    event.preventDefault();
+    const form = paymentForm(item.id);
+    const amount = Number(form.payment_amount);
+    if (!Number.isFinite(amount) || amount < 0) { setError('Enter a valid payment amount.'); return; }
+    setMarkingPaymentId(item.id); setError(''); setSuccess('');
+    try {
+      await markPayoutPaymentSent(item.id, { payment_amount: amount, payment_sent_at: form.payment_sent_at ? new Date(form.payment_sent_at + 'T12:00:00Z').toISOString() : null, payment_reference: form.payment_reference.trim() || null, payment_note: form.payment_note.trim() || null });
+      await load();
+      setSuccess('Payment recorded. A confirmation email was sent to the client and LegalFlow owner.');
+    } catch (err) { setError(err.message || 'Could not record the client payment.'); } finally { setMarkingPaymentId(''); }
+  }
+
   async function revokeAttorneyAccess(item) {
     if (!window.confirm('Revoke the attorney’s payment-detail access? They will no longer be able to reveal this client’s bank numbers.')) return;
     setRevokingId(item.id); setError('');
@@ -186,7 +206,35 @@ export default function PayoutInformationPanel({ caseId }) {
             {item.payment_access?.can_release && <button type="button" onClick={() => releaseToAttorney(item)} disabled={releasingId === item.id} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60">{releasingId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}Release to attorney</button>}
             {item.payment_access?.can_revoke && <button type="button" onClick={() => revokeAttorneyAccess(item)} disabled={revokingId === item.id} className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-60">{revokingId === item.id ? 'Revoking…' : 'Revoke attorney access'}</button>}
             {item.payment_access?.status === 'released' && <span className="rounded-full bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700">Released to attorney</span>}
-            {item.payment_access?.status === 'payment_marked_sent' && <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">Payment marked sent</span>}
+            {item.payment_access?.status === 'payment_marked_sent' && <div className='flex flex-wrap items-center gap-2 text-xs'><span className='rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700'>Payment marked sent</span><span className='text-slate-600'>{item.payment_access.payment_amount != null ? '
+            {item.status === 'requested' && <button type="button" onClick={() => cancelRequest(item)} disabled={cancellingId === item.id} className="text-xs font-semibold text-slate-500 hover:text-red-700 disabled:opacity-60">{cancellingId === item.id ? 'Cancelling…' : 'Cancel'}</button>}
+          </div>
+        ))}
+      </div>
+
+      {revealed && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label="Secure payout information">
+          <section className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div><p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-emerald-700"><KeyRound className="h-3.5 w-3.5" />Audited secure view</p><h3 className="mt-1 text-lg font-bold text-slate-900">Client ACH payout details</h3></div>
+              <button type="button" onClick={() => setRevealed(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close secure payout information"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="mt-5 grid gap-3 text-sm">
+              <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Account holder</p><p className="mt-1 font-semibold text-slate-900">{revealed.account_holder_name}</p></div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Ownership</p><p className="mt-1 font-semibold capitalize text-slate-900">{revealed.account_ownership || 'Not recorded'}</p></div><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Account type</p><p className="mt-1 font-semibold capitalize text-slate-900">{revealed.account_type}</p></div><div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-500">Bank</p><p className="mt-1 font-semibold text-slate-900">{revealed.bank_name || 'Not provided'}</p></div></div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><p className="text-xs font-semibold text-emerald-800">Routing number</p><p className="mt-1 font-mono text-base font-bold tracking-wide text-slate-950">{revealed.routing_number}</p></div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><p className="text-xs font-semibold text-emerald-800">Account number</p><p className="mt-1 font-mono text-base font-bold tracking-wide text-slate-950">{revealed.account_number}</p></div>
+            </div>
+            <div className="mt-5 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />This reveal was recorded in LegalFlow’s private audit trail. Do not copy these details into messages, notes, or ordinary case documents.</div>
+            <div className="mt-5 flex justify-end"><button type="button" onClick={() => setRevealed(null)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">Close secure view</button></div>
+          </section>
+        </div>
+      )}
+    </section>
+  );
+}
+ + Number(item.payment_access.payment_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'Amount not specified'}{item.payment_access.payment_sent_at ? ' · ' + new Date(item.payment_access.payment_sent_at).toLocaleDateString() : ''}</span></div>}
+            {item.payment_access?.can_mark_payment_sent && <form onSubmit={(event) => markPaymentSent(event, item)} className='basis-full mt-2 grid gap-2 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 sm:grid-cols-2'><p className='sm:col-span-2 text-xs font-semibold text-indigo-900'>Record client payment</p><label className='text-xs font-medium text-slate-700'>Amount paid<input required type='number' min='0' step='0.01' inputMode='decimal' value={paymentForm(item.id).payment_amount} onChange={(event) => setPaymentForms((current) => ({ ...current, [item.id]: { ...paymentForm(item.id), payment_amount: event.target.value } }))} placeholder='0.00' className='mt-1 w-full rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm' /></label><label className='text-xs font-medium text-slate-700'>Payment date<input required type='date' value={paymentForm(item.id).payment_sent_at} onChange={(event) => setPaymentForms((current) => ({ ...current, [item.id]: { ...paymentForm(item.id), payment_sent_at: event.target.value } }))} className='mt-1 w-full rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm' /></label><label className='text-xs font-medium text-slate-700'>Reference number <span className='font-normal text-slate-400'>(optional)</span><input value={paymentForm(item.id).payment_reference} onChange={(event) => setPaymentForms((current) => ({ ...current, [item.id]: { ...paymentForm(item.id), payment_reference: event.target.value } }))} maxLength={180} placeholder='Transaction or check number' className='mt-1 w-full rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm' /></label><label className='text-xs font-medium text-slate-700'>Internal note <span className='font-normal text-slate-400'>(optional)</span><input value={paymentForm(item.id).payment_note} onChange={(event) => setPaymentForms((current) => ({ ...current, [item.id]: { ...paymentForm(item.id), payment_note: event.target.value } }))} maxLength={1000} placeholder='Payment note' className='mt-1 w-full rounded-md border border-slate-300 bg-white px-2.5 py-2 text-sm' /></label><div className='sm:col-span-2 flex items-center justify-between gap-3'><p className='text-[11px] leading-4 text-slate-500'>Saving sends a confirmation to the client and LegalFlow owner.</p><button type='submit' disabled={markingPaymentId === item.id} className='inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60'>{markingPaymentId === item.id ? 'Recording…' : 'Mark client paid'}</button></div></form>}
             {item.status === 'requested' && <button type="button" onClick={() => cancelRequest(item)} disabled={cancellingId === item.id} className="text-xs font-semibold text-slate-500 hover:text-red-700 disabled:opacity-60">{cancellingId === item.id ? 'Cancelling…' : 'Cancel'}</button>}
           </div>
         ))}
