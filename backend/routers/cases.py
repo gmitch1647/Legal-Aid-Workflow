@@ -589,12 +589,25 @@ async def update_case_status(
     _require_pipeline_case_mover(profile, case)
 
     supabase = get_supabase()
+    next_status = str(body.status or "").strip()
+    rejection_reason = str(body.rejection_reason or "").strip()
+    is_rejected = next_status == "rejected" or next_status.endswith("-rejected")
+    if is_rejected and not rejection_reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A rejection reason is required before moving a case to Rejected.",
+        )
+
+    update_payload = {
+        "status": next_status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if is_rejected:
+        update_payload["denial_reason"] = rejection_reason
+
     resp = (
         supabase.table("cases")
-        .update({
-            "status": body.status,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
+        .update(update_payload)
         .eq("id", case_id)
         .execute()
     )
@@ -604,6 +617,46 @@ async def update_case_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update case status.",
         )
+
+    # Referral cases must communicate the rejection reason to the originating
+    # referral contact. Email delivery is best-effort; the durable reason remains
+    # stored on the case even if the provider is temporarily unavailable.
+    if is_rejected and case.get("referral_partner_id"):
+        try:
+            partner_response = (
+                supabase.table("referral_partners")
+                .select("full_name,email")
+                .eq("id", case["referral_partner_id"])
+                .limit(1)
+                .execute()
+            )
+            partner = (partner_response.data or [None])[0]
+            partner_email = str((partner or {}).get("email") or "").strip()
+            if partner_email:
+                client_response = (
+                    supabase.table("profiles")
+                    .select("full_name")
+                    .eq("id", case.get("client_id"))
+                    .limit(1)
+                    .execute()
+                )
+                client = (client_response.data or [None])[0] or {}
+                client_name = client.get("full_name") or "the referred client"
+                frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
+                await send_email(
+                    to=partner_email,
+                    subject=f"Referral case rejected: {client_name}",
+                    body=(
+                        f"<p>Hello {(partner or {}).get('full_name') or 'Referral Partner'},</p>"
+                        f"<p>The LegalFlow case for <strong>{client_name}</strong> was moved to <strong>Rejected</strong>.</p>"
+                        f"<p><strong>Reason:</strong> {html.escape(rejection_reason)}</p>"
+                        "<p>Please review the reason above and provide the missing information, corrected documents, or other requested action before resubmitting or asking LegalFlow to review the case again.</p>"
+                        f"<p><a href=\"{frontend_url}/attorney/pipeline\">Open the LegalFlow pipeline</a></p>"
+                    ),
+                    idempotency_key=f"case-rejected:{case_id}:{rejection_reason}",
+                )
+        except Exception:
+            logger.warning("Could not send referral rejection notification for case %s", case_id)
 
     return resp.data[0]
 

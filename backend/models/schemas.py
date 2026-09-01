@@ -125,6 +125,11 @@ class CaseStatusUpdate(BaseModel):
             "revision_requested, approved, denied"
         ),
     )
+    rejection_reason: Optional[str] = Field(
+        None,
+        max_length=5000,
+        description="Required when moving a case into a rejected status.",
+    )
 
 
 # ---------------------------------------------------------------------------

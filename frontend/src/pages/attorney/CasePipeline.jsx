@@ -32,6 +32,7 @@ const DEFAULT_COLUMNS = [
   { key: 'attorney_review', label: 'Attorney Review', color: 'purple' },
   { key: 'approved', label: 'Approved', color: 'green' },
   { key: 'filed', label: 'Filed', color: 'emerald' },
+  { key: 'rejected', label: 'Rejected', color: 'red' },
   { key: 'closed', label: 'Closed', color: 'slate' },
 ];
 
@@ -80,6 +81,7 @@ export default function CasePipeline() {
   const [notifyAttorneyId, setNotifyAttorneyId] = useState('assigned');
   const [staffAttorneyList, setStaffAttorneyList] = useState([]);
   const [notifyMessage, setNotifyMessage] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('');
 
   // Oise Law engagement-contract stage automation. This modal is separate from
   // generic stage notifications because it creates a secure signature session.
@@ -261,13 +263,13 @@ export default function CasePipeline() {
 
   // Drag end handler
   // Drag handler for CASES (normal mode)
-  async function moveCaseToStatus(caseId, newStatus, oldStatus) {
+  async function moveCaseToStatus(caseId, newStatus, oldStatus, reason = '') {
     setCases((prev) =>
       prev.map((c) => (c.id === caseId ? { ...c, status: newStatus, updated_at: new Date().toISOString() } : c))
     );
     try {
       setUpdating(caseId);
-      await updateCaseStatus(caseId, newStatus);
+      await updateCaseStatus(caseId, newStatus, reason);
     } catch (err) {
       console.error('Status update failed:', err);
       setCases((prev) =>
@@ -299,6 +301,14 @@ export default function CasePipeline() {
       setSendingEngagement(false);
       setUpdating(null);
     }
+  }
+
+  async function handleRejectCase() {
+    if (!notifyModal || !rejectionReason.trim()) return;
+    const { caseId, newStatus, oldStatus } = notifyModal;
+    await moveCaseToStatus(caseId, newStatus, oldStatus, rejectionReason);
+    setNotifyModal(null);
+    setRejectionReason('');
   }
 
   async function handleSendNotification() {
@@ -432,9 +442,15 @@ export default function CasePipeline() {
     setNotifyAttorney(false);
     setNotifyAttorneyId('assigned');
     setNotifyMessage('');
+    setRejectionReason('');
   }
 
   function handleSkipNotification() {
+    if (notifyModal?.requiresRejectionReason) {
+      setNotifyModal(null);
+      setRejectionReason('');
+      return;
+    }
     if (!notifyModal) return;
     moveCaseToStatus(notifyModal.caseId, notifyModal.newStatus, notifyModal.oldStatus);
     setNotifyModal(null);
@@ -473,6 +489,15 @@ export default function CasePipeline() {
       if (newStatus === 'documents_signed') {
         setError('Documents Signed is updated automatically when the client completes the representation agreement.');
         setTimeout(() => setError(null), 6000);
+        return;
+      }
+
+      const isRejected = newStatus === 'rejected' || newStatus.endsWith('-rejected');
+      if (isRejected) {
+        const caseData = cases.find(c => c.id === caseId);
+        const caseName = caseData?.plaintiff_name || caseData?.client_name || 'Case';
+        setRejectionReason('');
+        setNotifyModal({ caseId, caseName, oldStatus, newStatus, stage: columns.find(c => c.key === newStatus), requiresRejectionReason: true });
         return;
       }
 
@@ -961,13 +986,30 @@ export default function CasePipeline() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full">
             <div className="p-5 border-b border-slate-200">
-              <h2 className="text-lg font-bold text-slate-900">Notify Client?</h2>
+              <h2 className="text-lg font-bold text-slate-900">{notifyModal.requiresRejectionReason ? 'Reject Case' : 'Notify Client?'}</h2>
               <p className="text-sm text-slate-500 mt-1">
                 Moving <strong>{notifyModal.caseName}</strong> to <strong>{notifyModal.stage?.label || notifyModal.newStatus}</strong>
               </p>
+              {notifyModal.requiresRejectionReason && (
+                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  A reason is required. The referral contact on this case will automatically receive the reason and instructions for what to correct or do next.
+                </p>
+              )}
             </div>
             <div className="p-5 space-y-4">
-              <div className="flex gap-4">
+              {notifyModal.requiresRejectionReason ? (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-600">Reason for rejection <span className="text-red-600">*</span></label>
+                  <textarea
+                    value={rejectionReason}
+                    onChange={(e) => setRejectionReason(e.target.value)}
+                    rows={5}
+                    autoFocus
+                    placeholder="Explain why the case was rejected and what the referral contact needs to provide or do next."
+                    className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              ) : <div className="flex gap-4">
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                   <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
                   Send Email
@@ -980,8 +1022,8 @@ export default function CasePipeline() {
                   <input type="checkbox" checked={notifyAttorney} onChange={(e) => setNotifyAttorney(e.target.checked)} />
                   Notify Attorney
                 </label>
-              </div>
-              {notifyAttorney && (
+              </div>}
+              {!notifyModal.requiresRejectionReason && notifyAttorney && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Select Attorney to Notify</label>
                   <select value={notifyAttorneyId} onChange={(e) => setNotifyAttorneyId(e.target.value)}
@@ -993,7 +1035,7 @@ export default function CasePipeline() {
                   </select>
                 </div>
               )}
-              {(sendEmail || sendSms) && (
+              {!notifyModal.requiresRejectionReason && (sendEmail || sendSms) && (
                 <textarea
                   value={notifyMessage}
                   onChange={(e) => setNotifyMessage(e.target.value)}
@@ -1002,18 +1044,19 @@ export default function CasePipeline() {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
                 />
               )}
-              <p className="text-[10px] text-slate-400">
+              {!notifyModal.requiresRejectionReason && <p className="text-[10px] text-slate-400">
                 Use {'{client_name}'}, {'{stage_name}'}, {'{case_status}'} in your message
-              </p>
+              </p>}
             </div>
             <div className="p-5 border-t border-slate-200 flex justify-end gap-3">
               <button onClick={handleSkipNotification}
                 className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800">
-                Move Without Notifying
+                {notifyModal.requiresRejectionReason ? 'Cancel' : 'Move Without Notifying'}
               </button>
-              <button onClick={handleSendNotification}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
-                {sendEmail || sendSms ? 'Move & Notify' : 'Move Case'}
+              <button onClick={notifyModal.requiresRejectionReason ? handleRejectCase : handleSendNotification}
+                disabled={notifyModal.requiresRejectionReason && !rejectionReason.trim()}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                {notifyModal.requiresRejectionReason ? 'Reject & Notify Referral' : (sendEmail || sendSms ? 'Move & Notify' : 'Move Case')}
               </button>
             </div>
           </div>
