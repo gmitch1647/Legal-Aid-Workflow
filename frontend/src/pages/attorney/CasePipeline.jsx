@@ -311,7 +311,11 @@ export default function CasePipeline() {
   }
 
   async function handleRejectCase() {
-    if (!notifyModal || !rejectionReason.trim()) return;
+    if (!notifyModal) return;
+    if (!rejectionReason.trim()) {
+      setError('Please enter a rejection reason before sending the notification to the referral partner.');
+      return;
+    }
     const { caseId, newStatus, oldStatus } = notifyModal;
     const result = await moveCaseToStatus(caseId, newStatus, oldStatus, rejectionReason);
     if (!result?.referral_notification_sent) return;
@@ -1000,7 +1004,7 @@ export default function CasePipeline() {
               </p>
               {notifyModal.requiresRejectionReason && (
                 <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  A reason is required. The referral partner/CRO—not the client—will receive the reason and instructions for what to correct or do next.
+                  The reason and instructions will be emailed to the referral partner/CRO—not the client—when you select Reject & Notify Referral.
                 </p>
               )}
               {notifyModal.requiresRejectionReason && (
@@ -1067,8 +1071,7 @@ export default function CasePipeline() {
                 {notifyModal.requiresRejectionReason ? 'Cancel' : 'Move Without Notifying'}
               </button>
               <button onClick={notifyModal.requiresRejectionReason ? handleRejectCase : handleSendNotification}
-                disabled={notifyModal.requiresRejectionReason && !rejectionReason.trim()}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
                 {notifyModal.requiresRejectionReason ? 'Reject & Notify Referral' : (sendEmail || sendSms ? 'Move & Notify' : 'Move Case')}
               </button>
             </div>
