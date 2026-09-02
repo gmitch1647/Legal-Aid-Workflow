@@ -497,7 +497,7 @@ export default function CasePipeline() {
         const caseData = cases.find(c => c.id === caseId);
         const caseName = caseData?.plaintiff_name || caseData?.client_name || 'Case';
         setRejectionReason('');
-        setNotifyModal({ caseId, caseName, oldStatus, newStatus, stage: columns.find(c => c.key === newStatus), requiresRejectionReason: true });
+        setNotifyModal({ caseId, caseName, oldStatus, newStatus, stage: columns.find(c => c.key === newStatus), referralPartner: caseData?.referral_partner, requiresRejectionReason: true });
         return;
       }
 
@@ -992,7 +992,12 @@ export default function CasePipeline() {
               </p>
               {notifyModal.requiresRejectionReason && (
                 <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  A reason is required. The referral contact on this case will automatically receive the reason and instructions for what to correct or do next.
+                  A reason is required. The referral partner/CRO—not the client—will receive the reason and instructions for what to correct or do next.
+                </p>
+              )}
+              {notifyModal.requiresRejectionReason && (
+                <p className="mt-2 text-xs text-slate-600">
+                  Recipient: <strong>{notifyModal.referralPartner?.full_name || 'Referral partner'}</strong>{notifyModal.referralPartner?.email ? ` (${notifyModal.referralPartner.email})` : ' (no referral email is configured)'}
                 </p>
               )}
             </div>

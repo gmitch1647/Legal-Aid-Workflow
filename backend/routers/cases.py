@@ -6,7 +6,9 @@ submission, status transitions, agent pipeline orchestration, complaint
 approval/revision/denial, and file downloads.
 """
 
+import html
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -28,6 +30,7 @@ from utils.notifications import (
     notify_client_complaint_approved,
 )
 from utils.email_service import (
+    send_email,
     send_case_denied_notification,
     send_case_submitted_notification,
     send_complaint_approved_notification,
@@ -356,6 +359,20 @@ async def list_cases(
             "Unknown Client"
         )
         case["client_name"] = case["plaintiff_name"]
+
+        # Include the originating referral partner so attorney-side workflows can
+        # display and notify the correct CRO rather than the client.
+        referral_partner = None
+        if case.get("referral_partner_id"):
+            referral_resp = (
+                supabase.table("referral_partners")
+                .select("id,full_name,email")
+                .eq("id", case["referral_partner_id"])
+                .limit(1)
+                .execute()
+            )
+            referral_partner = (referral_resp.data or [None])[0]
+        case["referral_partner"] = referral_partner
 
         # Defendants
         cd_resp = (
