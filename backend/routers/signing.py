@@ -804,10 +804,11 @@ async def create_signing_session(
 
     try:
         from html import escape
-        from utils.email_service import send_email
+        from utils.email_service import send_email, get_last_email_error
         delivered = await send_email(
             to=signer_email,
             subject=email_subject,
+            idempotency_key=f"signing-session:{session_id}",
             body=f"""
             <div style="font-family:sans-serif;font-size:14px;line-height:1.6;max-width:500px;">
                 <h2 style="color:#1e40af;">{email_heading}</h2>
@@ -836,10 +837,20 @@ async def create_signing_session(
             )
             logger.info("%s emailed to %s", delivery_kind.capitalize(), signer_email)
         else:
-            logger.warning("Email provider did not accept %s for %s", delivery_kind, signer_email)
+            detail = get_last_email_error() or "The email provider did not accept the message."
+            logger.error("Email provider did not accept %s for %s: %s", delivery_kind, signer_email, detail)
+            raise HTTPException(
+                status_code=502,
+                detail=f"The document was stored, but the {delivery_kind} could not be sent to {signer_email}. {detail}",
+            )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to email %s to %s: %s", delivery_kind, signer_email, e)
-
+        logger.exception("Failed to email %s to %s", delivery_kind, signer_email)
+        raise HTTPException(
+            status_code=502,
+            detail=f"The document was stored, but the {delivery_kind} could not be sent to {signer_email}.",
+        ) from e
     return {
         "session_id": session_id,
         "token": token,
