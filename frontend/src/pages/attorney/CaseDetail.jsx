@@ -153,12 +153,13 @@ function parseCaseTypes(caseType) {
 // Confirmation Modal
 // ---------------------------------------------------------------------------
 
-function ConfirmModal({ title, message, confirmLabel, confirmColor, onConfirm, onCancel, loading }) {
+function ConfirmModal({ title, message, confirmLabel, confirmColor, onConfirm, onCancel, loading, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
         <p className="mt-2 text-sm text-slate-600">{message}</p>
+        {children}
         <div className="mt-6 flex justify-end gap-3">
           <button onClick={onCancel} className="btn-secondary" disabled={loading}>
             Cancel
@@ -1327,6 +1328,7 @@ export default function CaseDetail() {
   const [denyModal, setDenyModal] = useState(false);
   const [stageChangeModal, setStageChangeModal] = useState(null);
   const [stageChangeLoading, setStageChangeLoading] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   // Attorney assignment
   const [staffAttorneys, setStaffAttorneys] = useState([]);
@@ -1677,10 +1679,14 @@ export default function CaseDetail() {
       return;
     }
 
+    const isRejected = nextStatus === 'rejected' || nextStatus.endsWith('-rejected');
+    setRejectionReason(isRejected ? '' : rejectionReason);
     setStageChangeModal({
       type: 'stage',
       stage: selectedStage,
       shouldNotify: Boolean(selectedStage.notify_email || selectedStage.notify_sms || selectedStage.notify_attorney),
+      requiresRejectionReason: isRejected,
+      referralPartner: caseData?.referral_partner,
     });
   };
 
@@ -1770,17 +1776,22 @@ export default function CaseDetail() {
 
   const handleConfirmStageChange = async () => {
     if (!stageChangeModal || stageChangeLoading) return;
+    if (stageChangeModal.requiresRejectionReason && !rejectionReason.trim()) {
+      setError('A rejection reason is required before notifying the referral partner.');
+      return;
+    }
     setStageChangeLoading(true);
     try {
       if (stageChangeModal.type === 'engagement') {
         await sendOiseEngagementContract(id);
       } else {
-        await updateCaseStatus(id, stageChangeModal.stage.slug);
-        if (stageChangeModal.shouldNotify) {
+        await updateCaseStatus(id, stageChangeModal.stage.slug, rejectionReason);
+        if (stageChangeModal.shouldNotify && !stageChangeModal.requiresRejectionReason) {
           await notifyStageRecipients(stageChangeModal.stage);
         }
       }
       setStageChangeModal(null);
+      setRejectionReason('');
       await fetchCase();
       await fetchPipeline();
     } catch (err) {
@@ -2641,15 +2652,39 @@ export default function CaseDetail() {
           title={stageChangeModal.type === 'engagement' ? 'Send Oise Law Contract for Signature' : `Move case to ${stageChangeModal.stage.name || stageChangeModal.stage.slug}`}
           message={stageChangeModal.type === 'engagement'
             ? `LegalFlow will send Esther Oise’s representation agreement to ${clientName} for signature. The case will move only after the signing invitation is accepted for delivery.`
-            : stageChangeModal.shouldNotify
+            : stageChangeModal.requiresRejectionReason
+              ? 'Enter the rejection reason and required next steps. LegalFlow will notify the referral partner/CRO only; the client will not receive this rejection email.'
+              : stageChangeModal.shouldNotify
               ? `This stage has configured notifications. LegalFlow will move the case and send the enabled case-update notifications.`
               : `Move this case to ${stageChangeModal.stage.name || stageChangeModal.stage.slug}?`}
-          confirmLabel={stageChangeModal.type === 'engagement' ? 'Send Contract for Signature' : stageChangeModal.shouldNotify ? 'Move Case & Send Notifications' : 'Move Case'}
+          confirmLabel={stageChangeModal.type === 'engagement' ? 'Send Contract for Signature' : stageChangeModal.requiresRejectionReason ? 'Reject & Notify Referral' : stageChangeModal.shouldNotify ? 'Move Case & Send Notifications' : 'Move Case'}
           confirmColor="green"
           loading={stageChangeLoading}
           onConfirm={handleConfirmStageChange}
-          onCancel={() => setStageChangeModal(null)}
-        />
+          onCancel={() => { setStageChangeModal(null); setRejectionReason(''); }}
+        >
+          {stageChangeModal.requiresRejectionReason && (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                The referral partner/CRO—not the client—will be notified automatically.
+              </div>
+              <p className="text-xs text-slate-600">
+                Recipient: <strong>{stageChangeModal.referralPartner?.full_name || 'Referral partner'}</strong>{stageChangeModal.referralPartner?.email ? ` (${stageChangeModal.referralPartner.email})` : ' (the case referral email will be used)'}
+              </p>
+              <label className="block text-sm font-medium text-slate-700">
+                Rejection reason and required next steps
+                <textarea
+                  value={rejectionReason}
+                  onChange={(event) => setRejectionReason(event.target.value)}
+                  rows={4}
+                  required
+                  placeholder="Explain why the case was rejected and what the referral partner needs to provide or do next."
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                />
+              </label>
+            </div>
+          )}
+        </ConfirmModal>
       )}
     </div>
   );
