@@ -13,8 +13,9 @@ import {
   AlertCircle,
   X,
   Check,
+  Pencil,
 } from 'lucide-react';
-import { getCases, registerClient, getCommsHistory, deleteClient } from '../../lib/api';
+import { getCases, registerClient, getCommsHistory, deleteClient, updateClientProfile } from '../../lib/api';
 import { supabase } from '../../lib/supabase';
 import { MessageSquare, Send, Trash2 } from 'lucide-react';
 
@@ -230,6 +231,91 @@ function RegisterClientModal({ onClose, onSuccess }) {
 }
 
 // ---------------------------------------------------------------------------
+// Edit Client Modal
+// ---------------------------------------------------------------------------
+
+function EditClientModal({ client, onClose, onSuccess }) {
+  const [form, setForm] = useState({
+    full_name: client.full_name || '',
+    email: client.email || '',
+    phone: client.phone || '',
+    address: client.address || '',
+    county: client.county || '',
+    state: client.state || '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [saved, setSaved] = useState(false);
+
+  const handleChange = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (!form.full_name.trim() || !form.email.trim()) {
+      setError('Name and email are required.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await updateClientProfile(client.id, form);
+      setSaved(true);
+      setTimeout(() => onSuccess(), 500);
+    } catch (err) {
+      setError(err.message || 'Could not update client profile.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Edit Client Profile</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Linked cases, documents, and signatures will remain attached.</p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100" disabled={loading}>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        {saved ? (
+          <div className="flex flex-col items-center justify-center px-6 py-12">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100"><Check className="h-6 w-6 text-emerald-600" /></div>
+            <p className="mt-4 text-lg font-medium text-slate-900">Profile Updated</p>
+            <p className="mt-1 text-sm text-slate-500">The corrected information has been saved.</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 p-6">
+            {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+            <div>
+              <label className="label">Full Name <span className="text-red-500">*</span></label>
+              <input className="input" value={form.full_name} onChange={handleChange('full_name')} required />
+            </div>
+            <div>
+              <label className="label">Email <span className="text-red-500">*</span></label>
+              <input className="input" type="email" value={form.email} onChange={handleChange('email')} required />
+              <p className="mt-1 text-xs text-slate-500">If this client logs in, the login email will be updated too.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="label">Phone</label><input className="input" type="tel" value={form.phone} onChange={handleChange('phone')} /></div>
+              <div><label className="label">County</label><input className="input" value={form.county} onChange={handleChange('county')} /></div>
+            </div>
+            <div><label className="label">Address</label><input className="input" value={form.address} onChange={handleChange('address')} /></div>
+            <div><label className="label">State</label><input className="input" value={form.state} onChange={handleChange('state')} maxLength={2} /></div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={onClose} className="btn-secondary" disabled={loading}>Cancel</button>
+              <button type="submit" className="btn-primary gap-2" disabled={loading}>{loading && <Loader2 className="h-4 w-4 animate-spin" />}{loading ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Client List Component
 // ---------------------------------------------------------------------------
 
@@ -245,6 +331,7 @@ export default function ClientList() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [showRegister, setShowRegister] = useState(false);
+  const [editingClient, setEditingClient] = useState(null);
   const [page, setPage] = useState(1);
 
   async function handleDeleteClient(clientId, clientName) {
@@ -574,6 +661,16 @@ export default function ClientList() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            setEditingClient(client);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition opacity-0 group-hover:opacity-100"
+                          title="Edit client profile"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleDeleteClient(client.id, client.full_name);
                           }}
                           className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition opacity-0 group-hover:opacity-100"
@@ -642,6 +739,16 @@ export default function ClientList() {
         <RegisterClientModal
           onClose={() => setShowRegister(false)}
           onSuccess={fetchData}
+        />
+      )}
+      {editingClient && (
+        <EditClientModal
+          client={editingClient}
+          onClose={() => setEditingClient(null)}
+          onSuccess={() => {
+            setEditingClient(null);
+            fetchData();
+          }}
         />
       )}
     </div>

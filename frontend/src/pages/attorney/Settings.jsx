@@ -50,6 +50,7 @@ import {
   resendStaffInvite,
   getReferralPartners,
   createReferralPartner,
+  updateReferralPartner,
   deleteReferralPartner,
   inviteReferralPortal,
   toggleReferralAccess,
@@ -2146,6 +2147,10 @@ function ReferralsTab() {
 
 function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({ full_name: p.full_name || '', company: p.company || '', email: p.email || '', phone: p.phone || '', notes: p.notes || '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState(null);
   const [inviteEmail, setInviteEmail] = useState(p.email || '');
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState(null);
@@ -2161,6 +2166,20 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
         .catch(() => setLoadingCases(false));
     }
   }, [expanded]);
+
+  async function handleSaveEdit() {
+    if (!editForm.full_name.trim()) { setEditError('Full name is required.'); return; }
+    if (!editForm.email.trim()) { setEditError('Email is required for referral notifications.'); return; }
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      await updateReferralPartner(p.id, editForm);
+      setEditing(false);
+      onUpdate();
+    } catch (err) {
+      setEditError(err.message || 'Could not update referral partner.');
+    } finally { setSavingEdit(false); }
+  }
 
   async function handleInvitePortal() {
     if (!inviteEmail) return;
@@ -2214,6 +2233,17 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              setEditing((value) => !value);
+              setExpanded(true);
+              setEditError(null);
+            }}
+            className="hidden rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 sm:inline-flex"
+          >
+            <Edit3 className="mr-1 h-3 w-3" /> {editing ? 'Close Edit' : 'Edit Profile'}
+          </button>
           <Link
             to={`/attorney/referrals/${p.id}`}
             onClick={(event) => event.stopPropagation()}
@@ -2227,6 +2257,23 @@ function ReferralPartnerCard({ partner: p, onDelete, onUpdate }) {
 
       {expanded && (
         <div className="border-t border-slate-200 p-4 bg-slate-50 space-y-3">
+          {editing && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-3">
+              <div className="text-xs font-bold text-blue-900">Edit Referral Partner Profile</div>
+              {editError && <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{editError}</div>}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <input className="rounded border border-slate-300 px-2 py-1.5 text-xs" placeholder="Full name" value={editForm.full_name} onChange={e => setEditForm(v => ({ ...v, full_name: e.target.value }))} />
+                <input className="rounded border border-slate-300 px-2 py-1.5 text-xs" placeholder="Company / firm" value={editForm.company} onChange={e => setEditForm(v => ({ ...v, company: e.target.value }))} />
+                <input className="rounded border border-slate-300 px-2 py-1.5 text-xs" type="email" placeholder="Email" value={editForm.email} onChange={e => setEditForm(v => ({ ...v, email: e.target.value }))} />
+                <input className="rounded border border-slate-300 px-2 py-1.5 text-xs" placeholder="Phone" value={editForm.phone} onChange={e => setEditForm(v => ({ ...v, phone: e.target.value }))} />
+                <textarea className="rounded border border-slate-300 px-2 py-1.5 text-xs sm:col-span-2" rows={2} placeholder="Notes" value={editForm.notes} onChange={e => setEditForm(v => ({ ...v, notes: e.target.value }))} />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleSaveEdit} disabled={savingEdit} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">{savingEdit ? 'Saving...' : 'Save Profile'}</button>
+                <button onClick={() => setEditing(false)} disabled={savingEdit} className="rounded px-3 py-1.5 text-xs text-slate-600 hover:bg-white">Cancel</button>
+              </div>
+            </div>
+          )}
           {/* Portal invite */}
           {!p.portal_user_id ? (
             <div className="space-y-2">

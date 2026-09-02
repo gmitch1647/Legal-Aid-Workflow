@@ -42,6 +42,16 @@ class ProfileResponse(ProfileBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ClientProfileUpdate(BaseModel):
+    """Fields an authorized attorney may edit on a client profile."""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=30)
+    address: Optional[str] = None
+    county: Optional[str] = Field(None, max_length=100)
+    state: Optional[str] = Field(None, max_length=2)
+
+
 # ---------------------------------------------------------------------------
 # Defendant
 # ---------------------------------------------------------------------------

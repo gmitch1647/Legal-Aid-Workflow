@@ -122,6 +122,13 @@ export async function deleteClient(id) {
   return request(`/cases/clients/${id}`, { method: 'DELETE' });
 }
 
+export async function updateClientProfile(id, data) {
+  return request(`/cases/clients/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function updateCaseStatus(id, newStatus, rejectionReason = '') {
   return request(`/cases/${id}/status`, {
     method: 'PATCH',

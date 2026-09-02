@@ -1163,9 +1163,41 @@ async def update_referral_partner(partner_id: str, body: dict, authorization: st
     _require_attorney(profile)
 
     supabase = get_supabase()
-    resp = supabase.table("referral_partners").update(body).eq("id", partner_id).execute()
-    if not resp.data:
+    current_resp = supabase.table("referral_partners").select("*").eq("id", partner_id).limit(1).execute()
+    if not current_resp.data:
         raise HTTPException(status_code=404, detail="Not found")
+    current = current_resp.data[0]
+    allowed = {"full_name", "company", "email", "phone", "referral_fee_type", "referral_fee_amount", "notes"}
+    changes = {key: value for key, value in (body or {}).items() if key in allowed}
+    if "full_name" in changes:
+        changes["full_name"] = str(changes["full_name"] or "").strip()
+        if not changes["full_name"]:
+            raise HTTPException(status_code=422, detail="Full name is required")
+    if "email" in changes:
+        email = str(changes["email"] or "").strip().lower()
+        if not email:
+            raise HTTPException(status_code=422, detail="Email is required for referral notifications")
+        duplicate = supabase.table("referral_partners").select("id").ilike("email", email).neq("id", partner_id).limit(1).execute()
+        if duplicate.data:
+            raise HTTPException(status_code=409, detail="That email address is already assigned to another referral partner")
+        changes["email"] = email
+    for field in ("company", "phone", "notes"):
+        if field in changes and isinstance(changes[field], str):
+            changes[field] = changes[field].strip()
+    if not changes:
+        return current
+
+    resp = supabase.table("referral_partners").update(changes).eq("id", partner_id).execute()
+    if not resp.data:
+        raise HTTPException(status_code=500, detail="Could not update referral partner")
+
+    if "email" in changes and changes["email"] != str(current.get("email") or "").strip().lower() and current.get("portal_user_id"):
+        try:
+            supabase.auth.admin.update_user_by_id(current["portal_user_id"], {"email": changes["email"]})
+            supabase.table("profiles").update({"email": changes["email"]}).eq("id", current["portal_user_id"]).execute()
+        except Exception as exc:
+            logger.exception("Referral partner updated but portal email sync failed for %s", partner_id)
+            raise HTTPException(status_code=409, detail=f"Partner saved, but linked portal email could not be updated: {exc}")
     return resp.data[0]
 
 

@@ -18,6 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, st
 from models.schemas import (
     CaseCreate,
     CaseStatusUpdate,
+    ClientProfileUpdate,
     DenialRequest,
     RevisionRequest,
 )
@@ -587,6 +588,52 @@ async def delete_client(client_id: str, authorization: str = Header(...)):
     supabase.table("profiles").delete().eq("id", client_id).execute()
 
     return {"deleted": True, "client_id": client_id}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /clients/{client_id} -- attorney updates client profile
+# ---------------------------------------------------------------------------
+@router.patch("/clients/{client_id}")
+async def update_client_profile(
+    client_id: str,
+    body: ClientProfileUpdate,
+    authorization: str = Header(...),
+):
+    """Update a client profile without changing its stable Auth/profile ID."""
+    caller = await get_current_user(authorization)
+    _require_attorney(caller)
+    supabase = get_supabase()
+
+    current_resp = supabase.table("profiles").select("*").eq("id", client_id).eq("role", "client").limit(1).execute()
+    if not current_resp.data:
+        raise HTTPException(status_code=404, detail="Client profile not found")
+    current = current_resp.data[0]
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        return current
+
+    if "email" in changes:
+        email = str(changes["email"]).strip().lower()
+        duplicate = supabase.table("profiles").select("id").ilike("email", email).neq("id", client_id).limit(1).execute()
+        if duplicate.data:
+            raise HTTPException(status_code=409, detail="That email address is already assigned to another profile")
+        changes["email"] = email
+        try:
+            supabase.auth.admin.update_user_by_id(client_id, {"email": email})
+        except Exception as exc:
+            logger.exception("Could not update Auth email for client %s", client_id)
+            raise HTTPException(status_code=400, detail=f"Could not update the client login email: {exc}")
+
+    if "full_name" in changes:
+        changes["full_name"] = changes["full_name"].strip()
+    for field in ("phone", "address", "county", "state"):
+        if field in changes and isinstance(changes[field], str):
+            changes[field] = changes[field].strip()
+
+    updated_resp = supabase.table("profiles").update(changes).eq("id", client_id).eq("role", "client").execute()
+    if not updated_resp.data:
+        raise HTTPException(status_code=500, detail="Could not update client profile")
+    return updated_resp.data[0]
 
 
 # ---------------------------------------------------------------------------
