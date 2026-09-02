@@ -4,7 +4,7 @@ import {
   PenLine, SAVend, Download, Clock, Clock3, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
   ChevronDown, ChevronRight, X, Search, User, Upload, Trash2,
-  FolderOpen, LockKeyhole, ExternalLink, CreditCard, KeyRound, ShieldCheck,
+  FolderOpen, LockKeyhole, ExternalLink, CreditCard, KeyRound, ShieldCheck, Send,
 } from 'lucide-react';
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
