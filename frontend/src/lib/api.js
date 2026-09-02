@@ -1664,3 +1664,42 @@ export function saveDownloadedBlob(blob, filename) {
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ---------------------------------------------------------------------------
+// Court Costs
+// ---------------------------------------------------------------------------
+export async function getCourtCosts() {
+  return request('/court-costs');
+}
+
+export async function createCourtCost(data) {
+  return request('/court-costs', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function updateCourtCost(id, data) {
+  return request(`/court-costs/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function listCourtCosts() {
+  return getCourtCosts();
+}
+
+export async function submitCourtCost(data) {
+  return createCourtCost({ ...data, status: 'submitted' });
+}
+
+export async function markCourtCostPaid(id, data) {
+  return updateCourtCost(id, { ...data, status: 'paid' });
+}
+
+export async function requestCourtCostCorrection(id, note) {
+  return updateCourtCost(id, { status: 'needs_correction', note });
+}
+
+export async function approveCourtCost(id) {
+  return updateCourtCost(id, { status: 'approved' });
+}
+
+export async function disputeCourtCost(id, note) {
+  return updateCourtCost(id, { status: 'disputed', note });
+}
