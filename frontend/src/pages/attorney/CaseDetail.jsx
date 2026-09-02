@@ -1785,7 +1785,10 @@ export default function CaseDetail() {
       if (stageChangeModal.type === 'engagement') {
         await sendOiseEngagementContract(id);
       } else {
-        await updateCaseStatus(id, stageChangeModal.stage.slug, rejectionReason);
+        const result = await updateCaseStatus(id, stageChangeModal.stage.slug, rejectionReason);
+        if (stageChangeModal.requiresRejectionReason && !result?.referral_notification_sent) {
+          throw new Error(`${result?.referral_notification_error || 'Referral notification was not sent.'}${result?.referral_notification_email ? ` Recipient: ${result.referral_notification_email}` : ''}`);
+        }
         if (stageChangeModal.shouldNotify && !stageChangeModal.requiresRejectionReason) {
           await notifyStageRecipients(stageChangeModal.stage);
         }

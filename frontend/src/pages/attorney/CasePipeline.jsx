@@ -267,13 +267,20 @@ export default function CasePipeline() {
     setCases((prev) =>
       prev.map((c) => (c.id === caseId ? { ...c, status: newStatus, updated_at: new Date().toISOString() } : c))
     );
+    let statusUpdated = false;
     try {
       setUpdating(caseId);
-      await updateCaseStatus(caseId, newStatus, reason);
+      const result = await updateCaseStatus(caseId, newStatus, reason);
+      statusUpdated = true;
+      if ((newStatus === 'rejected' || newStatus.endsWith('-rejected')) && !result?.referral_notification_sent) {
+        const recipient = result?.referral_notification_email || 'the referral partner';
+        throw new Error(`${result?.referral_notification_error || 'Referral notification was not sent.'} Recipient: ${recipient}`);
+      }
+      return result;
     } catch (err) {
       console.error('Status update failed:', err);
       setCases((prev) =>
-        prev.map((c) => (c.id === caseId ? { ...c, status: oldStatus } : c))
+        prev.map((c) => (c.id === caseId ? { ...c, status: statusUpdated ? newStatus : oldStatus } : c))
       );
       setError(`Failed to move case: ${err.message}`);
       setTimeout(() => setError(null), 5000);
@@ -306,7 +313,8 @@ export default function CasePipeline() {
   async function handleRejectCase() {
     if (!notifyModal || !rejectionReason.trim()) return;
     const { caseId, newStatus, oldStatus } = notifyModal;
-    await moveCaseToStatus(caseId, newStatus, oldStatus, rejectionReason);
+    const result = await moveCaseToStatus(caseId, newStatus, oldStatus, rejectionReason);
+    if (!result?.referral_notification_sent) return;
     setNotifyModal(null);
     setRejectionReason('');
   }

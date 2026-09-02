@@ -636,8 +636,11 @@ async def update_case_status(
         )
 
     # Referral cases must communicate the rejection reason to the originating
-    # referral contact. Email delivery is best-effort; the durable reason remains
-    # stored on the case even if the provider is temporarily unavailable.
+    # referral contact. Return delivery state explicitly so the UI never implies
+    # that an email was sent when the provider rejected or skipped it.
+    referral_notification_sent = False
+    referral_notification_email = None
+    referral_notification_error = None
     if is_rejected and case.get("referral_partner_id"):
         try:
             partner_response = (
@@ -650,6 +653,7 @@ async def update_case_status(
             partner = (partner_response.data or [None])[0]
             partner_email = str((partner or {}).get("email") or "").strip()
             if partner_email:
+                referral_notification_email = partner_email
                 client_response = (
                     supabase.table("profiles")
                     .select("full_name")
@@ -660,7 +664,7 @@ async def update_case_status(
                 client = (client_response.data or [None])[0] or {}
                 client_name = client.get("full_name") or "the referred client"
                 frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
-                await send_email(
+                referral_notification_sent = await send_email(
                     to=partner_email,
                     subject=f"Referral case rejected: {client_name}",
                     body=(
@@ -672,10 +676,19 @@ async def update_case_status(
                     ),
                     idempotency_key=f"case-rejected:{case_id}:{rejection_reason}",
                 )
-        except Exception:
-            logger.warning("Could not send referral rejection notification for case %s", case_id)
+                if not referral_notification_sent:
+                    referral_notification_error = "The email provider did not accept the referral notification."
+        except Exception as exc:
+            referral_notification_error = "The referral notification could not be sent."
+            logger.warning("Could not send referral rejection notification for case %s: %s", case_id, exc)
+    elif is_rejected:
+        referral_notification_error = "This case has no referral partner email configured."
 
-    return resp.data[0]
+    result = dict(resp.data[0])
+    result["referral_notification_sent"] = referral_notification_sent
+    result["referral_notification_email"] = referral_notification_email
+    result["referral_notification_error"] = referral_notification_error
+    return result
 
 
 # ---------------------------------------------------------------------------
