@@ -33,6 +33,7 @@ const money = (value) => new Intl.NumberFormat('en-US', {
 }).format(Number(value || 0));
 
 const number = (value) => Number(value || 0);
+const withTimeout = (promise, milliseconds = 12000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Payout data request timed out.')), milliseconds))]);
 
 function MetricCard({ label, amount, detail, tone = 'slate', icon: Icon }) {
   const colors = {
@@ -84,18 +85,20 @@ export default function PayoutOverview() {
     setLoading(true);
     setError('');
     try {
-      const [ledgerResult, commissionResult, partnerResult, caseResult, bankingResult] = await Promise.all([
-        getSettlementPayoutLedgers(),
-        getCommissions(),
-        getReferralPartners(),
-        getCases(),
-        getAllPayoutInformationRequests(),
+      const results = await Promise.allSettled([
+        withTimeout(getSettlementPayoutLedgers()),
+        withTimeout(getCommissions()),
+        withTimeout(getReferralPartners()),
+        withTimeout(getCases()),
+        withTimeout(getAllPayoutInformationRequests()),
       ]);
-      setLedgers(Array.isArray(ledgerResult) ? ledgerResult : []);
-      setCommissions(Array.isArray(commissionResult) ? commissionResult : []);
-      setPartners(Array.isArray(partnerResult) ? partnerResult : []);
-      setCases(Array.isArray(caseResult) ? caseResult : []);
-      setBankingForms(Array.isArray(bankingResult) ? bankingResult : []);
+      const [ledgerResult, commissionResult, partnerResult, caseResult, bankingResult] = results;
+      setLedgers(ledgerResult.status === 'fulfilled' && Array.isArray(ledgerResult.value) ? ledgerResult.value : []);
+      setCommissions(commissionResult.status === 'fulfilled' && Array.isArray(commissionResult.value) ? commissionResult.value : []);
+      setPartners(partnerResult.status === 'fulfilled' && Array.isArray(partnerResult.value) ? partnerResult.value : []);
+      setCases(caseResult.status === 'fulfilled' && Array.isArray(caseResult.value) ? caseResult.value : []);
+      setBankingForms(bankingResult.status === 'fulfilled' && Array.isArray(bankingResult.value) ? bankingResult.value : []);
+      if (results.some((result) => result.status === 'rejected')) setError('Some payout data could not be loaded. Available payout records remain editable; use Refresh to retry.');
     } catch (err) {
       setError(err?.message || 'Could not load the payout overview.');
     } finally {

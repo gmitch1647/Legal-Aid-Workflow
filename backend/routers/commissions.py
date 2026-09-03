@@ -26,8 +26,8 @@ async def _get_current_user(authorization: str) -> dict:
 
 
 def _require_attorney(profile: dict):
-    if profile.get("role") not in ("attorney", "staff_attorney"):
-        raise HTTPException(status_code=403, detail="Attorney access required")
+    if profile.get("role") not in ("owner", "attorney", "staff_attorney"):
+        raise HTTPException(status_code=403, detail="Attorney or owner access required")
 
 
 # ---------------------------------------------------------------------------

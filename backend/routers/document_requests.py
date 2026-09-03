@@ -27,8 +27,8 @@ async def _current_profile(authorization: str) -> dict:
 
 
 def _require_staff(profile: dict) -> None:
-    if profile.get("role") not in {"attorney", "staff_attorney"}:
-        raise HTTPException(status_code=403, detail="Attorney or staff access required.")
+    if profile.get("role") not in {"owner", "attorney", "staff_attorney"}:
+        raise HTTPException(status_code=403, detail="Attorney, owner, or staff access required.")
 
 
 def _case_or_404(supabase, case_id: str) -> dict:
