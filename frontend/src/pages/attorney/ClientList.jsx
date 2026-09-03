@@ -32,6 +32,8 @@ function formatDate(dateStr) {
   });
 }
 
+const ETHAN_REFERRAL_PARTNER_ID = 'b61a812f-dba1-41b1-bbba-07bbb28a58a5';
+
 const STATUS_LABELS = {
   submitted: 'Submitted',
   approved_for_processing: 'Approved',
@@ -330,6 +332,7 @@ export default function ClientList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
+  const [clientView, setClientView] = useState('mine');
   const [showRegister, setShowRegister] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
   const [page, setPage] = useState(1);
@@ -375,6 +378,7 @@ export default function ClientList() {
                 full_name: c.plaintiff_name || c.client_name || 'Unknown Client',
                 email: c.client_email || c.plaintiff_email || '',
                 phone: c.client_phone || c.plaintiff_phone || '',
+                referral_partner_id: c.referral_partner_id || null,
                 created_at: c.created_at,
               });
             }
@@ -444,8 +448,10 @@ export default function ClientList() {
       )[0];
       const comms = commsMap[client.id] || [];
       const lastComm = comms[0] || null;
+      const referralCase = clientCases.find((c) => c.referral_partner_id);
       return {
         ...client,
+        referral_partner_id: client.referral_partner_id || referralCase?.referral_partner_id || null,
         case_count: clientCases.length,
         latest_case_status: latestCase?.status || null,
         comms_count: comms.length,
@@ -455,15 +461,27 @@ export default function ClientList() {
   }, [clients, cases, commsMap]);
 
   // Filter
+  const viewClients = useMemo(() => {
+    if (clientView === 'ethan') {
+      return enrichedClients.filter((c) => c.referral_partner_id === ETHAN_REFERRAL_PARTNER_ID);
+    }
+    if (clientView === 'all') return enrichedClients;
+    return enrichedClients.filter((c) => !c.referral_partner_id);
+  }, [clientView, enrichedClients]);
   const filteredClients = useMemo(() => {
-    if (!search) return enrichedClients;
+    if (!search) return viewClients;
     const q = search.toLowerCase();
-    return enrichedClients.filter(
+    return viewClients.filter(
       (c) =>
         (c.full_name || '').toLowerCase().includes(q) ||
         (c.email || '').toLowerCase().includes(q)
     );
-  }, [enrichedClients, search]);
+  }, [viewClients, search]);
+  const viewCounts = useMemo(() => ({
+    mine: enrichedClients.filter((c) => !c.referral_partner_id).length,
+    ethan: enrichedClients.filter((c) => c.referral_partner_id === ETHAN_REFERRAL_PARTNER_ID).length,
+    all: enrichedClients.length,
+  }), [enrichedClients]);
 
   // Pagination
   const totalPages = Math.ceil(filteredClients.length / PAGE_SIZE);
@@ -472,7 +490,7 @@ export default function ClientList() {
   // Reset page when search changes
   useEffect(() => {
     setPage(1);
-  }, [search]);
+  }, [search, clientView]);
 
   if (loading) {
     return (
@@ -504,6 +522,27 @@ export default function ClientList() {
         </button>
       </div>
 
+      {/* Client views */}
+      <div className="flex flex-wrap gap-2">
+        {[
+          ['mine', 'My Clients'],
+          ['ethan', "Ethan Babb's Clients"],
+          ['all', 'All Clients'],
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => { setClientView(value); setPage(1); }}
+            className={`rounded-lg border px-4 py-2 text-sm font-medium transition ${
+              clientView === value
+                ? 'border-primary-600 bg-primary-600 text-white'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            {label} <span className="ml-1 text-xs opacity-80">{viewCounts[value]}</span>
+          </button>
+        ))}
+      </div>
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
