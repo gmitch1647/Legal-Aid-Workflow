@@ -4,6 +4,8 @@ import {
   AlertCircle,
   ArrowUpRight,
   BarChart3,
+  Plus,
+  X,
   CheckCircle2,
   CircleDollarSign,
   Clock3,
@@ -12,8 +14,11 @@ import {
   WalletCards,
 } from 'lucide-react';
 import {
+  createCommission,
   getAllPayoutInformationRequests,
   getCommissions,
+  getReferralPartners,
+  getCases,
   getSettlementPayoutLedgers,
   markCommissionPaid,
   markPayoutPaymentSent,
@@ -61,6 +66,8 @@ export default function PayoutOverview() {
   const navigate = useNavigate();
   const [ledgers, setLedgers] = useState([]);
   const [commissions, setCommissions] = useState([]);
+  const [partners, setPartners] = useState([]);
+  const [cases, setCases] = useState([]);
   const [bankingForms, setBankingForms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -69,18 +76,25 @@ export default function PayoutOverview() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
+  const [showAddReferral, setShowAddReferral] = useState(false);
+  const [creatingReferral, setCreatingReferral] = useState(false);
+  const [newReferral, setNewReferral] = useState({ referral_partner_id: '', case_id: '', client_id: '', description: '', settlement_amount: '', fee_type: 'percentage', fee_value: '', notes: '' });
 
   async function load() {
     setLoading(true);
     setError('');
     try {
-      const [ledgerResult, commissionResult, bankingResult] = await Promise.all([
+      const [ledgerResult, commissionResult, partnerResult, caseResult, bankingResult] = await Promise.all([
         getSettlementPayoutLedgers(),
         getCommissions(),
+        getReferralPartners(),
+        getCases(),
         getAllPayoutInformationRequests(),
       ]);
       setLedgers(Array.isArray(ledgerResult) ? ledgerResult : []);
       setCommissions(Array.isArray(commissionResult) ? commissionResult : []);
+      setPartners(Array.isArray(partnerResult) ? partnerResult : []);
+      setCases(Array.isArray(caseResult) ? caseResult : []);
       setBankingForms(Array.isArray(bankingResult) ? bankingResult : []);
     } catch (err) {
       setError(err?.message || 'Could not load the payout overview.');
@@ -221,6 +235,21 @@ export default function PayoutOverview() {
     catch (err) { setError(err?.message || 'Could not mark the referral payout paid.'); }
   }
 
+  async function addReferralPayout(event) {
+    event.preventDefault();
+    if (!newReferral.referral_partner_id) return;
+    setCreatingReferral(true); setError(''); setNotice('');
+    try {
+      const selectedCase = cases.find((item) => item.id === newReferral.case_id);
+      await createCommission({ ...newReferral, case_id: newReferral.case_id || null, client_id: newReferral.client_id || selectedCase?.client_id || null, settlement_amount: number(newReferral.settlement_amount), fee_value: number(newReferral.fee_value) });
+      setShowAddReferral(false);
+      setNewReferral({ referral_partner_id: '', case_id: '', client_id: '', description: '', settlement_amount: '', fee_type: 'percentage', fee_value: '', notes: '' });
+      setNotice('New referral payout added.');
+      await load();
+    } catch (err) { setError(err?.message || 'Could not add the referral payout.'); }
+    finally { setCreatingReferral(false); }
+  }
+
   async function markClientPaid(row) {
     if (!row.client_form?.id) return;
     const amount = window.prompt(`Client payment amount for ${row.client_name}:`, String(row.client_form.payment_access?.payment_amount || row.client_amount || ''));
@@ -234,7 +263,7 @@ export default function PayoutOverview() {
     <header className="overflow-hidden rounded-2xl bg-slate-950 px-6 py-6 text-white shadow-lg">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-indigo-200"><BarChart3 className="h-4 w-4" /> Financial command center</p><h1 className="mt-2 text-2xl font-bold">Payout Overview</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">One private view of settlement distributions, client payout progress, referral partner commissions, and the money you expect to receive from the attorney.</p></div>
-        <div className="flex flex-wrap gap-2"><button type="button" onClick={() => navigate('/attorney/payouts')} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-100">Your payouts <ArrowUpRight className="h-4 w-4" /></button><button type="button" onClick={() => navigate('/attorney/commissions')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-slate-800">Referral commissions <ArrowUpRight className="h-4 w-4" /></button></div>
+        <div className="flex flex-wrap gap-2"><button type="button" onClick={() => setShowAddReferral(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-700"><Plus className="h-4 w-4" />Add referral payout</button><button type="button" onClick={() => navigate('/attorney/payouts')} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-100">Your payouts <ArrowUpRight className="h-4 w-4" /></button><button type="button" onClick={() => navigate('/attorney/commissions')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-slate-800">Referral commissions <ArrowUpRight className="h-4 w-4" /></button></div>
       </div>
       <div className="mt-6 grid gap-4 border-t border-slate-800 pt-5 md:grid-cols-3"><div><p className="text-xs font-medium uppercase tracking-wide text-slate-400">Tracked settlement base</p><p className="mt-1 text-2xl font-bold">{money(data.grossSettlements)}</p></div><div><p className="text-xs font-medium uppercase tracking-wide text-slate-400">Items needing attention</p><p className="mt-1 text-2xl font-bold text-amber-300">{data.actionCount}</p></div><div><p className="text-xs font-medium uppercase tracking-wide text-slate-400">Your payout recovery</p><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-emerald-400" style={{ width: `${recoveryProgress}%` }} /></div><p className="mt-1 text-xs text-slate-300">{recoveryProgress.toFixed(0)}% of expected owner payouts recorded as received</p></div></div>
     </header>
@@ -254,6 +283,7 @@ export default function PayoutOverview() {
       {loading ? <div className="p-8 text-center text-sm text-slate-500">Loading consolidated payout records…</div> : visibleRows.length === 0 ? <div className="p-8 text-center text-sm text-slate-500">No payout records match this view yet.</div> : <div className="overflow-x-auto"><table className="min-w-[1120px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3 font-semibold">Case / client</th><th className="px-4 py-3 font-semibold">Settlement</th><th className="px-4 py-3 font-semibold">Client payout</th><th className="px-4 py-3 font-semibold">Referral partner</th><th className="px-4 py-3 font-semibold">Your payout</th><th className="px-4 py-3 font-semibold">Attorney remainder</th><th className="px-4 py-3 font-semibold">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{visibleRows.map((row) => <tr key={row.key} className="hover:bg-slate-50"><td className="px-5 py-4"><button type="button" disabled={!row.case_id} onClick={() => row.case_id && navigate(`/attorney/cases/${row.case_id}`)} className={`font-semibold text-slate-900 ${row.case_id ? 'hover:text-indigo-700 hover:underline' : ''}`}>{row.case_name}</button><p className="mt-1 text-xs text-slate-500">{row.client_name}</p></td><td className="px-4 py-4 font-semibold text-slate-800">{money(row.settlement)}</td><td className="px-4 py-4"><p className="font-semibold text-slate-800">{money(row.client_amount)}</p><div className="mt-1"><StatusPill state={row.client_status} /></div></td><td className="px-4 py-4"><p className="font-semibold text-slate-800">{money(row.referral_amount)}</p><div className="mt-1"><StatusPill state={row.referral_status} /></div></td><td className="px-4 py-4"><p className="font-semibold text-indigo-800">Expected {money(row.owner_expected)}</p><p className="mt-1 text-xs text-slate-500">Received {money(row.owner_received)} · Outstanding {money(row.owner_outstanding)}</p></td><td className="px-4 py-4 font-semibold text-slate-800">{money(row.attorney_remainder)}</td><td className="px-4 py-4"><div className="flex min-w-[210px] flex-wrap gap-2">{row.commission && <><button type="button" onClick={() => openEdit(row, 'commission')} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Edit referral</button>{row.commission.status !== 'paid' && <button type="button" onClick={() => markReferralPaid(row)} className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Mark paid</button>}</>}{row.client_form && row.client_status !== 'Payment sent' && <button type="button" onClick={() => markClientPaid(row)} className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700">Mark client paid</button>}{row.ledger && <button type="button" onClick={() => openEdit(row, 'ledger')} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Edit payout</button>}</div></td></tr>)}</tbody></table></div>}
     </section>
 
+    {showAddReferral && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"><form onSubmit={addReferralPayout} className="w-full max-w-2xl space-y-4 rounded-2xl bg-white p-6 shadow-xl"><div className="flex items-center justify-between"><div><h2 className="text-lg font-bold">Add referral partner payout</h2><p className="mt-1 text-sm text-slate-500">Create a new commission record directly from the payout overview.</p></div><button type="button" onClick={() => setShowAddReferral(false)} className="text-slate-500"><X className="h-5 w-5" /></button></div><div className="grid gap-4 md:grid-cols-2"><label className="text-sm font-medium">Referral partner<select required value={newReferral.referral_partner_id} onChange={(e) => setNewReferral((v) => ({ ...v, referral_partner_id: e.target.value }))} className="mt-1 w-full rounded-lg border p-2"><option value="">Select partner</option>{partners.map((partner) => <option key={partner.id} value={partner.id}>{partner.full_name}{partner.company ? ` — ${partner.company}` : ''}</option>)}</select></label><label className="text-sm font-medium">Case (optional)<select value={newReferral.case_id} onChange={(e) => { const selectedCase = cases.find((item) => item.id === e.target.value); setNewReferral((v) => ({ ...v, case_id: e.target.value, client_id: selectedCase?.client_id || '' })); }} className="mt-1 w-full rounded-lg border p-2"><option value="">No case selected</option>{cases.map((item) => <option key={item.id} value={item.id}>{item.case_number || item.plaintiff_name || item.id}</option>)}</select></label><label className="text-sm font-medium">Settlement amount<input required type="number" min="0" step="0.01" value={newReferral.settlement_amount} onChange={(e) => setNewReferral((v) => ({ ...v, settlement_amount: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label><label className="text-sm font-medium">Fee type<select value={newReferral.fee_type} onChange={(e) => setNewReferral((v) => ({ ...v, fee_type: e.target.value }))} className="mt-1 w-full rounded-lg border p-2"><option value="percentage">Percentage</option><option value="flat">Flat amount</option></select></label><label className="text-sm font-medium">Fee value<input type="number" min="0" step="0.01" placeholder="Leave 0 to use partner default" value={newReferral.fee_value} onChange={(e) => setNewReferral((v) => ({ ...v, fee_value: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label></div><label className="block text-sm font-medium">Description<input value={newReferral.description} onChange={(e) => setNewReferral((v) => ({ ...v, description: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" placeholder="Referral payout description" /></label><label className="block text-sm font-medium">Notes<textarea value={newReferral.notes} onChange={(e) => setNewReferral((v) => ({ ...v, notes: e.target.value }))} className="mt-1 min-h-20 w-full rounded-lg border p-2" /></label><div className="flex justify-end gap-2"><button type="button" onClick={() => setShowAddReferral(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold">Cancel</button><button disabled={creatingReferral} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{creatingReferral ? 'Adding…' : 'Add payout'}</button></div></form></div>}
     {editing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"><form onSubmit={saveEdit} className="w-full max-w-2xl space-y-4 rounded-2xl bg-white p-6 shadow-xl"><div className="flex items-center justify-between"><div><h2 className="text-lg font-bold">Edit {editing.type === 'commission' ? 'referral payout' : 'owner payout'}</h2><p className="mt-1 text-sm text-slate-500">Changes recalculate the overview totals after saving.</p></div><button type="button" onClick={() => setEditing(null)} className="text-slate-500">×</button></div><div className="grid gap-4 md:grid-cols-2"><label className="text-sm font-medium">Settlement amount<input type="number" step="0.01" min="0" value={editing.settlement_amount ?? ''} onChange={(e) => setEditing((v) => ({ ...v, settlement_amount: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label>{editing.type === 'ledger' ? <><label className="text-sm font-medium">Court costs<input type="number" step="0.01" min="0" value={editing.court_costs ?? ''} onChange={(e) => setEditing((v) => ({ ...v, court_costs: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label><label className="text-sm font-medium">Client payouts<input type="number" step="0.01" min="0" value={editing.client_payouts ?? ''} onChange={(e) => setEditing((v) => ({ ...v, client_payouts: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label><label className="text-sm font-medium">Owner percentage<input type="number" step="0.01" min="0" max="100" value={editing.percentage ?? ''} onChange={(e) => setEditing((v) => ({ ...v, percentage: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label></> : <><label className="text-sm font-medium">Fee type<select value={editing.fee_type || 'percentage'} onChange={(e) => setEditing((v) => ({ ...v, fee_type: e.target.value }))} className="mt-1 w-full rounded-lg border p-2"><option value="percentage">Percentage</option><option value="flat">Flat amount</option></select></label><label className="text-sm font-medium">Fee value<input type="number" step="0.01" min="0" value={editing.fee_value ?? ''} onChange={(e) => setEditing((v) => ({ ...v, fee_value: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label><label className="text-sm font-medium">Status<select value={editing.status || 'pending'} onChange={(e) => setEditing((v) => ({ ...v, status: e.target.value }))} className="mt-1 w-full rounded-lg border p-2"><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option></select></label></>}</div>{editing.type === 'commission' && <><label className="block text-sm font-medium">Description<input value={editing.description || ''} onChange={(e) => setEditing((v) => ({ ...v, description: e.target.value }))} className="mt-1 w-full rounded-lg border p-2" /></label><label className="block text-sm font-medium">Notes<textarea value={editing.notes || ''} onChange={(e) => setEditing((v) => ({ ...v, notes: e.target.value }))} className="mt-1 min-h-20 w-full rounded-lg border p-2" /></label></>}{editing.type === 'ledger' && <label className="block text-sm font-medium">Notes<textarea value={editing.notes || ''} onChange={(e) => setEditing((v) => ({ ...v, notes: e.target.value }))} className="mt-1 min-h-20 w-full rounded-lg border p-2" /></label>}<div className="flex justify-end gap-2"><button type="button" onClick={() => setEditing(null)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold">Cancel</button><button disabled={saving} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{saving ? 'Saving…' : 'Save changes'}</button></div></form></div>}
     <p className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-600"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />This dashboard is a tracking and reconciliation view. Marking a client payment sent records an external payment status only; LegalFlow does not initiate or transfer funds.</p>
   </div>;
