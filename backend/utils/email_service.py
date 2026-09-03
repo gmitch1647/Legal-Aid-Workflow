@@ -7,6 +7,7 @@ the calling workflow is not interrupted by email issues.
 """
 
 import base64
+import hashlib
 import logging
 import os
 import smtplib
@@ -80,6 +81,19 @@ async def send_email(
         try:
             import httpx
             from_header = f"{PLATFORM_FROM_NAME} <{email_from}>"
+            # Resend rejects reuse of a key when any request-body field changes.
+            # Add a compact payload fingerprint so identical retries deduplicate,
+            # while intentional resends with changed content receive a new key.
+            effective_idempotency_key = idempotency_key
+            if idempotency_key:
+                payload_fingerprint = hashlib.sha256(
+                    (to + "\n" + subject + "\n" + body + "\n" + (reply_to or "") + "\n" +
+                     "\n".join(
+                         f"{a['filename']}:{hashlib.sha256(a['content']).hexdigest()}"
+                         for a in normalized_attachments
+                     )).encode("utf-8")
+                ).hexdigest()[:24]
+                effective_idempotency_key = f"{idempotency_key}:{payload_fingerprint}"
             logger.info("Sending via Resend: from=%s to=%s subject=%s", from_header, to, subject)
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -87,7 +101,7 @@ async def send_email(
                     headers={
                         "Authorization": f"Bearer {resend_key}",
                         "Content-Type": "application/json",
-                        **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+                        **({"Idempotency-Key": effective_idempotency_key} if effective_idempotency_key else {}),
                     },
                     json={
                         "from": from_header,
