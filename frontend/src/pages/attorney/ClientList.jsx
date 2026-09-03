@@ -466,7 +466,7 @@ export default function ClientList() {
       return enrichedClients.filter((c) => c.referral_partner_id === ETHAN_REFERRAL_PARTNER_ID);
     }
     if (clientView === 'all') return enrichedClients;
-    return enrichedClients.filter((c) => !c.referral_partner_id);
+    return enrichedClients.filter((c) => c.referral_partner_id !== ETHAN_REFERRAL_PARTNER_ID);
   }, [clientView, enrichedClients]);
   const filteredClients = useMemo(() => {
     if (!search) return viewClients;
@@ -478,7 +478,7 @@ export default function ClientList() {
     );
   }, [viewClients, search]);
   const viewCounts = useMemo(() => ({
-    mine: enrichedClients.filter((c) => !c.referral_partner_id).length,
+    mine: enrichedClients.filter((c) => c.referral_partner_id !== ETHAN_REFERRAL_PARTNER_ID).length,
     ethan: enrichedClients.filter((c) => c.referral_partner_id === ETHAN_REFERRAL_PARTNER_ID).length,
     all: enrichedClients.length,
   }), [enrichedClients]);
