@@ -171,8 +171,18 @@ async def delete_court_cost(request_id: str, authorization: str = Header(...)):
         raise HTTPException(status_code=403, detail="Only the owner or an authorized attorney can delete court-cost requests.")
     if row.get("status") == "paid":
         raise HTTPException(status_code=409, detail="Paid court-cost requests cannot be deleted. Keep them for financial records.")
-    supabase.table("court_cost_events").delete().eq("request_id", request_id).execute()
-    supabase.table("court_cost_requests").delete().eq("id", request_id).execute()
+    try:
+        supabase.table("court_cost_events").delete().eq("request_id", request_id).execute()
+        deleted = supabase.table("court_cost_requests").delete().eq("id", request_id).select("id").execute()
+        if not deleted.data:
+            still_exists = supabase.table("court_cost_requests").select("id").eq("id", request_id).limit(1).execute()
+            if still_exists.data:
+                raise HTTPException(status_code=409, detail="The Court Costs request could not be deleted from the database. Please refresh and try again.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Court-cost deletion failed for %s", request_id)
+        raise HTTPException(status_code=500, detail="Court-cost deletion failed. Please refresh and try again.") from exc
     return {"id": request_id, "deleted": True}
 
 
