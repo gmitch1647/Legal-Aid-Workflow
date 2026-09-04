@@ -1687,6 +1687,10 @@ export async function updateCourtCost(id, data) {
   return request(`/court-costs/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 }
 
+export async function deleteCourtCost(id) {
+  return request(`/court-costs/${id}`, { method: 'DELETE' });
+}
+
 export async function listCourtCosts() {
   return getCourtCosts();
 }

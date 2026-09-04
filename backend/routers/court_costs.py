@@ -15,7 +15,7 @@ from routers.cases import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-STAFF_ROLES = {"attorney", "staff_attorney"}
+STAFF_ROLES = {"owner", "attorney", "staff_attorney"}
 ALLOWED_STATUSES = {"draft", "submitted", "needs_correction", "approved", "awaiting_payment", "paid", "disputed"}
 
 
@@ -159,6 +159,21 @@ async def create_court_cost(body: CourtCostCreate, authorization: str = Header(.
         body_html = f"<p>Hello {escape(str(partner.get('full_name') or 'there'))},</p><p>A court-cost reimbursement request has been submitted for <strong>{escape(str(case.get('plaintiff_name') or case.get('case_number') or 'a matter'))}</strong>.</p><p><strong>Amount:</strong> ${body.amount:,.2f}<br><strong>Court:</strong> {escape(body.court_name)}<br><strong>Date:</strong> {escape(body.expense_date.isoformat())}<br><strong>Description:</strong> {escape(body.description)}</p><p>Please sign in to LegalFlow to review and mark the request paid or return it for correction.</p>"
         await _notify([partner.get("email"), owner.get("email")], subject, body_html, request_id)
     return _enrich(supabase, row, profile, _is_owner(supabase, profile))
+
+
+@router.delete("/{request_id}")
+async def delete_court_cost(request_id: str, authorization: str = Header(...)):
+    profile = await get_current_user(authorization)
+    _require_role(profile)
+    supabase = get_supabase()
+    row = _get_request(supabase, request_id)
+    if not (_is_owner(supabase, profile) or profile.get("role") in STAFF_ROLES):
+        raise HTTPException(status_code=403, detail="Only the owner or an authorized attorney can delete court-cost requests.")
+    if row.get("status") == "paid":
+        raise HTTPException(status_code=409, detail="Paid court-cost requests cannot be deleted. Keep them for financial records.")
+    supabase.table("court_cost_events").delete().eq("request_id", request_id).execute()
+    supabase.table("court_cost_requests").delete().eq("id", request_id).execute()
+    return {"id": request_id, "deleted": True}
 
 
 @router.patch("/{request_id}")
