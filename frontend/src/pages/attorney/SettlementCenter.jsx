@@ -137,6 +137,7 @@ export default function SettlementCenter() {
   const requestedCaseId = searchParams.get('case_id') || '';
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState(requestedCaseId);
+  const [caseSearch, setCaseSearch] = useState('');
   const [agreementRequests, setAgreementRequests] = useState([]);
   const [creditDisclosureRequests, setCreditDisclosureRequests] = useState([]);
   const [w9Requests, setW9Requests] = useState([]);
@@ -160,6 +161,11 @@ export default function SettlementCenter() {
     [cases, selectedCaseId],
   );
 
+  const filteredCases = useMemo(() => {
+    const query = caseSearch.trim().toLowerCase();
+    if (!query) return cases;
+    return cases.filter((caseRow) => caseLabel(caseRow).toLowerCase().includes(query) || String(caseRow?.client_name || caseRow?.client?.full_name || '').toLowerCase().includes(query) || String(caseRow?.defendant_name || caseRow?.defendant || caseRow?.opposing_party || caseRow?.plaintiff_name || '').toLowerCase().includes(query) || String(caseRow?.case_number || '').toLowerCase().includes(query));
+  }, [cases, caseSearch]);
 
   const loadCases = useCallback(async () => {
     setLoadingCases(true);
@@ -357,12 +363,14 @@ export default function SettlementCenter() {
         <>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4"><label className="block text-sm font-semibold text-slate-800" htmlFor="settlement-case-search">Search settlement matters</label><input id="settlement-case-search" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} placeholder="Search client, defendant, plaintiff, or case number" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100" /></div>
             <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
               <div className="min-w-0 flex-1">
                 <label className="block text-sm font-semibold text-slate-800">Settlement case</label>
                 <select value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100">
-                  {cases.map((caseRow) => <option key={caseRow.id} value={caseRow.id}>{caseLabel(caseRow)}</option>)}
+                  {filteredCases.length ? filteredCases.map((caseRow) => <option key={caseRow.id} value={caseRow.id}>{caseLabel(caseRow)}</option>) : <option value="">No matching matters</option>}
                 </select>
+                {caseSearch && <p className="mt-1.5 text-xs text-slate-500">Showing {filteredCases.length} of {cases.length} matters.</p>}
               </div>
               {selectedCase && <div className="flex flex-wrap justify-end gap-2"><button onClick={() => navigate(`/attorney/esign?case_id=${encodeURIComponent(selectedCase.id)}&return_to=${encodeURIComponent(returnTo)}`)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-primary-800 hover:bg-primary-50"><FileSignature className="h-4 w-4" /> Open E-Signatures</button><button onClick={() => openAttorneyDelivery(selectedCase.id)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"><Send className="h-4 w-4" /> Send to attorney</button><button onClick={() => navigate(`/attorney/cases/${selectedCase.id}`)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Open case file <ChevronRight className="h-4 w-4" /></button></div>}
             </div>
