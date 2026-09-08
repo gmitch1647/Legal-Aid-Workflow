@@ -36,11 +36,10 @@ function asRows(value, fallbackKeys = []) {
 }
 
 function caseLabel(caseRow) {
-  const client = caseRow?.client_name || caseRow?.client?.full_name || caseRow?.plaintiff_name || 'Client';
-  const matterName = String(caseRow?.case_number || '').trim();
-  if (/\bv\.\s+\S/i.test(matterName)) return matterName;
-  const number = matterName || `Case ${(caseRow?.id || '').slice(0, 8)}`;
-  return `${client} — ${number}`;
+  const client = caseRow?.client_name || caseRow?.client?.full_name || 'Client';
+  const defendant = caseRow?.defendant_name || caseRow?.defendant || caseRow?.opposing_party || caseRow?.plaintiff_name || 'Matter';
+  const number = String(caseRow?.case_number || '').trim() || `Case ${(caseRow?.id || '').slice(0, 8)}`;
+  return `${client} — ${defendant} · ${number}`;
 }
 
 function statusDescriptor(kind) {
@@ -138,6 +137,7 @@ export default function SettlementCenter() {
   const requestedCaseId = searchParams.get('case_id') || '';
   const [cases, setCases] = useState([]);
   const [selectedCaseId, setSelectedCaseId] = useState(requestedCaseId);
+  const [caseSearch, setCaseSearch] = useState('');
   const [agreementRequests, setAgreementRequests] = useState([]);
   const [creditDisclosureRequests, setCreditDisclosureRequests] = useState([]);
   const [w9Requests, setW9Requests] = useState([]);
@@ -160,6 +160,12 @@ export default function SettlementCenter() {
     () => cases.find((caseRow) => String(caseRow.id) === String(selectedCaseId)) || null,
     [cases, selectedCaseId],
   );
+
+  const filteredCases = useMemo(() => {
+    const query = caseSearch.trim().toLowerCase();
+    if (!query) return cases;
+    return cases.filter((caseRow) => caseLabel(caseRow).toLowerCase().includes(query) || String(caseRow?.client_name || caseRow?.client?.full_name || '').toLowerCase().includes(query) || String(caseRow?.defendant_name || caseRow?.defendant || caseRow?.opposing_party || caseRow?.plaintiff_name || '').toLowerCase().includes(query) || String(caseRow?.case_number || '').toLowerCase().includes(query));
+  }, [cases, caseSearch]);
 
   const loadCases = useCallback(async () => {
     setLoadingCases(true);
@@ -356,7 +362,7 @@ export default function SettlementCenter() {
       ) : (
         <>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-bold uppercase tracking-wider text-slate-500">Clients and matters</h2><p className="mt-1 text-sm text-slate-600">Open any client’s settlement matter directly from this workspace.</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{cases.length} matter{cases.length === 1 ? '' : 's'}</span></div><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{cases.map((caseRow) => <div key={`matter-${caseRow.id}`} className={`flex items-center justify-between gap-3 rounded-xl border p-3 ${String(caseRow.id) === String(selectedCaseId) ? 'border-primary-300 bg-primary-50' : 'border-slate-200 bg-slate-50'}`}><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{caseRow.client_name || caseRow.client?.full_name || caseRow.plaintiff_name || 'Client'}</p><p className="mt-1 truncate text-xs text-slate-500">{caseRow.case_number || `Case ${String(caseRow.id).slice(0, 8)}`}</p></div><div className="flex shrink-0 flex-wrap justify-end gap-1.5"><button type="button" onClick={() => { setSelectedCaseId(caseRow.id); navigate(`/attorney/settlements?case_id=${encodeURIComponent(caseRow.id)}`); }} className="inline-flex items-center gap-1 rounded-lg bg-primary-700 px-2.5 py-2 text-xs font-semibold text-white hover:bg-primary-800">Open matter <ChevronRight className="h-3.5 w-3.5" /></button><button type="button" onClick={() => navigate(`/attorney/esign?case_id=${encodeURIComponent(caseRow.id)}&return_to=${encodeURIComponent(returnTo)}`)} className="inline-flex items-center gap-1 rounded-lg border border-primary-300 bg-white px-2.5 py-2 text-xs font-semibold text-primary-800 hover:bg-primary-50">E-Signatures</button><button type="button" onClick={() => openAttorneyDelivery(caseRow.id)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"><Send className="h-3.5 w-3.5" />Send</button></div></div>)}</div>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><h2 className="text-sm font-bold uppercase tracking-wider text-slate-500">Clients and matters</h2><p className="mt-1 text-sm text-slate-600">Search by client, defendant, plaintiff, or case number.</p></div><div className="flex items-center gap-2"><input value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} placeholder="Search clients or matters" aria-label="Search clients or matters" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 md:w-72" /><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{filteredCases.length}/{cases.length}</span></div></div><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{filteredCases.map((caseRow) => <div key={`matter-${caseRow.id}`} className={`flex items-center justify-between gap-3 rounded-xl border p-3 ${String(caseRow.id) === String(selectedCaseId) ? 'border-primary-300 bg-primary-50' : 'border-slate-200 bg-slate-50'}`}><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{caseRow.client_name || caseRow.client?.full_name || caseRow.plaintiff_name || 'Client'}</p><p className="mt-1 truncate text-xs text-slate-500">Defendant: {caseRow.defendant_name || caseRow.defendant || caseRow.opposing_party || caseRow.plaintiff_name || 'Not listed'}</p><p className="mt-1 truncate text-xs text-slate-400">Case #: {caseRow.case_number || String(caseRow.id).slice(0, 8)}</p></div><div className="flex shrink-0 flex-wrap justify-end gap-1.5"><button type="button" onClick={() => { setSelectedCaseId(caseRow.id); navigate(`/attorney/settlements?case_id=${encodeURIComponent(caseRow.id)}`); }} className="inline-flex items-center gap-1 rounded-lg bg-primary-700 px-2.5 py-2 text-xs font-semibold text-white hover:bg-primary-800">Open matter <ChevronRight className="h-3.5 w-3.5" /></button><button type="button" onClick={() => navigate(`/attorney/esign?case_id=${encodeURIComponent(caseRow.id)}&return_to=${encodeURIComponent(returnTo)}`)} className="inline-flex items-center gap-1 rounded-lg border border-primary-300 bg-white px-2.5 py-2 text-xs font-semibold text-primary-800 hover:bg-primary-50">E-Signatures</button><button type="button" onClick={() => openAttorneyDelivery(caseRow.id)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"><Send className="h-3.5 w-3.5" />Send</button></div></div>)}</div>{filteredCases.length === 0 && <p className="mt-4 rounded-lg bg-slate-50 p-4 text-center text-sm text-slate-500">No clients or matters match “{caseSearch}”.</p>}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
