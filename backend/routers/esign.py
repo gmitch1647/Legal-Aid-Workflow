@@ -976,6 +976,26 @@ async def deliver_completed_settlement_package(
         .limit(1)
         .execute()
     )
+    # The attorney directory historically returned `attorneys.id`, while this
+    # delivery endpoint expects the associated `profiles.id`. Resolve both so
+    # older frontend records cannot route delivery to the wrong contract owner.
+    if not attorney_result.data:
+        directory_result = (
+            supabase.table("attorneys")
+            .select("profile_id")
+            .eq("id", payload.attorney_profile_id)
+            .limit(1)
+            .execute()
+        )
+        profile_id = (directory_result.data or [{}])[0].get("profile_id")
+        if profile_id:
+            attorney_result = (
+                supabase.table("profiles")
+                .select("id,role,full_name,email")
+                .eq("id", profile_id)
+                .limit(1)
+                .execute()
+            )
     if not attorney_result.data:
         raise HTTPException(status_code=404, detail="Selected attorney was not found in LegalFlow.")
     recipient = attorney_result.data[0]
