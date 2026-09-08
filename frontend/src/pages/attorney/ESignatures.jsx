@@ -12,7 +12,7 @@ import {
   deleteSigningSession,
   getGroupedSignatureDashboard, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
-  sendOiseEngagementContract, notifyW9Signer, getAllPayoutInformationRequests,
+  sendOiseEngagementContract, notifyW9Signer, getAllPayoutInformationRequests, getAttorneys, sendCompletedSettlementPackage,
   revealPayoutInformation, cancelPayoutInformationRequest, markPayoutPaymentSent,
   releasePayoutInformationToAttorney, revokePayoutInformationAttorneyAccess,
 } from '../../lib/api';
@@ -74,6 +74,9 @@ export default function ESignatures() {
   const [activeWorkspace, setActiveWorkspace] = useState('documents');
   const [bankingRequests, setBankingRequests] = useState([]);
   const [bankingLoading, setBankingLoading] = useState(false);
+  const [attorneyDeliveryGroup, setAttorneyDeliveryGroup] = useState(null);
+  const [deliveryAttorneys, setDeliveryAttorneys] = useState([]);
+  const [loadingDeliveryAttorneys, setLoadingDeliveryAttorneys] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -82,6 +85,21 @@ export default function ESignatures() {
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url);
   }, [preview]);
+
+  async function openAttorneyDelivery(group) {
+    if (!group?.case?.id) return;
+    setLoadError('');
+    setLoadingDeliveryAttorneys(true);
+    try {
+      const result = await getAttorneys();
+      setDeliveryAttorneys(Array.isArray(result) ? result : result?.attorneys || result?.data || []);
+      setAttorneyDeliveryGroup(group);
+    } catch (err) {
+      setLoadError(err.message || 'Unable to load attorneys for document delivery.');
+    } finally {
+      setLoadingDeliveryAttorneys(false);
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -359,6 +377,7 @@ export default function ESignatures() {
                 }
               }}
               onDownload={(document) => handleDownload(document.id)}
+              onSendToAttorney={() => openAttorneyDelivery(group)}
               onRequestPayout={() => {
                 if (!group.case?.id) return;
                 setPayoutNotice('');
@@ -387,6 +406,15 @@ export default function ESignatures() {
         />
       )}
 
+      {attorneyDeliveryGroup && (
+        <AttorneyDeliveryModal
+          group={attorneyDeliveryGroup}
+          attorneys={deliveryAttorneys}
+          loadingAttorneys={loadingDeliveryAttorneys}
+          onClose={() => setAttorneyDeliveryGroup(null)}
+          onSent={() => { setAttorneyDeliveryGroup(null); loadData(); }}
+        />
+      )}
       {payoutCase && (
         <PayoutInformationRequestModal
           caseId={payoutCase.id}
@@ -436,6 +464,30 @@ export default function ESignatures() {
       {preview && <PdfPreviewModal title={preview.title} url={preview.url} onClose={closePreview} onDownload={() => handleDownload(showDetailModal || '')} />}
     </div>
   );
+}
+
+function AttorneyDeliveryModal({ group, attorneys, loadingAttorneys, onClose, onSent }) {
+  const [attorneyId, setAttorneyId] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const clientName = group?.client?.name || 'Client';
+  const caseLabel = group?.case?.label || group?.case?.case_number || 'Matter';
+
+  async function send() {
+    if (!attorneyId) { setError('Select an attorney before sending.'); return; }
+    if (!window.confirm(`Send ${clientName}'s signed documents for ${caseLabel} to the selected attorney?`)) return;
+    setSending(true); setError('');
+    try {
+      await sendCompletedSettlementPackage(group.case.id, attorneyId);
+      onSent();
+    } catch (err) {
+      setError(err.message || 'Could not send the completed documents to the attorney.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-label="Send signed documents to attorney"><div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl"><div className="flex items-start justify-between border-b border-slate-200 p-5"><div><h2 className="text-lg font-bold text-slate-900">Send to attorney</h2><p className="mt-1 text-sm text-slate-600">{clientName} · {caseLabel}</p></div><button type="button" onClick={onClose} disabled={sending} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button></div><div className="space-y-4 p-5"><div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">This sends the signed settlement package and related completed documents for this matter to the attorney you select.</div>{error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}<label className="block text-sm font-semibold text-slate-800">Attorney<select value={attorneyId} onChange={(event) => setAttorneyId(event.target.value)} disabled={loadingAttorneys || sending} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 font-normal"><option value="">{loadingAttorneys ? 'Loading attorneys…' : 'Select an attorney'}</option>{attorneys.map((attorney) => <option key={attorney.id || attorney.profile_id} value={attorney.id || attorney.profile_id}>{attorney.full_name || attorney.name || attorney.email || 'Attorney'}{attorney.email ? ` · ${attorney.email}` : ''}</option>)}</select></label></div><div className="flex justify-end gap-2 border-t border-slate-200 p-5"><button type="button" onClick={onClose} disabled={sending} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button><button type="button" onClick={send} disabled={sending || loadingAttorneys || !attorneyId} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{sending ? 'Sending…' : 'Send to attorney'}</button></div></div></div>;
 }
 
 function BankingFormsTab({ requests, loading, onRefresh, onOpenCase }) {
@@ -539,7 +591,7 @@ function BankingFormsTab({ requests, loading, onRefresh, onOpenCase }) {
   </section>;
 }
 
-function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onRequestPayout, onDelete }) {
+function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onSendToAttorney, onRequestPayout, onDelete }) {
   const counts = group.document_counts || {};
   const clientName = group.client?.name || 'Unassigned client';
   const caseLabel = group.case?.label || 'Unassigned case';
@@ -565,6 +617,9 @@ function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload
 
       {expanded && (
         <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 p-3">
+          {group.case?.id && group.documents?.some((document) => COMPLETE_STATUSES.has(document.status) || document.has_signed_document) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2.5"><p className="text-xs leading-5 text-blue-950">The client’s signed documents are ready to send to the attorney.</p><button type="button" onClick={onSendToAttorney} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800"><Send className="h-3.5 w-3.5" />Send to attorney</button></div>
+          )}
           {group.case?.id && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2.5">
               <p className="text-xs leading-5 text-emerald-950">Need to prepare this client for payout? Send their encrypted ACH form directly from this case group.</p>
