@@ -35,9 +35,15 @@ function asRows(value, fallbackKeys = []) {
   return [];
 }
 
+function defendantLabel(caseRow) {
+  const linkedDefendants = Array.isArray(caseRow?.defendants) ? caseRow.defendants : [];
+  const names = linkedDefendants.map((defendant) => defendant?.full_name || defendant?.name || defendant?.defendant_name || defendant?.business_name).filter(Boolean);
+  return names.join(', ') || caseRow?.defendant_name || caseRow?.defendant || caseRow?.opposing_party || caseRow?.adverse_party || caseRow?.plaintiff_name || 'Defendant name not listed';
+}
+
 function caseLabel(caseRow) {
   const client = caseRow?.client_name || caseRow?.client?.full_name || 'Client';
-  const defendant = caseRow?.defendant_name || caseRow?.defendant || caseRow?.opposing_party || caseRow?.plaintiff_name || 'Matter';
+  const defendant = defendantLabel(caseRow);
   const number = String(caseRow?.case_number || '').trim() || `Case ${(caseRow?.id || '').slice(0, 8)}`;
   return `${client} — ${defendant} · ${number}`;
 }
@@ -164,7 +170,7 @@ export default function SettlementCenter() {
   const filteredCases = useMemo(() => {
     const query = caseSearch.trim().toLowerCase();
     if (!query) return cases;
-    return cases.filter((caseRow) => caseLabel(caseRow).toLowerCase().includes(query) || String(caseRow?.client_name || caseRow?.client?.full_name || '').toLowerCase().includes(query) || String(caseRow?.defendant_name || caseRow?.defendant || caseRow?.opposing_party || caseRow?.plaintiff_name || '').toLowerCase().includes(query) || String(caseRow?.case_number || '').toLowerCase().includes(query));
+    return cases.filter((caseRow) => caseLabel(caseRow).toLowerCase().includes(query) || String(caseRow?.client_name || caseRow?.client?.full_name || '').toLowerCase().includes(query) || defendantLabel(caseRow).toLowerCase().includes(query) || String(caseRow?.case_number || '').toLowerCase().includes(query));
   }, [cases, caseSearch]);
 
   const loadCases = useCallback(async () => {
