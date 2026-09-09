@@ -1232,6 +1232,36 @@ async def grouped_signature_dashboard(
 
     documents = in_app_documents + external_documents + w9_documents
     groups = _group_dashboard_documents(supabase, documents)
+    try:
+        delivery_rows = (
+            supabase.table("settlement_document_deliveries")
+            .select("case_id,status,recipient_profile_id,recipient_email,sent_at,created_at,updated_at")
+            .eq("sent_by", profile["id"])
+            .order("created_at", desc=True)
+            .limit(250)
+            .execute()
+            .data or []
+        )
+    except Exception:
+        logger.exception("Could not load settlement document delivery statuses")
+        delivery_rows = []
+    latest_delivery_by_case = {}
+    for delivery in delivery_rows:
+        case_key = str(delivery.get("case_id") or "")
+        if case_key and case_key not in latest_delivery_by_case:
+            latest_delivery_by_case[case_key] = delivery
+    for group in groups:
+        case_key = str((group.get("case") or {}).get("id") or "")
+        delivery = latest_delivery_by_case.get(case_key)
+        if delivery:
+            group["attorney_delivery"] = {
+                "status": delivery.get("status"),
+                "recipient_profile_id": delivery.get("recipient_profile_id"),
+                "recipient_email": delivery.get("recipient_email"),
+                "sent_at": delivery.get("sent_at"),
+                "created_at": delivery.get("created_at"),
+                "updated_at": delivery.get("updated_at"),
+            }
     return {
         "groups": groups,
         "summary": {

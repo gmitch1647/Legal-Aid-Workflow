@@ -618,7 +618,11 @@ function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload
       {expanded && (
         <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 p-3">
           {group.case?.id && group.documents?.some((document) => COMPLETE_STATUSES.has(document.status) || document.has_signed_document) && (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2.5"><p className="text-xs leading-5 text-blue-950">The client’s signed documents are ready to send to the attorney.</p><button type="button" onClick={onSendToAttorney} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800"><Send className="h-3.5 w-3.5" />Send to attorney</button></div>
+            group.attorney_delivery?.status === 'sent' ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2.5"><p className="text-xs leading-5 text-emerald-950"><span className="font-semibold">Sent to attorney</span>{group.attorney_delivery.recipient_email ? ` · ${group.attorney_delivery.recipient_email}` : ''}{group.attorney_delivery.sent_at ? ` · ${new Date(group.attorney_delivery.sent_at).toLocaleString()}` : ''}</p><button type="button" onClick={onSendToAttorney} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"><Send className="h-3.5 w-3.5" />Send again</button></div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2.5"><p className="text-xs leading-5 text-blue-950">The client’s signed documents are ready to send to the attorney.</p><button type="button" onClick={onSendToAttorney} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800"><Send className="h-3.5 w-3.5" />Send to attorney</button></div>
+            )
           )}
           {group.case?.id && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2.5">
