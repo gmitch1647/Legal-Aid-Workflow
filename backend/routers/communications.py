@@ -6,15 +6,19 @@ SMS uses Twilio (optional — add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
 TWILIO_PHONE_NUMBER to Railway env vars).
 """
 
+import base64
+import json
 import logging
 import os
 import smtplib
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 
 from utils.supabase_client import get_supabase
@@ -169,12 +173,36 @@ async def get_history(
 
 @router.post("/email", status_code=status.HTTP_201_CREATED)
 async def send_email(
-    payload: SendEmailPayload,
+    request: Request,
     authorization: str = Header(...),
 ):
-    """Send an email to a client and log it."""
+    """Send an email from JSON or multipart form data with optional attachments."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
+    uploads = []
+    if "multipart/form-data" in (request.headers.get("content-type") or ""):
+        form = await request.form()
+        try:
+            payload = SendEmailPayload.model_validate(json.loads(str(form.get("payload") or "{}")))
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="Invalid email form data.") from exc
+        uploads = [value for value in form.getlist("files") if isinstance(value, UploadFile)]
+    else:
+        payload = SendEmailPayload.model_validate(await request.json())
+    if len(uploads) > 10:
+        raise HTTPException(status_code=413, detail="You can attach up to 10 files per email.")
+    attachment_payloads = []
+    attachment_bytes = []
+    total_bytes = 0
+    for upload in uploads:
+        content = await upload.read()
+        total_bytes += len(content)
+        if len(content) > 15 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"{upload.filename or 'Attachment'} is larger than 15 MB.")
+        attachment_payloads.append({"filename": upload.filename or "attachment", "content": base64.b64encode(content).decode("ascii")})
+        attachment_bytes.append((upload.filename or "attachment", upload.content_type or "application/octet-stream", content))
+    if total_bytes > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Attachments cannot exceed 25 MB total.")
 
     supabase = get_supabase()
 
@@ -226,6 +254,7 @@ async def send_email(
                         "subject": payload.subject,
                         "html": f"<div style='font-family:sans-serif;font-size:14px;line-height:1.6;'>{payload.body.replace(chr(10), '<br>')}</div>",
                         "text": payload.body,
+                        **({"attachments": attachment_payloads} if attachment_payloads else {}),
                     },
                 )
                 if resp.status_code in (200, 201):
@@ -246,6 +275,13 @@ async def send_email(
         msg["Subject"] = payload.subject
         msg.attach(MIMEText(payload.body, "plain"))
         msg.attach(MIMEText(f"<div style='font-family:sans-serif;font-size:14px;'>{payload.body.replace(chr(10), '<br>')}</div>", "html"))
+        for filename, content_type, content in attachment_bytes:
+            main_type, sub_type = (content_type.split('/', 1) + ['octet-stream'])[:2]
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(content)
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', 'attachment', filename=filename)
+            msg.attach(part)
 
         try:
             with smtplib.SMTP(smtp_host, smtp_port) as server:

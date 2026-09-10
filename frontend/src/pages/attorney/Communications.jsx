@@ -11,6 +11,8 @@ import {
   Search,
   Send,
   UserRound,
+  Paperclip,
+  X,
 } from 'lucide-react';
 import {
   getCommunicationRecipients,
@@ -81,6 +83,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
+  const [emailAttachments, setEmailAttachments] = useState([]);
   const [textBody, setTextBody] = useState('');
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -104,6 +107,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
     setChannel('email');
     setEmailSubject('');
     setEmailBody('');
+    setEmailAttachments([]);
     setTextBody('');
     setNotice(null);
     loadHistory();
@@ -128,6 +132,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
           subject: emailSubject,
           body: emailBody,
           recipient_type: recipientType,
+          attachments: emailAttachments,
         });
       } else {
         result = await sendClientSMS({
@@ -140,7 +145,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
 
       if (result?.status === 'sent') {
         setNotice({ type: 'success', text: `${channel === 'email' ? 'Email' : 'Text message'} sent to ${contactAddress}.` });
-        if (channel === 'email') { setEmailSubject(''); setEmailBody(''); } else { setTextBody(''); }
+        if (channel === 'email') { setEmailSubject(''); setEmailBody(''); setEmailAttachments([]); } else { setTextBody(''); }
         await loadHistory();
         onSent?.();
       } else {
@@ -175,6 +180,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
             <p className="text-xs text-slate-500">To: <span className="font-semibold text-slate-700">{recipient.email || 'No email address on file'}</span></p>
             <input value={emailSubject} onChange={(event) => setEmailSubject(event.target.value)} placeholder="Email subject" maxLength={200} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20" />
             <textarea value={emailBody} onChange={(event) => setEmailBody(event.target.value)} placeholder={`Hi ${(recipient.full_name || '').split(' ')[0] || 'there'},\n\n`} rows={5} maxLength={10000} className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20" />
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3"><label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"><Paperclip className="h-4 w-4" />Add attachments<input type="file" multiple className="hidden" onChange={(event) => { const selected = Array.from(event.target.files || []); setEmailAttachments((current) => [...current, ...selected].slice(0, 10)); event.target.value = ''; }} /></label><p className="mt-1.5 text-xs text-slate-500">Up to 10 files, 15 MB each, 25 MB total.</p>{emailAttachments.length > 0 && <div className="mt-2 space-y-1">{emailAttachments.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs text-slate-700"><span className="min-w-0 truncate">{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</span><button type="button" onClick={() => setEmailAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label={`Remove ${file.name}`}><X className="h-3.5 w-3.5" /></button></div>)}</div>}</div>
           </div>
         ) : (
           <div className="space-y-2.5">

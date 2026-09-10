@@ -1030,6 +1030,13 @@ export async function getTypedCommsHistory(recipientType, recipientId) {
 }
 
 export async function sendClientEmail(data) {
+  if (Array.isArray(data?.attachments) && data.attachments.length > 0) {
+    const form = new FormData();
+    const { attachments, ...payload } = data;
+    form.append('payload', JSON.stringify(payload));
+    attachments.forEach((file) => form.append('files', file, file.name));
+    return request('/communications/email', { method: 'POST', body: form });
+  }
   return request('/communications/email', {
     method: 'POST',
     body: JSON.stringify(data),
