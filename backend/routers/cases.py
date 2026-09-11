@@ -330,10 +330,71 @@ async def list_cases(
     resp = query.execute()
     cases = resp.data or []
 
-    # Enrich each case with client name and defendant info
+    # Enrich the board in bulk.  The earlier implementation performed a
+    # separate profile, referral-partner, join-table, and defendant query for
+    # every case.  With a busy board, that meant hundreds of sequential calls
+    # before the page could render, leaving the Case Pipeline and its document
+    # controls stuck on Loading.
+    case_ids = [str(case.get("id")) for case in cases if case.get("id")]
+    client_ids = list({str(case.get("client_id")) for case in cases if case.get("client_id")})
+    referral_partner_ids = list({
+        str(case.get("referral_partner_id"))
+        for case in cases
+        if case.get("referral_partner_id")
+    })
+
+    clients_by_id: dict[str, dict] = {}
+    if client_ids:
+        client_rows = (
+            supabase.table("profiles")
+            .select("id,full_name,email")
+            .in_("id", client_ids)
+            .execute()
+        ).data or []
+        clients_by_id = {str(row["id"]): row for row in client_rows}
+
+    referral_partners_by_id: dict[str, dict] = {}
+    if referral_partner_ids:
+        referral_rows = (
+            supabase.table("referral_partners")
+            .select("id,full_name,email")
+            .in_("id", referral_partner_ids)
+            .execute()
+        ).data or []
+        referral_partners_by_id = {str(row["id"]): row for row in referral_rows}
+
+    defendant_ids_by_case: dict[str, list[str]] = {}
+    if case_ids:
+        case_defendant_rows = (
+            supabase.table("case_defendants")
+            .select("case_id,defendant_id")
+            .in_("case_id", case_ids)
+            .execute()
+        ).data or []
+        for row in case_defendant_rows:
+            case_key = str(row.get("case_id"))
+            defendant_id = row.get("defendant_id")
+            if defendant_id:
+                defendant_ids_by_case.setdefault(case_key, []).append(str(defendant_id))
+
+    all_defendant_ids = list({
+        defendant_id
+        for defendant_ids in defendant_ids_by_case.values()
+        for defendant_id in defendant_ids
+    })
+    defendants_by_id: dict[str, dict] = {}
+    if all_defendant_ids:
+        defendant_rows = (
+            supabase.table("defendants")
+            .select("*")
+            .in_("id", all_defendant_ids)
+            .execute()
+        ).data or []
+        defendants_by_id = {str(row["id"]): row for row in defendant_rows}
+
     enriched: list[dict] = []
     for case in cases:
-        # Extract plaintiff name from case_facts header (for draft cases)
+        # Extract plaintiff name from the case-facts header for draft cases.
         plaintiff_name = ""
         facts = case.get("case_facts") or ""
         if "=== PLAINTIFF ===" in facts:
@@ -342,60 +403,22 @@ async def list_cases(
                     plaintiff_name = line.replace("Name:", "").strip()
                     break
 
-        # Client name from profile
-        client_resp = (
-            supabase.table("profiles")
-            .select("id, full_name, email")
-            .eq("id", case["client_id"])
-            .limit(1)
-            .execute()
-        )
-        client_profile = client_resp.data[0] if client_resp.data else None
+        client_profile = clients_by_id.get(str(case.get("client_id")))
         case["client"] = client_profile
-
-        # Use plaintiff name from case_facts if available, otherwise profile name
         case["plaintiff_name"] = (
-            plaintiff_name or
-            (client_profile.get("full_name") if client_profile else None) or
-            "Unknown Client"
+            plaintiff_name
+            or (client_profile.get("full_name") if client_profile else None)
+            or "Unknown Client"
         )
         case["client_name"] = case["plaintiff_name"]
-
-        # Include the originating referral partner so attorney-side workflows can
-        # display and notify the correct CRO rather than the client.
-        referral_partner = None
-        if case.get("referral_partner_id"):
-            referral_resp = (
-                supabase.table("referral_partners")
-                .select("id,full_name,email")
-                .eq("id", case["referral_partner_id"])
-                .limit(1)
-                .execute()
-            )
-            referral_partner = (referral_resp.data or [None])[0]
-        case["referral_partner"] = referral_partner
-
-        # Defendants
-        cd_resp = (
-            supabase.table("case_defendants")
-            .select("defendant_id")
-            .eq("case_id", case["id"])
-            .execute()
-        )
-        defendant_ids = [row["defendant_id"] for row in (cd_resp.data or [])]
-        defendants: list[dict] = []
-        for did in defendant_ids:
-            d_resp = (
-                supabase.table("defendants")
-                .select("*")
-                .eq("id", did)
-                .limit(1)
-                .execute()
-            )
-            if d_resp.data:
-                defendants.append(d_resp.data[0])
-        case["defendants"] = defendants
-
+        case["referral_partner"] = referral_partners_by_id.get(
+            str(case.get("referral_partner_id"))
+        ) if case.get("referral_partner_id") else None
+        case["defendants"] = [
+            defendants_by_id[defendant_id]
+            for defendant_id in defendant_ids_by_case.get(str(case.get("id")), [])
+            if defendant_id in defendants_by_id
+        ]
         enriched.append(case)
 
     if profile.get("role") == "affiliate":
