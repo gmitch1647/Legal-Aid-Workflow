@@ -754,6 +754,7 @@ export default function App() {
           <Route path="/case-referral" element={<CaseReferralForm />} />
           <Route path="/case-referral/:referralSlug" element={<CaseReferralForm />} />
           <Route path="/credit-repair-lead" element={<CreditRepairLeadForm />} />
+          <Route path="/credit-repair-lead/:referralSlug" element={<CreditRepairLeadForm />} />
           <Route path="/sign/:token" element={<SignDocument />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/terms" element={<Terms />} />

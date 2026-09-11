@@ -31,6 +31,7 @@ class CreditRepairLeadCreate(BaseModel):
     adverse_party: Optional[str] = Field(default=None, max_length=300)
     description: Optional[str] = Field(default=None, max_length=10000)
     source: str = Field(default="credit_repair_form", max_length=120)
+    referral_slug: Optional[str] = Field(default=None, max_length=80)
 
 
 class CreditRepairLeadUpdate(BaseModel):
@@ -59,7 +60,13 @@ async def create_credit_repair_lead(payload: CreditRepairLeadCreate, authorizati
         except Exception:
             profile = None
     record = payload.model_dump(exclude_none=True)
+    referral_slug = record.pop("referral_slug", None)
     record["created_by"] = (profile or {}).get("id")
+    if referral_slug:
+        partner_result = get_supabase().table("referral_partners").select("id").eq("submission_slug", referral_slug.strip()).limit(1).execute()
+        if not partner_result.data:
+            raise HTTPException(status_code=422, detail="This referral form link is no longer active.")
+        record["referral_partner_id"] = partner_result.data[0]["id"]
     result = get_supabase().table("credit_repair_leads").insert(record).execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Could not save the credit repair lead.")
@@ -70,7 +77,7 @@ async def create_credit_repair_lead(payload: CreditRepairLeadCreate, authorizati
 async def list_credit_repair_leads(authorization: str = Header(...), status_filter: Optional[str] = None):
     profile = await _get_current_user(authorization)
     _require_staff(profile)
-    query = get_supabase().table("credit_repair_leads").select("*").order("created_at", desc=True).limit(500)
+    query = get_supabase().table("credit_repair_leads").select("*, referral_partners(id, full_name, email, company)").order("created_at", desc=True).limit(500)
     if status_filter:
         query = query.eq("status", status_filter)
     return query.execute().data or []

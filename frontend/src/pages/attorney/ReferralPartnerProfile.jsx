@@ -14,6 +14,7 @@ import {
   Send,
   UserRound,
   Users,
+  BadgeCheck,
 } from 'lucide-react';
 import {
   getReferralPartner,
@@ -324,6 +325,10 @@ export default function ReferralPartnerProfile() {
             ) : <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">No clients have been linked to this partner.</p>}
           </section>
 
+          <section className="card">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-900"><BadgeCheck className="h-5 w-5 text-emerald-600" /> Credit Repair Leads</h2>
+            {partner.credit_repair_leads?.length ? <div className="space-y-2">{partner.credit_repair_leads.map((lead) => <div key={lead.id} className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-800">{lead.full_name}</p><p className="mt-0.5 text-xs text-slate-500">{lead.email || lead.phone || 'No contact'} · {lead.case_type || 'Credit repair inquiry'}</p></div><span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold capitalize text-emerald-700">{String(lead.status || 'new').replace(/_/g, ' ')}</span></div><p className="mt-2 text-xs text-slate-500">Submitted {formatDate(lead.created_at)}{lead.adverse_party ? ` · ${lead.adverse_party}` : ''}</p></div>)}</div> : <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">No credit repair leads have been attributed to this partner.</p>}
+          </section>
           <section className="card">
             <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-900"><ClipboardList className="h-5 w-5 text-slate-500" /> Referred Cases</h2>
             {partner.cases?.length ? (

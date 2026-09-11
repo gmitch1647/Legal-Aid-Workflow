@@ -851,9 +851,11 @@ async def get_referral_partner(partner_id: str, authorization: str = Header(defa
     # Get their referred clients and cases
     clients = supabase.table("profiles").select("id, full_name, email, created_at").eq("referral_partner_id", partner_id).order("full_name").execute()
     cases = supabase.table("cases").select("id, plaintiff_name, case_number, status, case_facts, created_at").eq("referral_partner_id", partner_id).order("created_at", desc=True).execute()
-
+    credit_repair_leads = supabase.table("credit_repair_leads").select("id, full_name, email, phone, status, case_type, adverse_party, created_at, description").eq("referral_partner_id", partner_id).order("created_at", desc=True).limit(200).execute()
     partner["clients"] = clients.data or []
     partner["cases"] = cases.data or []
+    partner["credit_repair_leads"] = credit_repair_leads.data or []
+
 
     return partner
 
