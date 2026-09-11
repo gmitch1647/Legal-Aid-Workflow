@@ -124,7 +124,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
     try {
       let result;
       if (isReferralPartner) {
-        result = await sendReferralPartnerMessage(recipient.id, { channel, subject: channel === 'email' ? emailSubject : '', body });
+        result = await sendReferralPartnerMessage(recipient.id, { channel, subject: channel === 'email' ? emailSubject : '', body, attachments: channel === 'email' ? emailAttachments : [] });
       } else if (channel === 'email') {
         result = await sendClientEmail({
           client_id: recipient.id,

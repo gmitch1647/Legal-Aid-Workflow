@@ -3,6 +3,7 @@ Referral Partners router — manage people/firms who refer cases.
 """
 
 import html
+import json
 import logging
 import os
 import re
@@ -13,7 +14,7 @@ from email.utils import parseaddr
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from utils.supabase_client import SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SUPABASE_URL, get_supabase
@@ -882,12 +883,31 @@ async def get_referral_partner_messages(partner_id: str, authorization: str = He
 @router.post("/{partner_id}/messages", status_code=status.HTTP_201_CREATED)
 async def send_referral_partner_message(
     partner_id: str,
-    payload: ReferralPartnerMessageCreate,
+    request: Request,
     authorization: str = Header(default=None),
 ):
     """Send an attorney-composed email or SMS to a referral partner and audit it."""
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
+    uploads = []
+    if "multipart/form-data" in (request.headers.get("content-type") or ""):
+        form = await request.form()
+        payload = ReferralPartnerMessageCreate.model_validate(json.loads(str(form.get("payload") or "{}")))
+        uploads = [value for value in form.getlist("files") if hasattr(value, "read") and hasattr(value, "filename")]
+    else:
+        payload = ReferralPartnerMessageCreate.model_validate(await request.json())
+    if len(uploads) > 10:
+        raise HTTPException(status_code=413, detail="You can attach up to 10 files per email.")
+    attachments = []
+    total_bytes = 0
+    for upload in uploads:
+        content = await upload.read()
+        total_bytes += len(content)
+        if len(content) > 15 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"{upload.filename or 'Attachment'} is larger than 15 MB.")
+        attachments.append({"filename": upload.filename or "attachment", "content": content})
+    if total_bytes > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Attachments cannot exceed 25 MB total.")
     partner = await _get_referral_partner_or_404(partner_id)
     supabase = get_supabase()
 
@@ -922,6 +942,7 @@ async def send_referral_partner_message(
             ),
             idempotency_key=f"referral-partner-message:{message_id}",
             reply_to=reply_to,
+            attachments=attachments,
         )
         if not delivered:
             send_status = "failed"

@@ -1330,6 +1330,13 @@ export async function getReferralPartnerMessages(partnerId) {
 }
 
 export async function sendReferralPartnerMessage(partnerId, data) {
+  if (Array.isArray(data?.attachments) && data.attachments.length > 0) {
+    const form = new FormData();
+    const { attachments, ...payload } = data;
+    form.append('payload', JSON.stringify(payload));
+    attachments.forEach((file) => form.append('files', file, file.name));
+    return request(`/referrals/${partnerId}/messages`, { method: 'POST', body: form });
+  }
   return request(`/referrals/${partnerId}/messages`, {
     method: 'POST',
     body: JSON.stringify(data),

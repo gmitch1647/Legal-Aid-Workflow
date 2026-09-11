@@ -8,6 +8,8 @@ TWILIO_PHONE_NUMBER to Railway env vars).
 
 import base64
 import json
+import re
+import uuid
 import logging
 import os
 import smtplib
@@ -22,6 +24,34 @@ from fastapi import APIRouter, Header, HTTPException, Request, UploadFile, statu
 from pydantic import BaseModel
 
 from utils.supabase_client import get_supabase
+
+
+def _email_address(value: str | None) -> str:
+    from email.utils import parseaddr
+    return parseaddr(str(value or ""))[1].strip().lower()
+
+
+def _communication_reply_address(recipient_type: str, recipient_id: str) -> str | None:
+    domain = str(os.environ.get("RESEND_RECEIVING_DOMAIN") or "").strip().lower()
+    if not domain or "@" in domain or any(char.isspace() for char in domain):
+        return None
+    return f"comm+{recipient_type}+{recipient_id}@{domain}"
+
+
+def _communication_target_from_address(address: str) -> tuple[str, str] | None:
+    local = _email_address(address).split("@", 1)[0]
+    match = re.fullmatch(r"comm\+(client|attorney)\+([0-9a-fA-F-]{36})", local)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def _safe_inbound_text(text: str | None, html_body: str | None = None) -> str:
+    import html
+    import re as _re
+    content = str(text or "").strip()
+    if not content and html_body:
+        content = _re.sub(r"<[^>]+>", " ", str(html_body))
+        content = html.unescape(_re.sub(r"\s+", " ", content)).strip()
+    return content[:10000]
 
 logger = logging.getLogger(__name__)
 
@@ -186,115 +216,35 @@ async def send_email(
             payload = SendEmailPayload.model_validate(json.loads(str(form.get("payload") or "{}")))
         except Exception as exc:
             raise HTTPException(status_code=422, detail="Invalid email form data.") from exc
-        uploads = [value for value in form.getlist("files") if isinstance(value, UploadFile)]
+        uploads = [value for value in form.getlist("files") if hasattr(value, "read") and hasattr(value, "filename")]
     else:
         payload = SendEmailPayload.model_validate(await request.json())
     if len(uploads) > 10:
         raise HTTPException(status_code=413, detail="You can attach up to 10 files per email.")
-    attachment_payloads = []
-    attachment_bytes = []
+    attachments = []
     total_bytes = 0
     for upload in uploads:
         content = await upload.read()
         total_bytes += len(content)
         if len(content) > 15 * 1024 * 1024:
             raise HTTPException(status_code=413, detail=f"{upload.filename or 'Attachment'} is larger than 15 MB.")
-        attachment_payloads.append({"filename": upload.filename or "attachment", "content": base64.b64encode(content).decode("ascii")})
-        attachment_bytes.append((upload.filename or "attachment", upload.content_type or "application/octet-stream", content))
+        attachments.append({"filename": upload.filename or "attachment", "content": content})
     if total_bytes > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Attachments cannot exceed 25 MB total.")
 
     supabase = get_supabase()
-
-    resend_key = os.environ.get("RESEND_API_KEY")
-    smtp_host = os.environ.get("SMTP_HOST")
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASSWORD")
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    email_from = os.environ.get("EMAIL_FROM", smtp_user or "noreply@example.com")
-    from_name = profile.get('firm_name') or 'LegalFlow'
-
-    if not resend_key and not (smtp_host and smtp_user):
-        record = supabase.table("communications").insert({
-            "client_id": payload.client_id,
-            "case_id": payload.case_id,
-            "channel": "email",
-            "direction": "outbound",
-            "recipient": payload.to_email,
-            "subject": payload.subject,
-            "body": payload.body,
-            "status": "failed",
-            "error_message": "Email not configured. Add RESEND_API_KEY or SMTP settings to Railway.",
-            "sent_by": profile["id"],
-            "recipient_type": payload.recipient_type,
-        }).execute()
-        return {
-            "status": "failed",
-            "error": "Email not configured",
-            "record": record.data[0] if record.data else None,
-        }
-
-    error_message = None
-    send_status = "sent"
-
-    if resend_key:
-        # Send via Resend API
-        import httpx
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.resend.com/emails",
-                    headers={
-                        "Authorization": f"Bearer {resend_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "from": f"{from_name} <{email_from}>",
-                        "to": [payload.to_email],
-                        "subject": payload.subject,
-                        "html": f"<div style='font-family:sans-serif;font-size:14px;line-height:1.6;'>{payload.body.replace(chr(10), '<br>')}</div>",
-                        "text": payload.body,
-                        **({"attachments": attachment_payloads} if attachment_payloads else {}),
-                    },
-                )
-                if resp.status_code in (200, 201):
-                    logger.info(f"Email sent via Resend to {payload.to_email}: {payload.subject}")
-                else:
-                    error_message = resp.text
-                    send_status = "failed"
-                    logger.error(f"Resend failed: {resp.status_code} {resp.text}")
-        except Exception as e:
-            error_message = str(e)
-            send_status = "failed"
-            logger.error(f"Resend error: {e}")
-    else:
-        # Fallback to SMTP
-        msg = MIMEMultipart("alternative")
-        msg["From"] = f"{from_name} <{email_from}>"
-        msg["To"] = payload.to_email
-        msg["Subject"] = payload.subject
-        msg.attach(MIMEText(payload.body, "plain"))
-        msg.attach(MIMEText(f"<div style='font-family:sans-serif;font-size:14px;'>{payload.body.replace(chr(10), '<br>')}</div>", "html"))
-        for filename, content_type, content in attachment_bytes:
-            main_type, sub_type = (content_type.split('/', 1) + ['octet-stream'])[:2]
-            part = MIMEBase(main_type, sub_type)
-            part.set_payload(content)
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', 'attachment', filename=filename)
-            msg.attach(part)
-
-        try:
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.send_message(msg)
-            logger.info(f"Email sent via SMTP to {payload.to_email}: {payload.subject}")
-        except Exception as e:
-            error_message = str(e)
-            send_status = "failed"
-            logger.error(f"SMTP failed to {payload.to_email}: {e}")
-
-    # Log the communication
+    from utils.email_service import get_last_email_error, send_email as deliver_email
+    reply_to = _communication_reply_address(payload.recipient_type, payload.client_id)
+    delivered = await deliver_email(
+        to=payload.to_email,
+        subject=payload.subject,
+        body=f"<div style='font-family:sans-serif;font-size:14px;line-height:1.6;'>{payload.body.replace(chr(10), '<br>')}</div>",
+        attachments=attachments,
+        reply_to=reply_to,
+        idempotency_key=f"communications:{uuid.uuid4()}",
+    )
+    send_status = "sent" if delivered else "failed"
+    error_message = None if delivered else (get_last_email_error() or "Email delivery failed")
     record = supabase.table("communications").insert({
         "client_id": payload.client_id,
         "case_id": payload.case_id,
@@ -307,13 +257,64 @@ async def send_email(
         "error_message": error_message,
         "sent_by": profile["id"],
         "recipient_type": payload.recipient_type,
+        "metadata": {"reply_to": reply_to, "attachment_count": len(attachments), "provider": "shared_email_service"},
     }).execute()
+    return {"status": send_status, "error": error_message, "record": record.data[0] if record.data else None}
 
-    return {
-        "status": send_status,
-        "error": error_message,
-        "record": record.data[0] if record.data else None,
-    }
+
+@router.post("/webhooks/resend/inbound")
+async def receive_communications_email_reply(request: Request):
+    """Store a signed Resend reply in the correct client or attorney conversation."""
+    signing_secret = str(os.environ.get("RESEND_WEBHOOK_SECRET") or "").strip()
+    if not signing_secret:
+        raise HTTPException(status_code=503, detail="Inbound email receiving is not configured")
+    raw_body = await request.body()
+    headers = {"svix-id": request.headers.get("svix-id", ""), "svix-timestamp": request.headers.get("svix-timestamp", ""), "svix-signature": request.headers.get("svix-signature", "")}
+    if not all(headers.values()):
+        raise HTTPException(status_code=401, detail="Missing Resend webhook signature")
+    try:
+        from svix.webhooks import Webhook
+        event = Webhook(signing_secret).verify(raw_body.decode("utf-8"), headers)
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid Resend webhook signature") from exc
+    if event.get("type") != "email.received":
+        return {"received": False, "ignored": True}
+    data = event.get("data") or {}
+    email_id = str(data.get("email_id") or "").strip()
+    event_id = str(request.headers.get("svix-id") or email_id).strip()
+    recipients = data.get("to") or data.get("received_for") or []
+    if isinstance(recipients, str): recipients = [recipients]
+    target = next((_communication_target_from_address(str(address)) for address in recipients if _communication_target_from_address(str(address))), None)
+    if not email_id or not target:
+        return {"received": False, "ignored": True}
+    recipient_type, recipient_id = target
+    supabase = get_supabase()
+    duplicate = supabase.table("communications").select("id").eq("provider_event_id", event_id).limit(1).execute()
+    if duplicate.data:
+        return {"received": True, "duplicate": True}
+    profile_result = supabase.table("profiles").select("id,email").eq("id", recipient_id).limit(1).execute()
+    target_profile = (profile_result.data or [None])[0]
+    if not target_profile:
+        return {"received": False, "ignored": True}
+    source_address = _email_address(data.get("from"))
+    if not source_address or source_address != _email_address(target_profile.get("email")):
+        return {"received": False, "ignored": True}
+    resend_key = str(os.environ.get("RESEND_API_KEY") or "").strip()
+    if not resend_key:
+        raise HTTPException(status_code=503, detail="Inbound email content retrieval is not configured")
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as client:
+        content_response = await client.get(f"https://api.resend.com/emails/receiving/{email_id}", headers={"Authorization": f"Bearer {resend_key}"})
+    if content_response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Could not retrieve inbound email content")
+    inbound = content_response.json()
+    body = _safe_inbound_text(inbound.get("text"), inbound.get("html"))
+    if not body:
+        return {"received": False, "ignored": True}
+    now = datetime.now(timezone.utc).isoformat()
+    record = {"id": str(uuid.uuid4()), "client_id": recipient_id, "channel": "email", "direction": "inbound", "sender": source_address, "recipient": _email_address((inbound.get("to") or [""])[0]), "subject": str(inbound.get("subject") or data.get("subject") or "").strip()[:200] or None, "body": body, "status": "received", "recipient_type": recipient_type, "provider_message_id": str(inbound.get("message_id") or email_id), "provider_event_id": event_id, "received_at": now, "created_at": now}
+    supabase.table("communications").insert(record).execute()
+    return {"received": True}
 
 
 # ---------------------------------------------------------------------------
