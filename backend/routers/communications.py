@@ -417,7 +417,17 @@ async def receive_communications_email_reply(request: Request):
     async with httpx.AsyncClient(timeout=15) as client:
         content_response = await client.get(f"https://api.resend.com/emails/receiving/{email_id}", headers={"Authorization": f"Bearer {resend_key}"})
     if content_response.status_code != 200:
-        raise HTTPException(status_code=502, detail="Could not retrieve inbound email content")
+        response_preview = content_response.text[:300].replace("\n", " ")
+        logger.error(
+            "Resend inbound content retrieval failed for %s: HTTP %s; %s",
+            email_id,
+            content_response.status_code,
+            response_preview,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not retrieve inbound email content (Resend HTTP {content_response.status_code})",
+        )
     inbound = content_response.json()
     body = _safe_inbound_text(inbound.get("text"), inbound.get("html"))
     if not body:
