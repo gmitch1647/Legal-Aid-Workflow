@@ -433,7 +433,7 @@ async def receive_communications_email_reply(request: Request):
     if not body:
         return {"received": False, "ignored": True}
     now = datetime.now(timezone.utc).isoformat()
-    record = {"id": str(uuid.uuid4()), "client_id": recipient_id, "channel": "email", "direction": "inbound", "sender": source_address, "recipient": _email_address((inbound.get("to") or [""])[0]), "subject": str(inbound.get("subject") or data.get("subject") or "").strip()[:200] or None, "body": body, "status": "received", "recipient_type": recipient_type, "provider_message_id": str(inbound.get("message_id") or email_id), "provider_event_id": event_id, "received_at": now, "created_at": now}
+    record = {"id": str(uuid.uuid4()), "client_id": recipient_id, "channel": "email", "direction": "inbound", "sender": source_address, "recipient": _email_address((inbound.get("to") or [""])[0]), "subject": str(inbound.get("subject") or data.get("subject") or "").strip()[:200] or None, "body": body, "status": "delivered", "recipient_type": recipient_type, "provider_message_id": str(inbound.get("message_id") or email_id), "provider_event_id": event_id, "received_at": now, "created_at": now}
     supabase.table("communications").insert(record).execute()
     await _notify_owner_of_inbound_message(supabase, source_address, record.get("subject"), body, target_profile.get("email") or "contact")
     return {"received": True}
