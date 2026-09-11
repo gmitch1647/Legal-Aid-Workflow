@@ -405,6 +405,7 @@ async def create_referral_attorney_workspace(
 
     frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
     referral_url = f"{frontend_url}/case-referral/{base_slug}"
+    credit_repair_url = f"{frontend_url}/credit-repair-lead/{base_slug}"
     portal_url = f"{frontend_url}/login"
     email_sent = False
     try:
@@ -420,6 +421,8 @@ async def create_referral_attorney_workspace(
                 f"<p><strong>Email:</strong> {html.escape(str(body.email))}</p>"
                 f"<p><strong>Temporary Password:</strong> {html.escape(temp_password)}</p>"
                 f"<p><strong>Private referral form:</strong> <a href='{referral_url}'>{referral_url}</a></p>"
+                f"<p><strong>Private Credit Repair intake form:</strong> <a href='{credit_repair_url}'>{credit_repair_url}</a></p>"
+                "<p>Credit Repair submissions through this link will be saved to your portal under <strong>Credit Repair Matters</strong>.</p>"
                 "<p>Please change your password after your first login.</p></div>"
             ),
             idempotency_key=f"referral-attorney-workspace:{portal_user_id}",
@@ -432,6 +435,7 @@ async def create_referral_attorney_workspace(
         "pipeline": pipeline_record,
         "assigned_attorney": {"id": assigned_attorney["id"], "full_name": assigned_attorney.get("full_name")},
         "referral_url": referral_url,
+        "credit_repair_url": credit_repair_url,
         "portal_url": portal_url,
         "email_sent": email_sent,
         "message": "Referral attorney workspace created. The invitation contains the temporary password and private referral form link.",
@@ -831,15 +835,25 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
         if partner.get("pipeline_id") else None
     )
     stages = stage_response.data if stage_response else []
+    credit_repair_response = (
+        supabase.table("credit_repair_leads")
+        .select("id,created_at,updated_at,status,full_name,email,phone,state,case_type,adverse_party")
+        .eq("referral_partner_id", partner["id"])
+        .order("created_at", desc=True)
+        .limit(250)
+        .execute()
+    )
     frontend_url = str(os.environ.get("FRONTEND_URL", "http://localhost:5173")).rstrip("/")
     return {
         "partner_name": partner.get("full_name"),
         "referral_url": f"{frontend_url}/case-referral/{partner.get('submission_slug')}",
+        "credit_repair_url": f"{frontend_url}/credit-repair-lead/{partner.get('submission_slug')}",
         "pipeline_id": partner.get("pipeline_id"),
         "can_manage_team": is_referral_portal_owner(supabase, partner, profile),
         "portal_access_level": get_referral_portal_access_level(supabase, partner, profile),
         "stages": stages or [],
         "cases": cases,
+        "credit_repair_leads": credit_repair_response.data or [],
     }
 
 
