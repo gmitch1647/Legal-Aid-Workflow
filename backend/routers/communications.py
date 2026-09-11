@@ -93,6 +93,53 @@ class SendSMSPayload(BaseModel):
     recipient_type: Literal["client", "attorney"] = "client"
 
 
+def _owner_notification_recipient(supabase) -> str | None:
+    """Resolve the configured LegalFlow owner email without hard-coding a person."""
+    try:
+        reviewer = supabase.table("settlement_package_reviewers").select("owner_profile_id").eq("active", True).limit(1).execute()
+        owner_id = ((reviewer.data or [None])[0] or {}).get("owner_profile_id")
+        if owner_id:
+            owner = supabase.table("profiles").select("email").eq("id", owner_id).limit(1).execute()
+            email = str((((owner.data or [None])[0] or {}).get("email") or "")).strip()
+            if email:
+                return email
+    except Exception:
+        logger.warning("Could not resolve configured settlement-package owner for a Communications notification", exc_info=True)
+    try:
+        fallback = supabase.table("profiles").select("email").eq("role", "attorney").order("created_at").limit(1).execute()
+        return str((((fallback.data or [None])[0] or {}).get("email") or "")).strip() or None
+    except Exception:
+        return None
+
+
+async def _notify_owner_of_inbound_message(supabase, sender: str, subject: str | None, body: str, recipient_label: str) -> None:
+    """Email the configured owner after a message is stored in Communications."""
+    owner_email = _owner_notification_recipient(supabase)
+    if not owner_email:
+        return
+    try:
+        from html import escape
+        from utils.email_service import send_email
+        preview = escape(str(body or "").strip()[:600]).replace("\n", "<br>")
+        safe_sender = escape(sender or recipient_label or "A contact")
+        safe_subject = escape(subject or "No subject")
+        await send_email(
+            to=owner_email,
+            subject=f"New LegalFlow message from {sender or recipient_label or 'a contact'}",
+            body=(
+                "<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.6;'>"
+                "<h2>New message received in LegalFlow</h2>"
+                f"<p><strong>From:</strong> {safe_sender}<br><strong>Subject:</strong> {safe_subject}</p>"
+                f"<p>{preview}</p>"
+                "<p><a href='https://legalflow.me/attorney/communications'>Open Communications</a> to view and reply.</p>"
+                "</div>"
+            ),
+            idempotency_key=f"communications-inbound-owner:{uuid.uuid4()}",
+        )
+    except Exception:
+        logger.exception("Could not send the owner notification for inbound Communications email")
+
+
 # ---------------------------------------------------------------------------
 # GET /config — check what's configured
 # ---------------------------------------------------------------------------
@@ -144,6 +191,70 @@ async def get_recipients(
         .execute()
     )
     return result.data or []
+
+
+# ---------------------------------------------------------------------------
+# GET /threads — recent conversation threads and unread counts
+# ---------------------------------------------------------------------------
+
+@router.get("/threads")
+async def get_communication_threads(authorization: str = Header(...)):
+    """Return recently active client, attorney, and referral-partner conversations."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+    rows = supabase.table("communications").select("id,client_id,recipient_type,direction,sender,recipient,subject,body,status,created_at,received_at,read_at").order("created_at", desc=True).limit(500).execute().data or []
+    profile_ids = sorted({str(row.get("client_id")) for row in rows if row.get("client_id")})
+    profiles = {}
+    if profile_ids:
+        profile_rows = supabase.table("profiles").select("id,full_name,email,phone,firm_name,role").in_("id", profile_ids).execute().data or []
+        profiles = {str(item.get("id")): item for item in profile_rows}
+    threads = {}
+    for row in rows:
+        recipient_id = str(row.get("client_id") or "")
+        if not recipient_id:
+            continue
+        recipient_type = str(row.get("recipient_type") or "client")
+        key = f"{recipient_type}:{recipient_id}"
+        item = threads.setdefault(key, {"thread_id": key, "recipient_type": recipient_type, "recipient": profiles.get(recipient_id) or {"id": recipient_id, "full_name": row.get("recipient") or "Unknown recipient", "email": row.get("recipient")}, "last_message": None, "unread_count": 0, "last_activity_at": None})
+        if item["last_message"] is None:
+            item["last_message"] = row
+            item["last_activity_at"] = row.get("received_at") or row.get("created_at")
+        if row.get("direction") == "inbound" and not row.get("read_at"):
+            item["unread_count"] += 1
+
+    partner_rows = supabase.table("referral_partner_messages").select("id,referral_partner_id,channel,direction,sender,recipient,subject,body,status,created_at,received_at,read_at").order("created_at", desc=True).limit(500).execute().data or []
+    partner_ids = sorted({str(row.get("referral_partner_id")) for row in partner_rows if row.get("referral_partner_id")})
+    partners = {}
+    if partner_ids:
+        partner_data = supabase.table("referral_partners").select("id,full_name,email,phone,company").in_("id", partner_ids).execute().data or []
+        partners = {str(item.get("id")): item for item in partner_data}
+    for row in partner_rows:
+        recipient_id = str(row.get("referral_partner_id") or "")
+        if not recipient_id:
+            continue
+        key = f"referral_partner:{recipient_id}"
+        item = threads.setdefault(key, {"thread_id": key, "recipient_type": "referral_partner", "recipient": partners.get(recipient_id) or {"id": recipient_id, "full_name": row.get("recipient") or "Referral partner", "email": row.get("recipient")}, "last_message": None, "unread_count": 0, "last_activity_at": None})
+        if item["last_message"] is None:
+            item["last_message"] = row
+            item["last_activity_at"] = row.get("received_at") or row.get("created_at")
+        if row.get("direction") == "inbound" and not row.get("read_at"):
+            item["unread_count"] += 1
+    return sorted(threads.values(), key=lambda item: item.get("last_activity_at") or "", reverse=True)
+
+
+@router.post("/threads/{recipient_type}/{recipient_id}/read")
+async def mark_communication_thread_read(recipient_type: Literal["client", "attorney", "referral_partner"], recipient_id: str, authorization: str = Header(...)):
+    """Mark inbound messages as read when an authorized user opens a thread."""
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+    now = datetime.now(timezone.utc).isoformat()
+    if recipient_type == "referral_partner":
+        supabase.table("referral_partner_messages").update({"read_at": now}).eq("referral_partner_id", recipient_id).eq("direction", "inbound").is_("read_at", "null").execute()
+    else:
+        supabase.table("communications").update({"read_at": now}).eq("client_id", recipient_id).eq("recipient_type", recipient_type).eq("direction", "inbound").is_("read_at", "null").execute()
+    return {"marked_read": True}
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +425,7 @@ async def receive_communications_email_reply(request: Request):
     now = datetime.now(timezone.utc).isoformat()
     record = {"id": str(uuid.uuid4()), "client_id": recipient_id, "channel": "email", "direction": "inbound", "sender": source_address, "recipient": _email_address((inbound.get("to") or [""])[0]), "subject": str(inbound.get("subject") or data.get("subject") or "").strip()[:200] or None, "body": body, "status": "received", "recipient_type": recipient_type, "provider_message_id": str(inbound.get("message_id") or email_id), "provider_event_id": event_id, "received_at": now, "created_at": now}
     supabase.table("communications").insert(record).execute()
+    await _notify_owner_of_inbound_message(supabase, source_address, record.get("subject"), body, target_profile.get("email") or "contact")
     return {"received": True}
 
 

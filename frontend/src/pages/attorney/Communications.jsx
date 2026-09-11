@@ -16,7 +16,9 @@ import {
 } from 'lucide-react';
 import {
   getCommunicationRecipients,
+  getCommunicationThreads,
   getReferralPartnerMessages,
+  markCommunicationThreadRead,
   getReferralPartners,
   getTypedCommsHistory,
   sendClientEmail,
@@ -77,7 +79,7 @@ function ConversationHistory({ history, loading, channel, recipient }) {
   );
 }
 
-function ConversationPanel({ recipient, recipientType, onSent }) {
+function ConversationPanel({ recipient, recipientType, onSent, onThreadActivity }) {
   const [channel, setChannel] = useState('email');
   const [history, setHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
@@ -96,12 +98,14 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
         ? await getReferralPartnerMessages(recipient.id)
         : await getTypedCommsHistory(recipientType, recipient.id);
       setHistory(Array.isArray(data) ? data : data?.items ?? []);
+      await markCommunicationThreadRead(recipientType, recipient.id);
+      onThreadActivity?.();
     } catch (error) {
       setNotice({ type: 'error', text: error.message || 'Could not load this conversation.' });
     } finally {
       setLoadingHistory(false);
     }
-  }, [isReferralPartner, recipient.id, recipientType]);
+  }, [isReferralPartner, recipient.id, recipientType, onThreadActivity]);
 
   useEffect(() => {
     setChannel('email');
@@ -148,6 +152,7 @@ function ConversationPanel({ recipient, recipientType, onSent }) {
         if (channel === 'email') { setEmailSubject(''); setEmailBody(''); setEmailAttachments([]); } else { setTextBody(''); }
         await loadHistory();
         onSent?.();
+        onThreadActivity?.();
       } else {
         setNotice({ type: 'error', text: result?.error || `Could not send the ${channel === 'email' ? 'email' : 'text message'}.` });
         await loadHistory();
@@ -208,6 +213,20 @@ export default function Communications() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [threads, setThreads] = useState([]);
+  const [threadsLoading, setThreadsLoading] = useState(true);
+
+  const loadThreads = useCallback(async () => {
+    try {
+      setThreadsLoading(true);
+      const data = await getCommunicationThreads();
+      setThreads(Array.isArray(data) ? data : data?.items ?? []);
+    } catch {
+      setThreads([]);
+    } finally {
+      setThreadsLoading(false);
+    }
+  }, []);
 
   const loadRecipients = useCallback(async () => {
     try {
@@ -225,10 +244,19 @@ export default function Communications() {
   }, [recipientType]);
 
   useEffect(() => {
-    setSelectedRecipient(null);
     setSearch('');
     loadRecipients();
   }, [recipientType, loadRecipients]);
+
+  useEffect(() => {
+    loadThreads();
+  }, [loadThreads]);
+
+  function openThread(thread) {
+    setRecipientType(thread.recipient_type);
+    setSearch('');
+    setSelectedRecipient(thread.recipient);
+  }
 
   const filteredRecipients = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -250,12 +278,13 @@ export default function Communications() {
         <aside className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 p-4">
             <label htmlFor="recipient-type" className="text-sm font-bold text-slate-900">Recipient Type</label>
-            <select id="recipient-type" value={recipientType} onChange={(event) => setRecipientType(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20">
+            <select id="recipient-type" value={recipientType} onChange={(event) => { setSelectedRecipient(null); setRecipientType(event.target.value); }} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20">
               <option value="referral_partner">Referral Partners</option><option value="attorney">Attorneys</option><option value="client">Clients</option>
             </select>
             <label htmlFor="recipient-search" className="mt-4 block text-sm font-bold text-slate-900">{audience.label}</label>
             <div className="relative mt-2"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input id="recipient-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={audience.search} className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20" /></div>
           </div>
+          <div className="border-b border-slate-100 p-3"><div className="mb-2 flex items-center justify-between"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Recent Threads</p>{threads.some((thread) => thread.unread_count > 0) && <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-700">{threads.reduce((total, thread) => total + Number(thread.unread_count || 0), 0)} new</span>}</div>{threadsLoading ? <div className="flex justify-center py-2"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div> : threads.length ? <div className="max-h-52 space-y-1 overflow-y-auto">{threads.slice(0, 12).map((thread) => { const active = selectedRecipient?.id === thread.recipient?.id && recipientType === thread.recipient_type; const preview = String(thread.last_message?.body || thread.last_message?.subject || 'Conversation started').replace(/\s+/g, ' ').slice(0, 72); return <button key={thread.thread_id} type="button" onClick={() => openThread(thread)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition ${active ? 'bg-blue-50' : 'hover:bg-slate-50'}`}><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${active ? 'bg-blue-200 text-blue-800' : 'bg-slate-100 text-slate-600'}`}>{initials(thread.recipient?.full_name)}</span><span className="min-w-0 flex-1"><span className="flex items-center gap-1"><span className="truncate text-xs font-semibold text-slate-800">{thread.recipient?.full_name || 'Conversation'}</span>{thread.unread_count > 0 && <span className="h-2 w-2 shrink-0 rounded-full bg-indigo-600" title={`${thread.unread_count} unread message${thread.unread_count === 1 ? '' : 's'}`} />}</span><span className="block truncate text-[11px] text-slate-500">{preview}</span></span></button>; })}</div> : <p className="py-2 text-xs text-slate-500">Your active conversations will appear here.</p>}</div>
           <div className="max-h-[610px] overflow-y-auto p-2">
             {loading ? <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div> : error ? <div className="p-3 text-sm text-red-700">{error}</div> : filteredRecipients.length === 0 ? <p className="p-4 text-center text-sm text-slate-500">No {audience.label.toLowerCase()} match your search.</p> : filteredRecipients.map((recipient) => {
               const selected = selectedRecipient?.id === recipient.id;
@@ -265,7 +294,7 @@ export default function Communications() {
           </div>
         </aside>
 
-        {selectedRecipient ? <ConversationPanel recipient={selectedRecipient} recipientType={recipientType} onSent={loadRecipients} /> : <section className="flex min-h-[520px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white px-8 text-center shadow-sm"><span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><UserRound className="h-7 w-7" /></span><h2 className="mt-4 text-xl font-bold text-slate-900">Create a new communication</h2><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">Choose a recipient type, then select a {audience.singular} from the list to read their conversation and compose a new email or text message.</p></section>}
+        {selectedRecipient ? <ConversationPanel recipient={selectedRecipient} recipientType={recipientType} onSent={() => { loadRecipients(); loadThreads(); }} onThreadActivity={loadThreads} /> : <section className="flex min-h-[520px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white px-8 text-center shadow-sm"><span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><UserRound className="h-7 w-7" /></span><h2 className="mt-4 text-xl font-bold text-slate-900">Create a new communication</h2><p className="mt-2 max-w-md text-sm leading-6 text-slate-500">Choose a recipient type, then select a {audience.singular} from the list to read their conversation and compose a new email or text message.</p></section>}
       </div>
     </div>
   );

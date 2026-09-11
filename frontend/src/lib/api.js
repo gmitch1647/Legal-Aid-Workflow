@@ -1042,6 +1042,14 @@ export async function getCommunicationRecipients(recipientType) {
   return request(`/communications/recipients/${recipientType}`);
 }
 
+export async function getCommunicationThreads() {
+  return request('/communications/threads');
+}
+
+export async function markCommunicationThreadRead(recipientType, recipientId) {
+  return request(`/communications/threads/${recipientType}/${recipientId}/read`, { method: 'POST' });
+}
+
 export async function getTypedCommsHistory(recipientType, recipientId) {
   return request(`/communications/history/${recipientType}/${recipientId}`);
 }

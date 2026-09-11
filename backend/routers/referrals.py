@@ -229,6 +229,35 @@ def _safe_inbound_text(text: str | None, html_body: str | None = None) -> str:
     return content[:10_000]
 
 
+async def _notify_owner_of_partner_reply(supabase, partner: dict, subject: str | None, body: str, channel: str) -> None:
+    """Alert the configured LegalFlow owner when a referral-partner reply is stored."""
+    try:
+        reviewer = supabase.table("settlement_package_reviewers").select("owner_profile_id").eq("active", True).limit(1).execute()
+        owner_id = ((reviewer.data or [None])[0] or {}).get("owner_profile_id")
+        owner = supabase.table("profiles").select("email").eq("id", owner_id).limit(1).execute() if owner_id else None
+        owner_email = str((((owner.data or [None])[0] or {}).get("email") if owner else "") or "").strip()
+        if not owner_email:
+            fallback = supabase.table("profiles").select("email").eq("role", "attorney").order("created_at").limit(1).execute()
+            owner_email = str((((fallback.data or [None])[0] or {}).get("email") or "")).strip()
+        if not owner_email:
+            return
+        from utils.email_service import send_email
+        partner_name = html.escape(str(partner.get("full_name") or "Referral partner"))
+        subject_text = html.escape(str(subject or ("New text message" if channel == "sms" else "No subject")))
+        preview = html.escape(str(body or "")[:600]).replace("\n", "<br>")
+        await send_email(
+            to=owner_email,
+            subject=f"New LegalFlow message from {partner.get('full_name') or 'a referral partner'}",
+            body=("<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.6;'>"
+                  "<h2>New referral-partner message received</h2>"
+                  f"<p><strong>From:</strong> {partner_name}<br><strong>Subject:</strong> {subject_text}</p><p>{preview}</p>"
+                  "<p><a href='https://legalflow.me/attorney/communications'>Open Communications</a> to view and reply.</p></div>"),
+            idempotency_key=f"referral-inbound-owner:{uuid.uuid4()}",
+        )
+    except Exception:
+        logger.exception("Could not send the owner notification for inbound referral-partner message")
+
+
 @router.post("/attorney-workspaces", status_code=status.HTTP_201_CREATED)
 async def create_referral_attorney_workspace(
     body: ReferralAttorneyWorkspaceCreate,
@@ -1092,6 +1121,7 @@ async def receive_referral_partner_email_reply(request: Request):
         "status": "received",
         "provider_metadata": {"provider": "resend", "received_email_id": email_id},
         "received_at": datetime.now(timezone.utc).isoformat(),
+        "read_at": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -1099,6 +1129,7 @@ async def receive_referral_partner_email_reply(request: Request):
     except Exception:
         logger.exception("Could not store inbound referral partner email event %s", event_id)
         raise HTTPException(status_code=500, detail="Could not store inbound email reply")
+    await _notify_owner_of_partner_reply(supabase, partner, record.get("subject"), body, "email")
     return {"received": True}
 
 
@@ -1154,6 +1185,7 @@ async def receive_referral_partner_text_reply(request: Request):
         "status": "received",
         "provider_metadata": {"provider": "twilio", "account_sid": form.get("AccountSid")},
         "received_at": now,
+        "read_at": None,
         "created_at": now,
     }
     try:
@@ -1161,6 +1193,7 @@ async def receive_referral_partner_text_reply(request: Request):
     except Exception:
         logger.exception("Could not store inbound referral partner SMS event %s", provider_event_id)
         raise HTTPException(status_code=500, detail="Could not store inbound text reply")
+    await _notify_owner_of_partner_reply(supabase, partner, None, body, "sms")
     return Response(content="<Response></Response>", media_type="application/xml")
 
 
