@@ -42,6 +42,7 @@ import { getCases, getNotifications, markNotificationRead, getReferralAttorneyPo
 const Login = React.lazy(() => import('./pages/Login'));
 const IntakeForm = React.lazy(() => import('./pages/IntakeForm'));
 const CaseReferralForm = React.lazy(() => import('./pages/CaseReferralForm'));
+const CreditRepairLeadForm = React.lazy(() => import('./pages/CreditRepairLeadForm'));
 const SignDocument = React.lazy(() => import('./pages/SignDocument'));
 const Privacy = React.lazy(() => import('./pages/Privacy'));
 const Terms = React.lazy(() => import('./pages/Terms'));
@@ -81,6 +82,7 @@ const AttorneyPayouts = React.lazy(() => import('./pages/attorney/AttorneyPayout
 const PayoutOverview = React.lazy(() => import('./pages/attorney/PayoutOverview'));
 const CourtCosts = React.lazy(() => import('./pages/attorney/CourtCosts'));
 const DocumentExchange = React.lazy(() => import('./pages/attorney/DocumentExchange'));
+const CreditRepairLeads = React.lazy(() => import('./pages/attorney/CreditRepairLeads'));
 
 // Client pages
 const ClientDashboard = React.lazy(() => import('./pages/client/Dashboard'));
@@ -628,6 +630,7 @@ const allAttorneyLinks = [
   { to: '/attorney/draft', label: 'Draft Complaint', icon: FileEdit, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'drafter' },
   { to: '/attorney/disputes', label: 'Dispute Letters', icon: Mail, roles: ['attorney', 'staff_attorney'], affiliateFeature: 'disputer' },
   { to: '/attorney/settlements', label: 'Settlement Center', icon: FileSignature, roles: ['attorney', 'staff_attorney'] },
+  { to: '/attorney/credit-repair-leads', label: 'Credit Repair Leads', icon: UserRound, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/esign', label: 'E-Signatures', icon: PenLine, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/document-exchange', label: 'Document Exchange', icon: FolderSync, roles: ['attorney', 'staff_attorney'] },
   { to: '/attorney/pipeline', label: 'Case Pipeline', icon: Kanban, roles: ['attorney', 'staff_attorney'] },
@@ -750,6 +753,7 @@ export default function App() {
           <Route path="/intake/:slug" element={<IntakeForm />} />
           <Route path="/case-referral" element={<CaseReferralForm />} />
           <Route path="/case-referral/:referralSlug" element={<CaseReferralForm />} />
+          <Route path="/credit-repair-lead" element={<CreditRepairLeadForm />} />
           <Route path="/sign/:token" element={<SignDocument />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/terms" element={<Terms />} />
@@ -768,6 +772,7 @@ export default function App() {
           >
             <Route index element={<AttorneyHomeRedirect />} />
             <Route path="dashboard" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><AttorneyDashboard /></AttorneyRolePage>} />
+            <Route path="credit-repair-leads" element={<AttorneyRolePage allowedRoles={['attorney', 'staff_attorney']}><CreditRepairLeads /></AttorneyRolePage>} />
             <Route path="referral-workspace" element={<AttorneyRolePage allowedRoles={['affiliate']}><ReferralAttorneyWorkspace /></AttorneyRolePage>} />
             <Route path="draft" element={<DraftComplaint />} />
             <Route path="disputes" element={<DisputeLetters />} />

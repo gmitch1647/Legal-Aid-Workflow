@@ -92,6 +92,23 @@ export async function request(path, options = {}) {
 // Cases
 // ---------------------------------------------------------------------------
 
+export async function createCreditRepairLead(data) {
+  return request('/credit-repair-leads', { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function getCreditRepairLeads(status = '') {
+  const query = status ? `?status_filter=${encodeURIComponent(status)}` : '';
+  return request(`/credit-repair-leads${query}`);
+}
+
+export async function updateCreditRepairLead(id, data) {
+  return request(`/credit-repair-leads/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+}
+
+export async function deleteCreditRepairLead(id) {
+  return request(`/credit-repair-leads/${id}`, { method: 'DELETE' });
+}
+
 export async function getCases(filters = {}) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
