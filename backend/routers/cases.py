@@ -297,6 +297,7 @@ async def list_cases(
     see only their own cases."""
     profile = await get_current_user(authorization)
     supabase = get_supabase()
+    logger.info("Case Pipeline list started for role=%s", profile.get("role"))
 
     query = supabase.table("cases").select("*")
 
@@ -329,6 +330,7 @@ async def list_cases(
     query = query.order("created_at", desc=True)
     resp = query.execute()
     cases = resp.data or []
+    logger.info("Case Pipeline list fetched %s case records", len(cases))
 
     # Enrich the board in bulk.  The earlier implementation performed a
     # separate profile, referral-partner, join-table, and defendant query for
@@ -420,6 +422,8 @@ async def list_cases(
             if defendant_id in defendants_by_id
         ]
         enriched.append(case)
+
+    logger.info("Case Pipeline list enriched %s case records", len(enriched))
 
     if profile.get("role") == "affiliate":
         return [
