@@ -1,4 +1,6 @@
 """Dedicated credit-repair lead intake, document, and management routes."""
+import html
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -7,10 +9,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, EmailStr, Field
 
+from utils.email_service import send_email
 from utils.referral_portal_access import get_referral_portal_partner
 from utils.supabase_client import get_supabase
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 STORAGE_BUCKET = "documents"
 MAX_LEAD_DOCUMENTS = 10
@@ -60,6 +64,73 @@ def _safe_file_name(value: str | None) -> str:
     original = os.path.basename(value or "credit_repair_document")
     normalized = "".join(character if character.isalnum() or character in {".", "-", "_", " "} else "_" for character in original).strip()
     return normalized[:180] or "credit_repair_document"
+
+
+def _owner_email(supabase) -> str | None:
+    """Resolve the configured LegalFlow owner with an attorney fallback."""
+    try:
+        reviewer = (
+            supabase.table("settlement_package_reviewers")
+            .select("owner_profile_id")
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
+        owner_id = ((reviewer.data or [None])[0] or {}).get("owner_profile_id")
+        if owner_id:
+            owner = supabase.table("profiles").select("email").eq("id", owner_id).limit(1).execute()
+            email = str((((owner.data or [None])[0] or {}).get("email") or "")).strip()
+            if email:
+                return email
+        fallback = (
+            supabase.table("profiles")
+            .select("email")
+            .eq("role", "attorney")
+            .order("created_at")
+            .limit(1)
+            .execute()
+        )
+        return str((((fallback.data or [None])[0] or {}).get("email") or "")).strip() or None
+    except Exception:
+        logger.exception("Could not resolve the Credit Repair Lead notification owner")
+        return None
+
+
+async def _notify_owner_of_new_lead(lead: dict, partner_name: str | None, document_count: int) -> None:
+    """Alert the owner after a Credit Repair Lead and its attachments have saved."""
+    try:
+        owner_email = _owner_email(get_supabase())
+        if not owner_email:
+            logger.warning("No owner email is configured for Credit Repair Lead %s", lead.get("id"))
+            return
+        frontend_url = str(os.environ.get("FRONTEND_URL", "https://legalflow.me")).rstrip("/")
+        lead_name = html.escape(str(lead.get("full_name") or "New Credit Repair lead"))
+        contact = html.escape(str(lead.get("email") or lead.get("phone") or "No contact details provided"))
+        issue = html.escape(str(lead.get("case_type") or "Not specified"))
+        adverse_party = html.escape(str(lead.get("adverse_party") or "Not specified"))
+        source = html.escape(str(partner_name or "Direct Credit Repair form"))
+        document_label = f"{document_count} supporting document{'s' if document_count != 1 else ''}" if document_count else "No supporting documents"
+        delivered = await send_email(
+            to=owner_email,
+            subject=f"New Credit Repair Lead: {lead.get('full_name') or 'New submission'}",
+            body=("<div style='font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1e293b;'>"
+                  "<h2 style='margin:0 0 14px;color:#047857;'>New Credit Repair Lead Submitted</h2>"
+                  f"<p><strong>Lead:</strong> {lead_name}<br>"
+                  f"<strong>Contact:</strong> {contact}<br>"
+                  f"<strong>Issue:</strong> {issue}<br>"
+                  f"<strong>Creditor or bureau:</strong> {adverse_party}<br>"
+                  f"<strong>Source:</strong> {source}<br>"
+                  f"<strong>Documents:</strong> {html.escape(document_label)}</p>"
+                  f"<p><a href='{frontend_url}/attorney/credit-repair-leads' style='display:inline-block;background:#059669;color:#ffffff;padding:10px 14px;border-radius:7px;text-decoration:none;font-weight:bold;'>Open Credit Repair Leads</a></p>"
+                  "<p style='color:#64748b;font-size:12px;'>This submission is in the separate Credit Repair workflow, not the legal case pipeline.</p>"
+                  "</div>"),
+            idempotency_key=f"credit-repair-lead-owner:{lead.get('id')}",
+        )
+        if not delivered:
+            logger.warning("Owner Credit Repair Lead alert was not delivered for lead %s", lead.get("id"))
+    except Exception:
+        # A completed lead must remain saved if a provider is temporarily unavailable.
+        logger.exception("Could not send the owner Credit Repair Lead notification for lead %s", lead.get("id"))
 
 
 async def _store_lead_documents(
@@ -181,19 +252,21 @@ async def create_credit_repair_lead(request: Request, authorization: str = Heade
 
     record = payload.model_dump(exclude_none=True)
     referral_slug = record.pop("referral_slug", None)
+    referral_partner = None
     record["created_by"] = (profile or {}).get("id")
     if referral_slug:
         partner_result = (
             get_supabase()
             .table("referral_partners")
-            .select("id")
+            .select("id,full_name,company")
             .eq("submission_slug", referral_slug.strip())
             .limit(1)
             .execute()
         )
         if not partner_result.data:
             raise HTTPException(status_code=422, detail="This referral form link is no longer active.")
-        record["referral_partner_id"] = partner_result.data[0]["id"]
+        referral_partner = partner_result.data[0]
+        record["referral_partner_id"] = referral_partner["id"]
 
     result = get_supabase().table("credit_repair_leads").insert(record).execute()
     if not result.data:
@@ -209,6 +282,13 @@ async def create_credit_repair_lead(request: Request, authorization: str = Heade
         except Exception:
             pass
         raise
+
+    partner_name = ((referral_partner or {}).get("company") or (referral_partner or {}).get("full_name"))
+    await _notify_owner_of_new_lead(
+        lead,
+        partner_name,
+        len(lead.get("credit_repair_lead_documents") or []),
+    )
     return lead
 
 
