@@ -837,7 +837,7 @@ async def get_referral_attorney_workspace(authorization: str = Header(default=No
     stages = stage_response.data if stage_response else []
     credit_repair_response = (
         supabase.table("credit_repair_leads")
-        .select("id,created_at,updated_at,status,full_name,email,phone,state,case_type,adverse_party")
+        .select("id,created_at,updated_at,status,full_name,email,phone,state,case_type,adverse_party,credit_repair_lead_documents(id,file_name,file_type,file_size,created_at)")
         .eq("referral_partner_id", partner["id"])
         .order("created_at", desc=True)
         .limit(250)

@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
-import { getReferralAttorneyWorkspace } from '../../lib/api';
+import { getCreditRepairLeadDocumentAccess, getReferralAttorneyWorkspace } from '../../lib/api';
 
 function displayDate(value) {
   if (!value) return 'Recently';
@@ -79,6 +79,16 @@ export default function ReferralAttorneyWorkspace() {
       window.setTimeout(() => setCopiedCreditRepair(false), 2200);
     } catch {
       setError('Could not copy the Credit Repair intake link. Select and copy it from your browser address bar instead.');
+    }
+  }
+
+  async function openCreditRepairDocument(leadId, documentId) {
+    try {
+      setError('');
+      const access = await getCreditRepairLeadDocumentAccess(leadId, documentId);
+      window.open(access.url, '_blank', 'noopener,noreferrer');
+    } catch (openError) {
+      setError(openError.message || 'Could not open this Credit Repair document.');
     }
   }
 
@@ -194,6 +204,7 @@ export default function ReferralAttorneyWorkspace() {
                   <p className="font-semibold text-slate-900">{lead.full_name || 'Credit Repair client'}</p>
                   <p className="mt-1 text-sm text-slate-600">{lead.case_type || 'Credit Repair review'}{lead.adverse_party ? ` · ${lead.adverse_party}` : ''}</p>
                   <p className="mt-1 text-xs text-slate-400">Submitted {displayDate(lead.created_at)}</p>
+                  {(lead.credit_repair_lead_documents || []).length > 0 ? <div className="mt-3 flex flex-wrap gap-2">{lead.credit_repair_lead_documents.map((document) => <button key={document.id} type="button" onClick={() => openCreditRepairDocument(lead.id, document.id)} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"><FileText className="h-3.5 w-3.5 shrink-0" /><span className="max-w-48 truncate">{document.file_name}</span></button>)}</div> : <p className="mt-3 text-xs text-slate-400">No documents attached</p>}
                 </div>
                 <span className="justify-self-start rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 sm:justify-self-end">{formatLeadStatus(lead.status)}</span>
               </article>

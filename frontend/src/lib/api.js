@@ -92,8 +92,24 @@ export async function request(path, options = {}) {
 // Cases
 // ---------------------------------------------------------------------------
 
-export async function createCreditRepairLead(data) {
-  return request('/credit-repair-leads', { method: 'POST', body: JSON.stringify(data) });
+export async function createCreditRepairLead(data, files = []) {
+  if (!files?.length) {
+    return request('/credit-repair-leads', { method: 'POST', body: JSON.stringify(data) });
+  }
+  const formData = new FormData();
+  Object.entries(data || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') formData.append(key, value);
+  });
+  files.forEach((file) => formData.append('files', file));
+  return request('/credit-repair-leads', { method: 'POST', body: formData });
+}
+
+export async function getCreditRepairLeadDocuments(id) {
+  return request(`/credit-repair-leads/${id}/documents`);
+}
+
+export async function getCreditRepairLeadDocumentAccess(leadId, documentId) {
+  return request(`/credit-repair-leads/${leadId}/documents/${documentId}/access`);
 }
 
 export async function getCreditRepairLeads(status = '') {
