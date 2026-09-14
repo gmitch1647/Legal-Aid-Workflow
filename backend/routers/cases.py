@@ -338,7 +338,7 @@ async def list_cases(
     # narratives, uploaded-document data, or generated drafts for every case;
     # those are loaded only from the selected case detail page.
     query = supabase.table("cases").select(
-        "id,client_id,referral_partner_id,pipeline_id,status,case_type,created_at,updated_at"
+        "id,client_id,referral_partner_id,pipeline_id,status,case_type,plaintiff_name,created_at,updated_at"
     )
 
     if profile["role"] == "client":
@@ -438,7 +438,11 @@ async def list_cases(
     for case in cases:
         client_profile = clients_by_id.get(str(case.get("client_id")))
         case["client"] = client_profile
-        case["plaintiff_name"] = (client_profile.get("full_name") if client_profile else None) or "Unknown Client"
+        case["plaintiff_name"] = (
+            case.get("plaintiff_name")
+            or (client_profile.get("full_name") if client_profile else None)
+            or "Unknown Client"
+        )
         case["client_name"] = case["plaintiff_name"]
         case["referral_partner"] = referral_partners_by_id.get(
             str(case.get("referral_partner_id"))

@@ -361,7 +361,11 @@ async def start_draft(
         supabase.table("cases")
         .insert(
             {
+                # Keep the real plaintiff label independent from the initiating
+                # attorney profile. This prevents owner-created draft sessions
+                # from being shown as the owner in the Case Pipeline.
                 "client_id": client_id or profile["id"],
+                "plaintiff_name": payload.plaintiff_name.strip() or None,
                 "status": "approved_for_processing",
                 "court": payload.court or "",
                 "jury_demand": payload.jury_demand,
