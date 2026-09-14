@@ -43,49 +43,63 @@ function apiErrorMessage(errorBody, fallback) {
  * Core fetch wrapper that adds Authorization header and handles JSON.
  */
 export async function request(path, options = {}) {
+  const { timeoutMs = 30000, signal: callerSignal, ...fetchOptions } = options;
   const token = await getAccessToken();
+  const controller = callerSignal ? null : new AbortController();
+  const signal = callerSignal || controller?.signal;
+  const timeout = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
 
   const headers = {
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   };
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  // Only set Content-Type to JSON when we have a body that is not FormData
-  if (options.body && !(options.body instanceof FormData)) {
+  // Only set Content-Type to JSON when we have a body that is not FormData.
+  if (fetchOptions.body && !(fetchOptions.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  try {
+    const response = await fetch(`${BASE_URL}${path}`, {
+      ...fetchOptions,
+      headers,
+      signal,
+    });
 
-  if (!response.ok) {
-    let errorBody;
-    try {
-      errorBody = await response.json();
-    } catch {
-      errorBody = { detail: response.statusText };
+    if (!response.ok) {
+      let errorBody;
+      try {
+        errorBody = await response.json();
+      } catch {
+        errorBody = { detail: response.statusText };
+      }
+      const error = new Error(apiErrorMessage(errorBody, `Request failed: ${response.status}`));
+      error.status = response.status;
+      error.body = errorBody;
+      throw error;
     }
-    const error = new Error(apiErrorMessage(errorBody, `Request failed: ${response.status}`));
-    error.status = response.status;
-    error.body = errorBody;
+
+    if (response.status === 204) {
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/octet-stream')) {
+      return response.blob();
+    }
+
+    return response.json();
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('The LegalFlow request took too long. Please retry.');
+    }
     throw error;
+  } finally {
+    if (timeout) window.clearTimeout(timeout);
   }
-
-  if (response.status === 204) {
-    return null;
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/octet-stream')) {
-    return response.blob();
-  }
-
-  return response.json();
 }
 
 // ---------------------------------------------------------------------------

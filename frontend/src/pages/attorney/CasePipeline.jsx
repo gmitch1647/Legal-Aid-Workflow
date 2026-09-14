@@ -741,10 +741,11 @@ export default function CasePipeline() {
       {/* Error banner */}
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="ml-auto">
+            <span className="min-w-0 flex-1">{error}</span>
+            <button onClick={() => fetchData()} className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-100">Retry</button>
+            <button onClick={() => setError(null)} className="rounded-md p-1 hover:bg-red-100" aria-label="Dismiss error">
               <X className="h-4 w-4" />
             </button>
           </div>

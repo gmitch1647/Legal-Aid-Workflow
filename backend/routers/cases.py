@@ -6,6 +6,7 @@ submission, status transitions, agent pipeline orchestration, complaint
 approval/revision/denial, and file downloads.
 """
 
+import asyncio
 import html
 import logging
 import os
@@ -77,24 +78,58 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
 
     token = authorization[len("Bearer "):]
 
-    try:
-        user_response = supabase.auth.get_user(token)
-        auth_user = user_response.user
-        user_id = auth_user.id
-        user_email = getattr(auth_user, "email", None) or ""
-    except Exception:
+    # Supabase Auth can occasionally return a transient gateway response. Retry
+    # a small number of times before reporting the condition as unavailable;
+    # do not mislabel a temporary provider outage as an expired user session.
+    auth_user = None
+    auth_failure: Exception | None = None
+    for attempt in range(3):
+        try:
+            user_response = await asyncio.wait_for(
+                asyncio.to_thread(supabase.auth.get_user, token),
+                timeout=8,
+            )
+            auth_user = user_response.user
+            if auth_user:
+                break
+        except Exception as exc:
+            auth_failure = exc
+            logger.warning("Supabase Auth lookup failed on attempt %s: %s", attempt + 1, exc)
+        if attempt < 2:
+            await asyncio.sleep(0.35 * (attempt + 1))
+
+    if not auth_user:
+        failure_text = str(auth_failure or "").lower()
+        if any(marker in failure_text for marker in ("502", "503", "504", "gateway", "timeout", "temporarily")):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="LegalFlow sign-in service is temporarily unavailable. Please retry in a moment.",
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token.",
         )
 
-    profile_resp = (
-        supabase.table("profiles")
-        .select("*")
-        .eq("id", str(user_id))
-        .limit(1)
-        .execute()
-    )
+    user_id = auth_user.id
+    user_email = getattr(auth_user, "email", None) or ""
+
+    try:
+        profile_resp = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: supabase.table("profiles")
+                .select("*")
+                .eq("id", str(user_id))
+                .limit(1)
+                .execute()
+            ),
+            timeout=8,
+        )
+    except Exception as exc:
+        logger.warning("Supabase profile lookup failed for %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LegalFlow profile service is temporarily unavailable. Please retry in a moment.",
+        ) from exc
 
     if profile_resp.data:
         return profile_resp.data[0]
