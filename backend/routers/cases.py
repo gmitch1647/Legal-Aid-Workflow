@@ -334,7 +334,12 @@ async def list_cases(
     supabase = get_supabase()
     logger.info("Case Pipeline list started for role=%s", profile.get("role"))
 
-    query = supabase.table("cases").select("*")
+    # The pipeline board needs only card metadata. Never transfer full case
+    # narratives, uploaded-document data, or generated drafts for every case;
+    # those are loaded only from the selected case detail page.
+    query = supabase.table("cases").select(
+        "id,client_id,referral_partner_id,pipeline_id,status,case_type,created_at,updated_at"
+    )
 
     if profile["role"] == "client":
         query = query.eq("client_id", profile["id"])
@@ -362,7 +367,7 @@ async def list_cases(
     if status_filter:
         query = query.eq("status", status_filter)
 
-    query = query.order("created_at", desc=True)
+    query = query.order("created_at", desc=True).limit(500)
     resp = query.execute()
     cases = resp.data or []
     logger.info("Case Pipeline list fetched %s case records", len(cases))
@@ -431,22 +436,9 @@ async def list_cases(
 
     enriched: list[dict] = []
     for case in cases:
-        # Extract plaintiff name from the case-facts header for draft cases.
-        plaintiff_name = ""
-        facts = case.get("case_facts") or ""
-        if "=== PLAINTIFF ===" in facts:
-            for line in facts.split("\n"):
-                if line.strip().startswith("Name:"):
-                    plaintiff_name = line.replace("Name:", "").strip()
-                    break
-
         client_profile = clients_by_id.get(str(case.get("client_id")))
         case["client"] = client_profile
-        case["plaintiff_name"] = (
-            plaintiff_name
-            or (client_profile.get("full_name") if client_profile else None)
-            or "Unknown Client"
-        )
+        case["plaintiff_name"] = (client_profile.get("full_name") if client_profile else None) or "Unknown Client"
         case["client_name"] = case["plaintiff_name"]
         case["referral_partner"] = referral_partners_by_id.get(
             str(case.get("referral_partner_id"))
