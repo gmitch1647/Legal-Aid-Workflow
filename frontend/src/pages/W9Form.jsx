@@ -41,6 +41,10 @@ const initialValues = {
   certification_accepted: false,
 };
 
+function looksLikeCaseCaption(value) {
+  return /\s+v(?:\.|s\.?)?\s+|\s+versus\s+/i.test(String(value || '').trim());
+}
+
 function formatTin(value, type) {
   const digits = value.replace(/\D/g, '').slice(0, 9);
   if (type === 'ssn') {
@@ -72,7 +76,9 @@ export default function W9Form() {
         setRequest(data);
         setValues((current) => ({
           ...current,
-          typed_name: data.signer_name || current.typed_name,
+          // Prefer the taxpayer's legal name; a case caption is never a valid
+          // W-9 signature and should not be inserted into the signature field.
+          typed_name: data.prefill?.legal_name || (looksLikeCaseCaption(data.signer_name) ? '' : (data.signer_name || current.typed_name)),
           legal_name: data.prefill?.legal_name || current.legal_name,
           tin_type: data.prefill?.tin_type || current.tin_type,
         }));

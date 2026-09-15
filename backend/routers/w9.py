@@ -280,6 +280,12 @@ def _detect_legal_name_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _looks_like_case_caption(value: Optional[str]) -> bool:
+    """Identify strings such as 'Jane Doe v. Example Corp.' that are case titles, not signer names."""
+    normalized = " ".join((value or "").split())
+    return bool(re.search(r"\s+v(?:\.|s\.?)?\s+|\s+versus\s+", normalized, flags=re.IGNORECASE))
+
+
 def _case_file_prefill(supabase, case_id: Optional[str], client_id: Optional[str]) -> dict:
     """Collect minimal, non-logged prefill candidates from safe text files.
 
@@ -813,6 +819,16 @@ async def create_w9_request(
         client_id = related_case.get("client_id")
 
     detected = _case_file_prefill(supabase, case_id, client_id)
+    requested_signer_name = payload.signer_name.strip()
+    if _looks_like_case_caption(requested_signer_name):
+        # A case caption can be useful as a document title but must never be used
+        # as a taxpayer's signature. Prefer the verified client-profile name.
+        requested_signer_name = (detected.get("legal_name") or "").strip()
+        if not requested_signer_name:
+            raise HTTPException(
+                status_code=422,
+                detail="The signer name cannot be a case caption. Enter the taxpayer's full legal name before sending the W-9.",
+            )
     manual_name = (payload.prefilled_legal_name or "").strip() or None
     manual_tin = _normalize_tin(payload.prefilled_tin)
     if manual_tin and not payload.prefilled_tin_type:
@@ -856,7 +872,7 @@ async def create_w9_request(
         "id": request_id,
         "token": token,
         "title": payload.title,
-        "signer_name": payload.signer_name,
+        "signer_name": requested_signer_name,
         "signer_email": str(payload.signer_email),
         "case_id": case_id,
         "client_id": client_id,
