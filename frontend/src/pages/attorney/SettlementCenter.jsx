@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
@@ -161,6 +161,7 @@ export default function SettlementCenter() {
   const [approvedPackage, setApprovedPackage] = useState(null);
   const [preparedSendTarget, setPreparedSendTarget] = useState(null);
   const [deliveryCaseId, setDeliveryCaseId] = useState('');
+  const workflowRequestRef = useRef(0);
 
   const selectedCase = useMemo(
     () => cases.find((caseRow) => String(caseRow.id) === String(selectedCaseId)) || null,
@@ -195,6 +196,8 @@ export default function SettlementCenter() {
   }, [requestedCaseId]);
 
   const loadWorkflow = useCallback(async (caseId) => {
+    const requestId = workflowRequestRef.current + 1;
+    workflowRequestRef.current = requestId;
     if (!caseId) {
       setAgreementRequests([]);
       setCreditDisclosureRequests([]);
@@ -213,6 +216,7 @@ export default function SettlementCenter() {
         getPayoutInformationRequests(caseId),
       ]);
       const signatureRequests = asRows(signatureRows, ['requests', 'data']);
+      if (requestId !== workflowRequestRef.current) return;
       setAgreementRequests(signatureRequests.filter((row) => ['settlement', 'settlement_agreement'].includes(row.document_type)));
       setCreditDisclosureRequests(signatureRequests.filter((row) => row.document_type === 'credit_disclosure'));
       setW9Requests(asRows(w9Rows, ['requests', 'data']));
@@ -221,14 +225,31 @@ export default function SettlementCenter() {
       );
       setPayoutInformationRequests(asRows(payoutRows, ['requests', 'data']));
     } catch (err) {
+      if (requestId !== workflowRequestRef.current) return;
       setError(err.message || 'Unable to load the settlement checklist for this case.');
     } finally {
-      setLoadingWorkflow(false);
+      if (requestId === workflowRequestRef.current) setLoadingWorkflow(false);
     }
   }, []);
 
   useEffect(() => { loadCases(); }, [loadCases]);
   useEffect(() => { loadWorkflow(selectedCaseId); }, [selectedCaseId, loadWorkflow]);
+
+  const selectSettlementCase = useCallback((caseId) => {
+    const normalizedCaseId = String(caseId || '').trim();
+    if (!normalizedCaseId) return;
+    setAgreementPanel(null);
+    setPreparedSendTarget(null);
+    setShowAttorneyDelivery(false);
+    setNotice('');
+    setError('');
+    setCaseSearch('');
+    setSelectedCaseId(normalizedCaseId);
+    navigate(`/attorney/settlements?case_id=${encodeURIComponent(normalizedCaseId)}`, { replace: true });
+    window.setTimeout(() => {
+      document.getElementById('active-settlement-case')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }, [navigate]);
 
   const agreement = agreementRequests[0] || null;
   const creditDisclosure = creditDisclosureRequests[0] || null;
@@ -368,18 +389,27 @@ export default function SettlementCenter() {
       ) : (
         <>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4"><label className="block text-sm font-semibold text-slate-800" htmlFor="settlement-case-search">Search settlement matters</label><input id="settlement-case-search" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} placeholder="Search client, defendant, plaintiff, or case number" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />{caseSearch.trim() && <div className="mt-2 overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm" role="listbox" aria-label="Matching settlement matters">{filteredCases.slice(0, 12).map((caseRow) => <button key={`search-${caseRow.id}`} type="button" role="option" aria-selected={String(caseRow.id) === String(selectedCaseId)} onClick={() => { setSelectedCaseId(String(caseRow.id)); setCaseSearch(''); }} className={`flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-indigo-50 ${String(caseRow.id) === String(selectedCaseId) ? 'bg-indigo-50' : ''}`}><span className="min-w-0 truncate text-sm font-semibold text-slate-900">{caseLabel(caseRow)}</span><span className="shrink-0 text-xs font-semibold text-indigo-700">Choose</span></button>)}{filteredCases.length === 0 && <p className="px-3 py-3 text-sm text-slate-500">No matching matters found.</p>}{filteredCases.length > 12 && <p className="px-3 py-2 text-xs text-slate-500">Showing the first 12 matches. Refine your search to find another matter.</p>}</div>}</div>
+          <section id="active-settlement-case" className="scroll-mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-slate-800" htmlFor="settlement-case-search">Search settlement matters</label>
+              <input id="settlement-case-search" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)} placeholder="Search client, defendant, plaintiff, or case number" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100" />
+              {caseSearch.trim() && <div className="mt-2 overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm" role="listbox" aria-label="Matching settlement matters">
+                {filteredCases.slice(0, 12).map((caseRow) => <button key={`search-${caseRow.id}`} type="button" role="option" aria-selected={String(caseRow.id) === String(selectedCaseId)} onClick={() => selectSettlementCase(caseRow.id)} className={`flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-indigo-50 ${String(caseRow.id) === String(selectedCaseId) ? 'bg-indigo-50' : ''}`}><span className="min-w-0 truncate text-sm font-semibold text-slate-900">{caseLabel(caseRow)}</span><span className="shrink-0 text-xs font-semibold text-indigo-700">Open matter</span></button>)}
+                {filteredCases.length === 0 && <p className="px-3 py-3 text-sm text-slate-500">No matching matters found.</p>}
+                {filteredCases.length > 12 && <p className="px-3 py-2 text-xs text-slate-500">Showing the first 12 matches. Refine your search to find another matter.</p>}
+              </div>}
+            </div>
             <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
               <div className="min-w-0 flex-1">
                 <label className="block text-sm font-semibold text-slate-800">Settlement case</label>
-                <select value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100">
+                <select value={selectedCaseId} onChange={(event) => selectSettlementCase(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100">
                   {filteredCases.length ? filteredCases.map((caseRow) => <option key={caseRow.id} value={caseRow.id}>{caseLabel(caseRow)}</option>) : <option value="">No matching matters</option>}
                 </select>
                 {caseSearch && <p className="mt-1.5 text-xs text-slate-500">Showing {filteredCases.length} of {cases.length} matters.</p>}
               </div>
               {selectedCase && <div className="flex flex-wrap justify-end gap-2"><button onClick={() => navigate(`/attorney/esign?case_id=${encodeURIComponent(selectedCase.id)}&return_to=${encodeURIComponent(returnTo)}`)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-primary-800 hover:bg-primary-50"><FileSignature className="h-4 w-4" /> Open E-Signatures</button><button onClick={() => openAttorneyDelivery(selectedCase.id)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"><Send className="h-4 w-4" /> Send to attorney</button><button onClick={() => navigate(`/attorney/cases/${selectedCase.id}`)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Open case file <ChevronRight className="h-4 w-4" /></button></div>}
             </div>
+            {selectedCase && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Active settlement matter</p><p className="mt-0.5 truncate text-sm font-semibold text-emerald-950">{caseLabel(selectedCase)}</p></div><button type="button" onClick={openAgreementPanel} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-800"><Send className="h-4 w-4" /> Send documents</button></div>}
           </section>
 
           {loadingWorkflow ? (
