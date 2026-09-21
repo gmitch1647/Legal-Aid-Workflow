@@ -40,6 +40,8 @@ router = APIRouter()
 STORAGE_BUCKET = "documents"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+DOC_MIME_TYPE = "application/msword"
+OLE_COMPOUND_FILE_HEADER = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 VIEW_ONLY_DOCUMENT_TYPES = {"credit_disclosure"}
 OISE_ENGAGEMENT_DOCUMENT_TYPE = "oise_engagement_agreement"
 OISE_ENGAGEMENT_ATTORNEY_NAME = "Esther Oise"
@@ -135,14 +137,17 @@ def _safe_filename(filename: str) -> str:
     return safe_name or "document"
 
 
-def _convert_docx_to_pdf(docx_bytes: bytes) -> bytes:
-    """Convert DOCX bytes to a verified PDF using LibreOffice headless mode."""
+def _convert_word_to_pdf(word_bytes: bytes, suffix: str) -> bytes:
+    """Convert an Office Word source to a verified signing PDF without altering it."""
+    normalized_suffix = suffix.lower()
+    if normalized_suffix not in {".doc", ".docx"}:
+        raise RuntimeError("Only DOC and DOCX files can be converted to PDF.")
     with tempfile.TemporaryDirectory(prefix="legalflow-signing-") as temp_dir:
         temp_path = Path(temp_dir)
-        source_path = temp_path / "source.docx"
+        source_path = temp_path / f"source{normalized_suffix}"
         output_dir = temp_path / "output"
         profile_dir = temp_path / "libreoffice-profile"
-        source_path.write_bytes(docx_bytes)
+        source_path.write_bytes(word_bytes)
         output_dir.mkdir()
         profile_dir.mkdir()
 
@@ -164,23 +169,33 @@ def _convert_docx_to_pdf(docx_bytes: bytes) -> bytes:
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
-                "DOCX conversion is unavailable because LibreOffice is not installed."
+                "Word-document conversion is unavailable because LibreOffice is not installed."
             ) from exc
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("DOCX conversion timed out. Please try a smaller document.") from exc
+            raise RuntimeError("Word-document conversion timed out. Please try a smaller document.") from exc
 
         pdf_candidates = list(output_dir.glob("*.pdf"))
         if result.returncode != 0 or not pdf_candidates:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(
-                "Could not convert the DOCX to PDF. "
+                "Could not convert the Word document to PDF. "
                 f"LibreOffice reported: {stderr or 'an unknown conversion error'}"
             )
 
         pdf_bytes = pdf_candidates[0].read_bytes()
         if not pdf_bytes.startswith(b"%PDF"):
-            raise RuntimeError("DOCX conversion did not produce a valid PDF.")
+            raise RuntimeError("Word-document conversion did not produce a valid PDF.")
         return pdf_bytes
+
+
+def _convert_docx_to_pdf(docx_bytes: bytes) -> bytes:
+    """Convert DOCX bytes to a verified PDF using LibreOffice headless mode."""
+    return _convert_word_to_pdf(docx_bytes, ".docx")
+
+
+def _convert_doc_to_pdf(doc_bytes: bytes) -> bytes:
+    """Convert legacy DOC bytes to a verified PDF using LibreOffice headless mode."""
+    return _convert_word_to_pdf(doc_bytes, ".doc")
 
 
 def _validate_source_attachment(
@@ -196,9 +211,13 @@ def _validate_source_attachment(
         if not file_bytes.startswith(b"PK"):
             raise ValueError("The DOCX upload is not a valid Office document.")
         return safe_filename, DOCX_MIME_TYPE
+    if suffix == ".doc" or content_type == DOC_MIME_TYPE:
+        if not file_bytes.startswith(OLE_COMPOUND_FILE_HEADER):
+            raise ValueError("The DOC upload is not a valid legacy Word document.")
+        return safe_filename, DOC_MIME_TYPE
     if file_bytes.startswith(b"%PDF"):
         return safe_filename, "application/pdf"
-    raise ValueError("Only valid PDF and DOCX files can be sent for signature.")
+    raise ValueError("Only valid PDF, DOCX, and DOC files can be sent for signature.")
 
 
 def _source_stem(storage_path: str) -> str:
@@ -303,8 +322,8 @@ def _ensure_session_pdf(supabase, session: dict) -> str:
     pdf_path = _signing_pdf_path(source_path)
 
     try:
-        # PDF uploads remain immutable source files. Load them for a possible
-        # client-specific derivative; DOCX uploads retain their conversion path.
+        # PDF uploads remain immutable source files. Word uploads retain their
+        # original bytes and receive a separate signing-PDF derivative.
         if pdf_path == source_path:
             pdf_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
             if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
@@ -322,10 +341,11 @@ def _ensure_session_pdf(supabase, session: dict) -> str:
                 pdf_bytes = None
 
             if pdf_bytes is None:
-                docx_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
-                if not docx_bytes:
-                    raise RuntimeError("The stored DOCX could not be downloaded.")
-                pdf_bytes = _convert_docx_to_pdf(docx_bytes)
+                word_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source_path)
+                if not word_bytes:
+                    raise RuntimeError("The stored Word document could not be downloaded.")
+                converter = _convert_doc_to_pdf if Path(source_path).suffix.lower() == ".doc" else _convert_docx_to_pdf
+                pdf_bytes = converter(word_bytes)
                 supabase.storage.from_(STORAGE_BUCKET).upload(
                     path=pdf_path,
                     file=pdf_bytes,
@@ -678,7 +698,7 @@ async def create_signing_session(
 
     uploaded_content = await file.read()
     if not uploaded_content:
-        raise HTTPException(status_code=400, detail="Please choose a PDF or DOCX file to upload.")
+        raise HTTPException(status_code=400, detail="Please choose a PDF, DOCX, or DOC file to upload.")
     if len(uploaded_content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 20 MB)")
 
@@ -704,7 +724,7 @@ async def create_signing_session(
     token = _generate_token()
 
     # Preserve the attorney's original source attachment byte-for-byte.
-    # DOCX files receive a separate PDF derivative only when the signer opens it.
+    # Word files receive a separate PDF derivative only when the signer opens it.
     storage_path = f"signing/{session_id}/source_{source_filename}"
     try:
         supabase.storage.from_(STORAGE_BUCKET).upload(
@@ -1228,7 +1248,7 @@ async def complete_signing(token: str, request: Request):
     if not signature_data:
         raise HTTPException(status_code=400, detail="Signature is required.")
 
-    # Normalize legacy DOCX sessions before loading the document for signing.
+    # Normalize legacy Word sessions before loading the document for signing.
     try:
         pdf_path = _ensure_session_pdf(supabase, session)
         file_bytes = supabase.storage.from_(STORAGE_BUCKET).download(pdf_path)

@@ -182,6 +182,28 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(file_name, "Settlement Agreement.docx")
         self.assertEqual(content_type, signing.DOCX_MIME_TYPE)
 
+    def test_legacy_doc_source_is_validated_without_conversion(self):
+        doc_bytes = signing.OLE_COMPOUND_FILE_HEADER + b"legacy-doc-content"
+
+        with patch.object(signing, "_convert_doc_to_pdf") as converter:
+            file_name, content_type = signing._validate_source_attachment(
+                doc_bytes,
+                "Settlement Agreement.doc",
+                signing.DOC_MIME_TYPE,
+            )
+
+        converter.assert_not_called()
+        self.assertEqual(file_name, "Settlement Agreement.doc")
+        self.assertEqual(content_type, signing.DOC_MIME_TYPE)
+
+    def test_invalid_legacy_doc_source_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "valid legacy Word"):
+            signing._validate_source_attachment(
+                b"not-a-word-document",
+                "Settlement Agreement.doc",
+                signing.DOC_MIME_TYPE,
+            )
+
     def test_docx_source_is_uploaded_byte_for_byte_when_session_is_created(self):
         source_bytes = b"PK\x03\x04original-docx-content"
         supabase = _FakeSigningSupabase()
@@ -261,6 +283,23 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(supabase.bucket.uploads[0]["path"], derivative_path)
         self.assertEqual(supabase.bucket.uploads[0]["file"], converted_pdf)
         self.assertIsNone(supabase.queries["signing_sessions"].update_payload)
+
+    def test_legacy_doc_session_generates_separate_pdf_without_mutating_source_path(self):
+        source_path = "signing/session-123/source_agreement.doc"
+        derivative_path = "signing/session-123/signing_agreement.pdf"
+        source_bytes = signing.OLE_COMPOUND_FILE_HEADER + b"legacy-doc-content"
+        supabase = _FakeSigningSupabase({source_path: source_bytes})
+        session = {"id": "session-123", "original_path": source_path}
+        converted_pdf = b"%PDF-1.7\nlegacy-converted"
+
+        with patch.object(signing, "_convert_doc_to_pdf", return_value=converted_pdf) as converter:
+            pdf_path = signing._ensure_session_pdf(supabase, session)
+
+        converter.assert_called_once_with(source_bytes)
+        self.assertEqual(pdf_path, derivative_path)
+        self.assertEqual(session["original_path"], source_path)
+        self.assertEqual(supabase.bucket.uploads[0]["path"], derivative_path)
+        self.assertEqual(supabase.bucket.uploads[0]["file"], converted_pdf)
 
     def test_derivative_and_signed_paths_never_replace_source(self):
         source_path = "signing/session-123/source_agreement.docx"
@@ -731,8 +770,8 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
         self.assertGreater(len(pdf_bytes), 100)
 
-    def test_non_pdf_non_docx_upload_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "Only valid PDF and DOCX"):
+    def test_non_pdf_non_word_upload_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Only valid PDF, DOCX, and DOC"):
             signing._validate_source_attachment(
                 b"plain text",
                 "notes.txt",

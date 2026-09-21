@@ -93,10 +93,11 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
     if (!candidate) return;
     const isSupported = candidate.type === 'application/pdf'
       || candidate.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      || /\.(pdf|docx)$/i.test(candidate.name || '');
+      || candidate.type === 'application/msword'
+      || /\.(pdf|docx?)$/i.test(candidate.name || '');
 
     if (!isSupported) {
-      setError(`Choose a PDF or DOCX ${documentLabelLower}.`);
+      setError(`Choose a PDF, DOCX, or DOC ${documentLabelLower}.`);
       return;
     }
     if (candidate.size > MAX_FILE_BYTES) {
@@ -108,7 +109,7 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
     setFile(candidate);
     setError('');
     if (!title || title === 'Settlement Agreement') {
-      setTitle(candidate.name.replace(/\.(pdf|docx)$/i, ''));
+      setTitle(candidate.name.replace(/\.(pdf|docx?)$/i, ''));
     }
   }
 
@@ -213,10 +214,10 @@ export default function SettlementAgreementModal({ caseId, mode = 'settlement', 
                     <Upload className="mx-auto h-7 w-7 text-slate-400" />
                                           <p className="mt-2 text-sm font-semibold text-slate-700">Drop the final {documentLabelLower} here or <span className="text-primary-700">browse files</span></p>
 
-                    <p className="mt-1 text-xs text-slate-500">PDF or DOCX · Maximum 20 MB</p>
+                    <p className="mt-1 text-xs text-slate-500">PDF, DOCX, or DOC · Maximum 20 MB</p>
                   </div>
                 )}
-                <input ref={fileInputRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={onFileInputChange} />
+                <input ref={fileInputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={onFileInputChange} />
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">

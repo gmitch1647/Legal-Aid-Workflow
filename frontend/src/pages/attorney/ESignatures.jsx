@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  PenLine, SAVend, Download, Clock, Clock3, CheckCircle2, XCircle,
+  PenLine, Download, Clock, Clock3, CheckCircle2, XCircle,
   AlertCircle, Loader2, RefreshCw, Eye, Bell, FileText,
   ChevronDown, ChevronRight, X, Search, User, Upload, Trash2,
   FolderOpen, LockKeyhole, ExternalLink, CreditCard, KeyRound, ShieldCheck, Send,
@@ -838,9 +838,9 @@ function SendSignatureModal({ initialMode = 'upload', templates, loadingTemplate
     e.preventDefault();
     const f = e.dataTransfer?.files?.[0] || e.target?.files?.[0];
     if (f) {
-      const valid = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-      if (!valid.includes(f.type) && !f.name.match(/\.(pdf|docx)$/i)) {
-        setError('Only PDF and DOCX files are supported');
+      const valid = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'];
+      if (!valid.includes(f.type) && !f.name.match(/\.(pdf|docx?)$/i)) {
+        setError('Only PDF, DOCX, and DOC files are supported');
         return;
       }
       if (f.size > 20 * 1024 * 1024) {
@@ -849,7 +849,7 @@ function SendSignatureModal({ initialMode = 'upload', templates, loadingTemplate
       }
       setUploadedFile(f);
       setError('');
-      if (!title) setTitle(f.name.replace(/\.(pdf|docx)$/i, ''));
+      if (!title) setTitle(f.name.replace(/\.(pdf|docx?)$/i, ''));
     }
   }
 
@@ -975,7 +975,7 @@ function SendSignatureModal({ initialMode = 'upload', templates, loadingTemplate
             </div>
           ) : mode === 'upload' ? (
             <div>
-              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Document (PDF or DOCX) *</label>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Document (PDF, DOCX, or DOC) *</label>
               {uploadedFile ? (
                 <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <FileText className="w-5 h-5 text-blue-600 shrink-0" />
@@ -994,8 +994,8 @@ function SendSignatureModal({ initialMode = 'upload', templates, loadingTemplate
                 >
                   <Upload className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                   <p className="text-sm text-slate-500">Drop your settlement agreement here or <span className="text-blue-600 font-medium">browse</span></p>
-                  <p className="text-xs text-slate-400 mt-1">PDF or DOCX, up to 20 MB</p>
-                  <input id="esign-file-input" type="file" accept=".pdf,.docx" className="hidden" onChange={handleFileDrop} />
+                  <p className="text-xs text-slate-400 mt-1">PDF, DOCX, or DOC, up to 20 MB</p>
+                  <input id="esign-file-input" type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={handleFileDrop} />
                 </div>
               )}
               <p className="text-xs text-slate-400 mt-2">Signature, name, and date fields will be added automatically at the bottom of the document.</p>
