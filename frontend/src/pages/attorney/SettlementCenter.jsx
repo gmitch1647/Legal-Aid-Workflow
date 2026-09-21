@@ -24,6 +24,7 @@ import {
   sendCompletedSettlementPackage,
 } from '../../lib/api';
 import SettlementAgreementModal, { SettlementAgreementStatusModal } from './SettlementAgreementModal';
+import AdditionalSettlementDocumentModal from './AdditionalSettlementDocumentModal';
 import PayoutInformationRequestModal from '../../components/PayoutInformationRequestModal';
 import SettlementPackageReview, { PreparedSettlementPackageSendModal } from '../../components/SettlementPackageReview';
 
@@ -154,6 +155,7 @@ export default function SettlementCenter() {
   const [agreementPanel, setAgreementPanel] = useState(null);
   const [showAttorneyDelivery, setShowAttorneyDelivery] = useState(false);
   const [showPayoutRequest, setShowPayoutRequest] = useState(false);
+  const [showAdditionalDocument, setShowAdditionalDocument] = useState(false);
   const [deliveryAttorneys, setDeliveryAttorneys] = useState([]);
   const [loadingDeliveryAttorneys, setLoadingDeliveryAttorneys] = useState(false);
   const [notice, setNotice] = useState('');
@@ -241,6 +243,7 @@ export default function SettlementCenter() {
     setAgreementPanel(null);
     setPreparedSendTarget(null);
     setShowAttorneyDelivery(false);
+    setShowAdditionalDocument(false);
     setNotice('');
     setError('');
     setCaseSearch('');
@@ -409,7 +412,7 @@ export default function SettlementCenter() {
               </div>
               {selectedCase && <div className="flex flex-wrap justify-end gap-2"><button onClick={() => navigate(`/attorney/esign?case_id=${encodeURIComponent(selectedCase.id)}&return_to=${encodeURIComponent(returnTo)}`)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-primary-800 hover:bg-primary-50"><FileSignature className="h-4 w-4" /> Open E-Signatures</button><button onClick={() => openAttorneyDelivery(selectedCase.id)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"><Send className="h-4 w-4" /> Send to attorney</button><button onClick={() => navigate(`/attorney/cases/${selectedCase.id}`)} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Open case file <ChevronRight className="h-4 w-4" /></button></div>}
             </div>
-            {selectedCase && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Active settlement matter</p><p className="mt-0.5 truncate text-sm font-semibold text-emerald-950">{caseLabel(selectedCase)}</p></div><button type="button" onClick={openAgreementPanel} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-800"><Send className="h-4 w-4" /> Send documents</button></div>}
+            {selectedCase && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Active settlement matter</p><p className="mt-0.5 truncate text-sm font-semibold text-emerald-950">{caseLabel(selectedCase)}</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setNotice(''); setShowAdditionalDocument(true); }} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary-300 bg-white px-3.5 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-50"><FileText className="h-4 w-4" /> Send another document</button><button type="button" onClick={openAgreementPanel} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-800"><Send className="h-4 w-4" /> Send settlement agreement</button></div></div>}
           </section>
 
           {loadingWorkflow ? (
@@ -514,6 +517,17 @@ export default function SettlementCenter() {
             setNotice(result.already_created
               ? 'This approved document was already prepared for client delivery.'
               : `${preparedSendTarget.kind === 'settlement' ? 'Settlement agreement' : 'Credit disclosure'} sent to the client from the approved package.`);
+          }}
+        />
+      )}
+      {showAdditionalDocument && selectedCase && (
+        <AdditionalSettlementDocumentModal
+          caseId={selectedCase.id}
+          onClose={() => setShowAdditionalDocument(false)}
+          onSent={async ({ documentLabel }) => {
+            setShowAdditionalDocument(false);
+            await loadWorkflow(selectedCaseId);
+            setNotice(`${documentLabel || 'Document'} was sent for signature and is saved separately for this case.`);
           }}
         />
       )}
