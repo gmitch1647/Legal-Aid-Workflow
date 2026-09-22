@@ -216,8 +216,8 @@ export default function IntakeForm() {
               >
                 <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
                 <div className="text-sm font-medium text-slate-700">Click or drag files to upload</div>
-                <div className="text-xs text-slate-500 mt-1">PDF, DOCX, TXT, PNG, JPG — up to 10MB each</div>
-                <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+                <div className="text-xs text-slate-500 mt-1">PDF, Word, TXT, PNG, JPG — up to 10MB each</div>
+                <input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
                   onChange={(e) => addFiles(e.target.files)} className="hidden" />
               </div>
               {files.length > 0 && (

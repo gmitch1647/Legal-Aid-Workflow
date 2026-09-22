@@ -1064,7 +1064,7 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
           <Upload className="w-3.5 h-3.5" />
           {uploading ? 'Uploading...' : 'Upload Document'}
         </button>
-        <input ref={fileInputRef} type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" className="hidden"
+        <input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg" className="hidden"
           onChange={e => handleUpload(e.target.files)} />
       </div>
       {uploadError && <p className="text-xs text-red-600 mt-1 px-1">{uploadError}</p>}
@@ -1191,7 +1191,7 @@ function PiiSection({ caseId, documents, onRefresh }) {
           <Upload className="w-3.5 h-3.5" />
           {uploading ? 'Uploading...' : 'Upload PII Document'}
         </button>
-        <input ref={fileInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.docx" className="hidden"
+        <input ref={fileInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx" className="hidden"
           onChange={(e) => handleUpload(e.target.files)} />
       </div>
     </div>

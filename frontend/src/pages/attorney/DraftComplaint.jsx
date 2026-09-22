@@ -1117,7 +1117,7 @@ export default function DraftComplaint() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+                accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
                 onChange={(e) => handleFiles(e.target.files)}
                 className="hidden"
               />
@@ -2017,7 +2017,7 @@ function RevisionChat({ sessionId, complaintText, onComplaintUpdate, caseDocumen
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+          accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
           onChange={handleFileSelect}
           className="hidden"
         />

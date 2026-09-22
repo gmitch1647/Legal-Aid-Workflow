@@ -1054,15 +1054,15 @@ function UploadExistingCase({ clientId, clientName, onComplete, onCancel }) {
       </div>
 
       <div>
-        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Complaint Document (.docx, .pdf, .txt)</label>
-        <input type="file" accept=".pdf,.docx,.txt"
+        <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Complaint Document (Word, PDF, or TXT)</label>
+        <input type="file" accept=".pdf,.doc,.docx,.txt"
           onChange={e => setComplaintFile(e.target.files[0])}
           className="w-full text-sm text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:text-sm file:font-medium file:bg-white file:text-slate-700" />
       </div>
 
       <div>
         <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Supporting Documents (optional)</label>
-        <input type="file" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+        <input type="file" multiple accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
           onChange={e => setFiles(Array.from(e.target.files || []))}
           className="w-full text-sm text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-slate-300 file:text-sm file:font-medium file:bg-white file:text-slate-700" />
         {files.length > 0 && (
@@ -1495,13 +1495,13 @@ function DocumentsSection({ documents, clientCases, onUploadComplete, onDelete }
             {uploading ? 'Uploading...' : 'Click or drag files'}
           </div>
           <div className="text-[10px] text-slate-400 mt-0.5">
-            PDF, DOCX, TXT, PNG, JPG
+            PDF, Word, TXT, PNG, JPG
           </div>
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+            accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
             onChange={(e) => handleFiles(e.target.files)}
             className="hidden"
           />

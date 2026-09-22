@@ -2,13 +2,14 @@
 Case Law router — manages judicial opinions for RAG retrieval.
 
 Supports:
-- Uploading opinions (text or .docx)
+- Uploading opinions (text, DOC, DOCX, or PDF)
 - AI-powered summarization and tagging
 - Vector indexing for semantic search
 - Search/retrieval for agent context injection
 """
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -132,7 +133,7 @@ async def create_case_law(payload: CaseLawCreate, authorization: str = Header(de
 
 
 # ---------------------------------------------------------------------------
-# POST /upload — upload a case law document (.docx, .txt, .pdf text)
+# POST /upload — upload a case law document (.doc, .docx, .txt, .pdf text)
 # ---------------------------------------------------------------------------
 
 @router.post("/upload")
@@ -148,30 +149,15 @@ async def upload_case_law(
     profile = await _get_current_user(authorization)
     _require_attorney(profile)
 
-    # Read file content
+    # Read file content through the shared reader so legacy and modern Word
+    # uploads use the same extraction path as all other LegalFlow documents.
     content = await file.read()
-    text = ""
-
-    if file.filename.endswith(".txt"):
-        text = content.decode("utf-8", errors="ignore")
-    elif file.filename.endswith(".docx"):
-        try:
-            import io
-            from docx import Document
-            doc = Document(io.BytesIO(content))
-            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to read .docx: {e}")
-    elif file.filename.endswith(".pdf"):
-        try:
-            import io
-            from PyPDF2 import PdfReader
-            reader = PdfReader(io.BytesIO(content))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to read .pdf: {e}")
-    else:
-        text = content.decode("utf-8", errors="ignore")
+    from utils.document_reader import extract_document_text
+    suffix = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
+    try:
+        text = extract_document_text(content, suffix or file.content_type or "")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read {suffix or 'uploaded document'}: {exc}") from exc
 
     if not text or len(text) < 50:
         raise HTTPException(status_code=400, detail="Could not extract text from file")
@@ -184,7 +170,7 @@ async def upload_case_law(
 
     record = {
         "id": record_id,
-        "case_name": case_name or file.filename.replace(".docx", "").replace(".pdf", "").replace(".txt", ""),
+        "case_name": case_name or os.path.splitext(file.filename or "Document")[0],
         "citation": citation,
         "court": court,
         "year": year if year > 0 else None,
@@ -230,28 +216,12 @@ async def bulk_upload_case_law(
     documents = []
     for file in files:
         content = await file.read()
-        text = ""
-
-        if file.filename.endswith(".txt"):
-            text = content.decode("utf-8", errors="ignore")
-        elif file.filename.endswith(".docx"):
-            try:
-                import io as _io
-                from docx import Document
-                doc = Document(_io.BytesIO(content))
-                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-            except Exception:
-                text = content.decode("utf-8", errors="ignore")
-        elif file.filename.endswith(".pdf"):
-            try:
-                import io as _io
-                from PyPDF2 import PdfReader
-                reader = PdfReader(_io.BytesIO(content))
-                text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            except Exception:
-                pass
-        else:
-            text = content.decode("utf-8", errors="ignore")
+        from utils.document_reader import extract_document_text
+        suffix = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
+        try:
+            text = extract_document_text(content, suffix or file.content_type or "")
+        except Exception:
+            text = ""
 
         if text and len(text) >= 50:
             documents.append({"filename": file.filename, "text": text})

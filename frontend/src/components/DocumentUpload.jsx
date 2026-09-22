@@ -28,6 +28,7 @@ const CATEGORIES = [
 
 const ACCEPTED_TYPES = [
   'application/pdf',
+  'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
   'image/png',
@@ -35,7 +36,7 @@ const ACCEPTED_TYPES = [
   'image/jpg',
 ];
 
-const ACCEPTED_EXTENSIONS = '.pdf,.docx,.txt,.png,.jpg,.jpeg';
+const ACCEPTED_EXTENSIONS = '.pdf,.doc,.docx,.txt,.png,.jpg,.jpeg';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -65,7 +66,7 @@ function getFileIcon(fileName) {
   const ext = fileName.split('.').pop()?.toLowerCase();
   if (ext === 'pdf') return FileText;
   if (['png', 'jpg', 'jpeg'].includes(ext)) return Image;
-  if (ext === 'docx') return FileText;
+  if (['doc', 'docx'].includes(ext)) return FileText;
   return File;
 }
 
@@ -80,9 +81,9 @@ function validateFile(file) {
   }
 
   const ext = file.name.split('.').pop()?.toLowerCase();
-  const validExtensions = ['pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg'];
+  const validExtensions = ['pdf', 'doc', 'docx', 'txt', 'png', 'jpg', 'jpeg'];
   if (!validExtensions.includes(ext)) {
-    return `File "${file.name}" has an unsupported format. Accepted: PDF, DOCX, TXT, PNG, JPG.`;
+    return `File "${file.name}" has an unsupported format. Accepted: PDF, Word, TXT, PNG, JPG.`;
   }
 
   return null;
@@ -409,7 +410,7 @@ export default function DocumentUpload({ caseId, onUploadComplete }) {
             {isDragOver ? 'Drop files here' : 'Drag files here or click to browse'}
           </p>
           <p className="mt-1.5 text-xs text-slate-400">
-            PDF, DOCX, TXT, PNG, or JPG up to 10MB each
+            PDF, Word, TXT, PNG, or JPG up to 10MB each
           </p>
         </div>
       </div>

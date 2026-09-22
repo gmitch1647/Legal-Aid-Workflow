@@ -43,7 +43,7 @@ function packageStatusLabel(value) {
 }
 
 function validFile(file) {
-  return file && /\.(pdf|docx)$/i.test(file.name || '') && file.size <= MAX_FILE_BYTES;
+  return file && /\.(pdf|docx?)$/i.test(file.name || '') && file.size <= MAX_FILE_BYTES;
 }
 
 function SubmissionModal({ caseRow, onClose, onSubmitted }) {
@@ -57,11 +57,11 @@ function SubmissionModal({ caseRow, onClose, onSubmitted }) {
   const [error, setError] = useState('');
 
   function chooseSettlement(file) {
-    if (!validFile(file)) { setError('Choose a PDF or DOCX settlement agreement that is 20 MB or smaller.'); return; }
+    if (!validFile(file)) { setError('Choose a PDF, DOC, or DOCX settlement agreement that is 20 MB or smaller.'); return; }
     setSettlementAgreement(file); setError('');
   }
   function chooseDisclosure(file) {
-    if (file && !validFile(file)) { setError('Choose a PDF or DOCX credit disclosure that is 20 MB or smaller.'); return; }
+    if (file && !validFile(file)) { setError('Choose a PDF, DOC, or DOCX credit disclosure that is 20 MB or smaller.'); return; }
     setCreditDisclosure(file || null); setError('');
   }
   async function submit() {
@@ -86,12 +86,12 @@ function SubmissionModal({ caseRow, onClose, onSubmitted }) {
           <div>
             <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Settlement agreement <span className="text-red-600">*</span></label>
             {settlementAgreement ? <SelectedFile file={settlementAgreement} onClear={() => { setSettlementAgreement(null); if (settlementInputRef.current) settlementInputRef.current.value = ''; }} /> : <UploadBox label="Drop settlement agreement here or browse" onClick={() => settlementInputRef.current?.click()} onDrop={chooseSettlement} />}
-            <input ref={settlementInputRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={(event) => chooseSettlement(event.target.files?.[0])} />
+            <input ref={settlementInputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={(event) => chooseSettlement(event.target.files?.[0])} />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Credit disclosure <span className="normal-case font-medium text-slate-400">(optional)</span></label>
             {creditDisclosure ? <SelectedFile file={creditDisclosure} onClear={() => { setCreditDisclosure(null); if (disclosureInputRef.current) disclosureInputRef.current.value = ''; }} /> : <UploadBox label="Drop credit disclosure here or browse" onClick={() => disclosureInputRef.current?.click()} onDrop={chooseDisclosure} />}
-            <input ref={disclosureInputRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={(event) => chooseDisclosure(event.target.files?.[0])} />
+            <input ref={disclosureInputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={(event) => chooseDisclosure(event.target.files?.[0])} />
           </div>
           <div className="grid gap-4 md:grid-cols-2"><div><label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Settlement amount <span className="normal-case font-medium text-slate-400">(optional)</span></label><input value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} placeholder="$0.00" className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100" /></div><div><label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">Notes for reviewer <span className="normal-case font-medium text-slate-400">(optional)</span></label><textarea value={attorneyNotes} onChange={(event) => setAttorneyNotes(event.target.value)} rows={2} maxLength={5000} placeholder="Anything the reviewer should check..." className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100" /></div></div>
           {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertCircle className="mr-1 inline h-4 w-4" /> {error}</div>}
@@ -103,7 +103,7 @@ function SubmissionModal({ caseRow, onClose, onSubmitted }) {
 }
 
 function UploadBox({ label, onClick, onDrop }) {
-  return <div onClick={onClick} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); onDrop(event.dataTransfer?.files?.[0]); }} className="cursor-pointer rounded-xl border-2 border-dashed border-slate-300 px-5 py-6 text-center transition hover:border-primary-400 hover:bg-primary-50/40"><Upload className="mx-auto h-6 w-6 text-slate-400" /><p className="mt-2 text-sm font-semibold text-slate-700">{label}</p><p className="mt-1 text-xs text-slate-500">PDF or DOCX · Maximum 20 MB</p></div>;
+  return <div onClick={onClick} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); onDrop(event.dataTransfer?.files?.[0]); }} className="cursor-pointer rounded-xl border-2 border-dashed border-slate-300 px-5 py-6 text-center transition hover:border-primary-400 hover:bg-primary-50/40"><Upload className="mx-auto h-6 w-6 text-slate-400" /><p className="mt-2 text-sm font-semibold text-slate-700">{label}</p><p className="mt-1 text-xs text-slate-500">PDF or Word · Maximum 20 MB</p></div>;
 }
 function SelectedFile({ file, onClear }) {
   return <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3.5"><FileText className="h-5 w-5 shrink-0 text-emerald-700" /><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-emerald-950">{file.name}</p><p className="mt-0.5 text-xs text-emerald-700">{(file.size / 1024).toFixed(0)} KB · Ready to submit</p></div><button type="button" onClick={onClear} className="rounded-lg p-1 text-emerald-700 hover:bg-emerald-100"><X className="h-4 w-4" /></button></div>;

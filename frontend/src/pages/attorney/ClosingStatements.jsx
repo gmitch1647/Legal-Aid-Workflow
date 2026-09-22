@@ -644,8 +644,8 @@ export default function ClosingStatements() {
             <p className="text-sm font-medium text-slate-700">Settlement document</p>
             <label className={`mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-2.5 text-sm font-medium transition ${selectedCaseId ? 'border-primary-300 bg-primary-50 text-primary-700 hover:bg-primary-100' : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'}`}>
               {uploading || loadingSavedSettlement ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              {uploading ? 'Uploading and reading settlement…' : loadingSavedSettlement ? 'Checking this case for a saved settlement…' : settlement ? `Replace ${settlement.file_name}` : 'Choose PDF, DOCX, or TXT settlement'}
-              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" disabled={!selectedCaseId || uploading || loadingSavedSettlement} onChange={handleSettlementUpload} className="sr-only" />
+              {uploading ? 'Uploading and reading settlement…' : loadingSavedSettlement ? 'Checking this case for a saved settlement…' : settlement ? `Replace ${settlement.file_name}` : 'Choose PDF, DOC, DOCX, or TXT settlement'}
+              <input ref={fileInputRef} type="file" accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" disabled={!selectedCaseId || uploading || loadingSavedSettlement} onChange={handleSettlementUpload} className="sr-only" />
             </label>
           </div>
         </div>

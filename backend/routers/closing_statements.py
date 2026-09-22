@@ -22,7 +22,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from utils.closing_statement_renderer import ClosingStatementData, render_closing_statement
-from utils.document_reader import _read_docx, _read_pdf, _read_txt
+from utils.document_reader import _read_doc, _read_docx, _read_pdf, _read_txt
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ STORAGE_BUCKET = "documents"
 MAX_SETTLEMENT_BYTES = 20 * 1024 * 1024
 SUPPORTED_SETTLEMENT_TYPES = {
     "pdf", "application/pdf",
+    "doc", "application/msword",
     "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "txt", "text", "text/plain",
 }
@@ -213,11 +214,13 @@ def _read_settlement_upload(content: bytes, file_type: str, filename: str) -> st
         return _read_pdf(content)
     if normalized in ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
         return _read_docx(content)
+    if normalized in ("doc", "application/msword"):
+        return _read_doc(content)
     if normalized in ("txt", "text", "text/plain"):
         return _read_txt(content)
     raise HTTPException(
         status_code=400,
-        detail="Upload the settlement as a PDF, DOCX, or TXT file so LegalFlow can read it.",
+        detail="Upload the settlement as a PDF, DOC, DOCX, or TXT file so LegalFlow can read it.",
     )
 
 
@@ -423,7 +426,7 @@ def _attach_settlement_signing_source(case: dict, profile: dict, signing_session
     if file_type not in SUPPORTED_SETTLEMENT_TYPES:
         raise HTTPException(
             status_code=400,
-            detail="The settlement agreement must be a PDF or DOCX before it can be used for a closing statement.",
+            detail="The settlement agreement must be a PDF, DOC, DOCX, or TXT file before it can be used for a closing statement.",
         )
 
     try:
@@ -506,7 +509,7 @@ async def upload_and_extract_settlement(
     file_name = _safe_filename(file.filename or "settlement", "settlement")
     file_type = _normalized_file_type(file.content_type, file_name)
     if file_type not in SUPPORTED_SETTLEMENT_TYPES:
-        raise HTTPException(status_code=400, detail="Upload the settlement as a PDF, DOCX, or TXT file.")
+        raise HTTPException(status_code=400, detail="Upload the settlement as a PDF, DOC, DOCX, or TXT file.")
 
     try:
         text = _read_settlement_upload(content, file_type, file_name)

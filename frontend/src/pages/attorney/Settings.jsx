@@ -1772,11 +1772,11 @@ function KnowledgeBaseTab() {
           {/* Upload */}
           <div className="flex items-center gap-3">
             <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition">
-              <input type="file" accept=".pdf,.docx,.txt" multiple onChange={handleUploadCaseLaw} className="hidden" />
+              <input type="file" accept=".pdf,.doc,.docx,.txt" multiple onChange={handleUploadCaseLaw} className="hidden" />
               {uploading ? (
                 <span className="text-sm text-blue-600"><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Uploading & indexing...</span>
               ) : (
-                <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload files — select multiple (.pdf, .docx, .txt)</span>
+                <span className="text-sm text-slate-600"><Upload className="w-4 h-4 inline mr-1" /> Upload files — select multiple (.pdf, .doc, .docx, .txt)</span>
               )}
             </label>
             <button onClick={async () => { try { const r = await reprocessAllCaseLaw(); alert(`Reprocessing ${r.count} entries`); setTimeout(() => loadData(), 3000); } catch(e) { alert('Failed: ' + e.message); } }}

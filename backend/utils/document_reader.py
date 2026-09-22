@@ -1,14 +1,17 @@
 """
 Document reader utility.
 
-Downloads a file from the Supabase Storage ``documents`` bucket and
-extracts its text content.  Supports PDF, DOCX, plain-text, and basic
-image placeholder handling.
+Downloads a file from the Supabase Storage ``documents`` bucket and extracts
+its text content. Supports PDF, modern and legacy Word documents, plain text,
+and basic image placeholder handling.
 """
 
 import io
 import logging
-from typing import Optional
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 from PyPDF2 import PdfReader
 from docx import Document as DocxDocument
@@ -18,6 +21,9 @@ from utils.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 STORAGE_BUCKET = "documents"
+DOC_MIME_TYPE = "application/msword"
+DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+OLE_COMPOUND_FILE_HEADER = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def _read_pdf(data: bytes) -> str:
@@ -39,6 +45,52 @@ def _read_docx(data: bytes) -> str:
         if para.text.strip():
             paragraphs.append(para.text)
     return "\n\n".join(paragraphs)
+
+
+def _read_doc(data: bytes) -> str:
+    """Extract legacy ``.doc`` text through LibreOffice's headless converter.
+
+    Legacy Word documents use the OLE compound-file format, which
+    ``python-docx`` does not support. The source bytes and the temporary DOCX
+    derivative are removed immediately after extraction; only the user's
+    original document remains in LegalFlow storage.
+    """
+    if not data.startswith(OLE_COMPOUND_FILE_HEADER):
+        raise ValueError("The DOC upload is not a valid legacy Word document.")
+
+    office_binary = shutil.which("libreoffice") or shutil.which("soffice")
+    if not office_binary:
+        raise RuntimeError("LibreOffice is unavailable for legacy Word document processing.")
+
+    with tempfile.TemporaryDirectory(prefix="legalflow-read-doc-") as temporary_directory:
+        workdir = Path(temporary_directory)
+        source_path = workdir / "source.doc"
+        source_path.write_bytes(data)
+        office_profile = (workdir / "office-profile").as_uri()
+        completed = subprocess.run(
+            [
+                office_binary,
+                f"-env:UserInstallation={office_profile}",
+                "--headless",
+                "--nologo",
+                "--nodefault",
+                "--nofirststartwizard",
+                "--convert-to",
+                "docx",
+                "--outdir",
+                str(workdir),
+                str(source_path),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+        converted_path = workdir / "source.docx"
+        if completed.returncode != 0 or not converted_path.exists():
+            detail = (completed.stderr or completed.stdout or b"").decode("utf-8", errors="ignore").strip()
+            logger.warning("LibreOffice could not convert a legacy Word document: %s", detail[:500])
+            raise ValueError("The legacy Word document could not be read.")
+        return _read_docx(converted_path.read_bytes())
 
 
 def _read_txt(data: bytes) -> str:
@@ -84,31 +136,43 @@ def _read_image_with_vision(data: bytes, ext: str, storage_path: str) -> str:
     )
 
     extracted = response.content[0].text.strip()
-    logger.info(f"Vision extracted {len(extracted)} chars from {storage_path}")
+    logger.info("Vision extracted %s chars from %s", len(extracted), storage_path)
     return extracted
 
 
-def read_document(storage_path: str, file_type: str) -> str:
-    """Download a file from Supabase Storage and return its text content.
+def extract_document_text(data: bytes, file_type: str, storage_path: str = "uploaded-document") -> str:
+    """Return readable text from document bytes.
 
-    Parameters
-    ----------
-    storage_path:
-        Path within the ``documents`` bucket (e.g. ``cases/<id>/file.pdf``).
-    file_type:
-        MIME type **or** file extension (e.g. ``application/pdf``, ``pdf``).
-
-    Returns
-    -------
-    str
-        Extracted text, or a placeholder message for unsupported types.
+    ``file_type`` may be a MIME type or a lower-case extension. This shared
+    helper ensures legacy Word documents work consistently wherever LegalFlow
+    must inspect a file, including closing statements, drafting, and case-law
+    indexing.
     """
+    file_kind = str(file_type or "").lower().strip()
+    if file_kind in ("pdf", "application/pdf"):
+        return _read_pdf(data)
+    if file_kind in ("docx", DOCX_MIME_TYPE):
+        return _read_docx(data)
+    if file_kind in ("doc", DOC_MIME_TYPE):
+        return _read_doc(data)
+    if file_kind in ("txt", "text/plain", "text", "csv", "text/csv"):
+        return _read_txt(data)
+
+    extension = file_kind.split("/")[-1] if "/" in file_kind else file_kind
+    if extension in _IMAGE_EXTENSIONS:
+        try:
+            return _read_image_with_vision(data, extension, storage_path)
+        except Exception as exc:
+            logger.warning("Vision extraction failed for %s: %s", storage_path, exc)
+            return f"[Image file: {storage_path}. Could not extract text automatically.]"
+
+    logger.warning("Unrecognised file type '%s' for %s – attempting plain-text decode.", file_type, storage_path)
+    return _read_txt(data)
+
+
+def read_document(storage_path: str, file_type: str) -> str:
+    """Download a file from Supabase Storage and return its text content."""
     supabase = get_supabase()
-
-    # Normalise file_type to a simple lowercase extension-style string
-    ft = file_type.lower().strip()
-
-    # Download file bytes from storage
     try:
         response = supabase.storage.from_(STORAGE_BUCKET).download(storage_path)
         if response is None:
@@ -119,29 +183,4 @@ def read_document(storage_path: str, file_type: str) -> str:
         logger.exception("Failed to download %s from bucket '%s'", storage_path, STORAGE_BUCKET)
         raise
 
-    # Route to the appropriate reader
-    if ft in ("pdf", "application/pdf"):
-        return _read_pdf(data)
-
-    if ft in ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
-        return _read_docx(data)
-
-    if ft in ("txt", "text/plain", "text", "csv", "text/csv"):
-        return _read_txt(data)
-
-    # Check for image types — use Claude Vision to extract text
-    ext = ft.split("/")[-1] if "/" in ft else ft
-    if ext in _IMAGE_EXTENSIONS:
-        try:
-            return _read_image_with_vision(data, ext, storage_path)
-        except Exception as e:
-            logger.warning(f"Vision extraction failed for {storage_path}: {e}")
-            return f"[Image file: {storage_path}. Could not extract text automatically.]"
-
-    # Fallback – attempt plain-text decode
-    logger.warning(
-        "Unrecognised file type '%s' for %s – attempting plain-text decode.",
-        file_type,
-        storage_path,
-    )
-    return _read_txt(data)
+    return extract_document_text(data, file_type, storage_path)

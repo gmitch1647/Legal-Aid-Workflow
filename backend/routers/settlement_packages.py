@@ -20,7 +20,7 @@ router = APIRouter()
 
 STORAGE_BUCKET = "documents"
 MAX_FILE_BYTES = 20 * 1024 * 1024
-ALLOWED_SUFFIXES = {".pdf", ".docx"}
+ALLOWED_SUFFIXES = {".pdf", ".doc", ".docx"}
 
 
 def _now() -> str:
@@ -89,7 +89,7 @@ def _validate_attachment(content: bytes, filename: str) -> None:
         raise HTTPException(status_code=400, detail=f"{filename} exceeds the 20 MB limit.")
     suffix = os.path.splitext(filename)[1].lower()
     if suffix not in ALLOWED_SUFFIXES:
-        raise HTTPException(status_code=400, detail="Settlement package documents must be PDF or DOCX files.")
+        raise HTTPException(status_code=400, detail="Settlement package documents must be PDF, DOC, or DOCX files.")
 
 
 def _event(supabase, package_id: str, event_type: str, actor_id: str, comment: str = "") -> None:
