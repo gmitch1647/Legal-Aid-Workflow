@@ -5,7 +5,10 @@ import { createSigningSession, getCase } from '../../lib/api';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 const DOCUMENT_TYPES = [
-  { value: 'settlement', label: 'Additional Settlement Agreement' },
+  // Additional documents may be informational agreements that do not contain
+  // a pre-drawn By/Date execution block. Keep them distinct from the primary
+  // settlement agreement, which must always use its native execution fields.
+  { value: 'additional_settlement', label: 'Additional Settlement Agreement' },
   { value: 'retainer', label: 'Retainer Agreement' },
   { value: 'engagement_letter', label: 'Engagement Letter' },
   { value: 'authorization', label: 'Authorization Form' },

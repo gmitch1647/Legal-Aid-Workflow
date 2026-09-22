@@ -45,6 +45,8 @@ OLE_COMPOUND_FILE_HEADER = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 VIEW_ONLY_DOCUMENT_TYPES = {"credit_disclosure"}
 OISE_ENGAGEMENT_DOCUMENT_TYPE = "oise_engagement_agreement"
 OISE_ENGAGEMENT_ATTORNEY_NAME = "Esther Oise"
+STRICT_SETTLEMENT_DOCUMENT_TYPES = {"settlement", "settlement_agreement"}
+ADDITIONAL_SETTLEMENT_DOCUMENT_TYPE = "additional_settlement"
 OISE_ENGAGEMENT_TEMPLATE_PATH = (
     Path(__file__).resolve().parents[1]
     / "assets"
@@ -68,6 +70,30 @@ def _is_view_only_document(document_type: str | None) -> bool:
     # Direct route tests may use FastAPI's Form default instead of a submitted
     # string. Treat every non-string value as a normal signature document.
     return isinstance(document_type, str) and document_type.strip().lower() in VIEW_ONLY_DOCUMENT_TYPES
+
+
+def _uses_supplemental_signature_certificate(document_type: str | None, title: str | None) -> bool:
+    """Return whether a signer certificate is appropriate for an added document.
+
+    The primary settlement agreement is never allowed to fall back from its
+    native client By/Date execution line. Additional settlement documents are
+    different: many attorney-provided amendments and notices contain no drawn
+    signature field. Those documents receive a dedicated certificate page so a
+    signer can complete them without placing a mark over the source document.
+
+    The title condition keeps existing additional-document requests, sent before
+    the distinct document type was introduced, signable without changing their
+    source file or their audit record.
+    """
+    normalized_type = str(document_type or "").strip().lower()
+    normalized_title = " ".join(str(title or "").split()).lower()
+    return (
+        normalized_type == ADDITIONAL_SETTLEMENT_DOCUMENT_TYPE
+        or (
+            normalized_type in STRICT_SETTLEMENT_DOCUMENT_TYPES
+            and normalized_title.startswith("additional settlement")
+        )
+    )
 
 
 def _form_text(value: object, fallback: str) -> str:
@@ -1283,6 +1309,7 @@ async def complete_signing(token: str, request: Request):
             typed_name,
             session["signer_name"],
             document_type=session.get("document_type"),
+            document_title=session.get("title"),
             return_placement=True,
         )
     except ValueError as exc:
@@ -2009,19 +2036,107 @@ def _fallback_placement(page) -> dict:
     }
 
 
+def _supplemental_signature_certificate_placement(doc, document_title: str | None) -> dict:
+    """Append a detached signature certificate for a supplemental agreement.
+
+    This intentionally creates a new page instead of overlaying a footer on the
+    uploaded source. It preserves an attorney's document byte-for-byte as the
+    source attachment while creating a clear, printable signing artifact when
+    the supplemental document has no native execution field.
+    """
+    import fitz  # PyMuPDF
+
+    page = doc.new_page(width=612, height=792)
+    page_rect = page.rect
+    margin = 72
+    title = " ".join(str(document_title or "Additional Document").split())[:220]
+    page.draw_rect(
+        fitz.Rect(margin, 62, page_rect.width - margin, 702),
+        color=(0.65, 0.69, 0.75),
+        width=0.8,
+    )
+    page.insert_text(
+        fitz.Point(margin + 24, 108),
+        "LEGALFLOW ELECTRONIC SIGNATURE CERTIFICATE",
+        fontsize=14,
+        fontname="hebo",
+        color=(0.05, 0.16, 0.36),
+    )
+    page.insert_text(
+        fitz.Point(margin + 24, 146),
+        "This certificate is attached to the supplemental document identified below.",
+        fontsize=10,
+        fontname="helv",
+        color=(0.12, 0.12, 0.12),
+    )
+    page.insert_text(
+        fitz.Point(margin + 24, 186),
+        "Document:",
+        fontsize=10,
+        fontname="hebo",
+        color=(0.12, 0.12, 0.12),
+    )
+    remaining = page.insert_textbox(
+        fitz.Rect(margin + 82, 170, page_rect.width - margin - 24, 220),
+        title,
+        fontsize=10,
+        fontname="helv",
+        color=(0.12, 0.12, 0.12),
+        lineheight=1.2,
+    )
+    if remaining < 0:
+        page.insert_text(
+            fitz.Point(margin + 82, 186),
+            "Additional Document",
+            fontsize=10,
+            fontname="helv",
+            color=(0.12, 0.12, 0.12),
+        )
+    page.insert_text(
+        fitz.Point(margin + 24, 270),
+        "By signing below, I confirm that I reviewed this supplemental document and agree",
+        fontsize=10,
+        fontname="helv",
+        color=(0.12, 0.12, 0.12),
+    )
+    page.insert_text(
+        fitz.Point(margin + 24, 286),
+        "to sign it electronically. This certificate is part of the signed document record.",
+        fontsize=10,
+        fontname="helv",
+        color=(0.12, 0.12, 0.12),
+    )
+    page.insert_text(
+        fitz.Point(margin + 24, 408),
+        "Electronic signature",
+        fontsize=10,
+        fontname="hebo",
+        color=(0.12, 0.12, 0.12),
+    )
+    return {
+        "strategy": "supplemental_signature_certificate",
+        "page": page.number,
+        "signature_rect": [margin + 20, 420, page_rect.width - margin - 20, 486],
+        "date_origin": [margin + 24, 588],
+        "certificate_title": title,
+    }
+
+
 def _embed_signature(
     pdf_bytes: bytes,
     sig_image_bytes: bytes,
     typed_name: str,
     signer_name: str,
     document_type: Optional[str] = None,
+    document_title: Optional[str] = None,
     return_placement: bool = False,
 ):
     """Embed a signature in detected execution fields, with a safe visual fallback.
 
-    Settlement agreements require a real client execution line. They never use
-    the legacy footer fallback because that would create a misleading signed
-    artifact on the wrong part of the agreement.
+    Primary settlement agreements require a real client execution line. They
+    never use the legacy footer fallback because that would create a misleading
+    signed artifact on the wrong part of the agreement. Supplemental settlement
+    documents without fields receive a separate signature-certificate page.
     """
     import fitz  # PyMuPDF
 
@@ -2030,13 +2145,17 @@ def _embed_signature(
     display_name = typed_name or signer_name
     placement = _execution_block_placement(doc)
     if placement is None:
-        if str(document_type or "").lower() in ("settlement", "settlement_agreement"):
+        if _uses_supplemental_signature_certificate(document_type, document_title):
+            placement = _supplemental_signature_certificate_placement(doc, document_title)
+            logger.info("No execution block detected; adding supplemental signature certificate page")
+        elif str(document_type or "").lower() in STRICT_SETTLEMENT_DOCUMENT_TYPES:
             raise ValueError(
                 "LegalFlow could not locate the client By/Date execution line in this settlement agreement. "
                 "The agreement was not signed; ask the attorney to review the document layout before trying again."
             )
-        placement = _fallback_placement(doc[-1])
-        logger.info("No execution block detected; using last-page fallback placement")
+        else:
+            placement = _fallback_placement(doc[-1])
+            logger.info("No execution block detected; using last-page fallback placement")
     else:
         logger.info(
             "Detected client execution block on page %s at %s",
@@ -2050,6 +2169,14 @@ def _embed_signature(
     date_x, date_y = placement["date_origin"]
     date_label_rect = fitz.Rect(placement.get("date_label_rect", [date_x, date_y - 10, date_x + 1, date_y]))
     date_style = _nearby_text_style(date_page, date_label_rect)
+    if placement["strategy"] == "supplemental_signature_certificate":
+        page.insert_text(
+            fitz.Point(sig_rect.x0, sig_rect.y1 + 27),
+            f"Signer: {display_name}",
+            fontsize=10,
+            fontname="helv",
+            color=(0.12, 0.12, 0.12),
+        )
     fitted_signature_bytes, rendered_sig_rect = _fit_signature_image(sig_image_bytes, sig_rect)
     placement["rendered_signature_rect"] = [
         round(rendered_sig_rect.x0, 2), round(rendered_sig_rect.y0, 2),
@@ -2069,7 +2196,28 @@ def _embed_signature(
             color=(0, 0, 0),
         )
 
-    if placement["strategy"] != "fallback_last_page":
+    if placement["strategy"] == "supplemental_signature_certificate":
+        page.draw_line(
+            fitz.Point(sig_rect.x0, sig_rect.y1 + 7),
+            fitz.Point(sig_rect.x1, sig_rect.y1 + 7),
+            color=(0.25, 0.25, 0.25),
+            width=0.5,
+        )
+        page.insert_text(
+            fitz.Point(date_x, date_y),
+            f"Signed electronically on: {date_str}",
+            fontsize=10,
+            fontname="helv",
+            color=(0.12, 0.12, 0.12),
+        )
+        page.insert_text(
+            fitz.Point(sig_rect.x0, date_y + 34),
+            "Electronic signature completed through LegalFlow.",
+            fontsize=8,
+            fontname="helv",
+            color=(0.35, 0.35, 0.35),
+        )
+    elif placement["strategy"] != "fallback_last_page":
         date_page.insert_text(
             fitz.Point(date_x, date_y),
             date_str,

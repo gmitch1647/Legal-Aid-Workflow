@@ -34,6 +34,7 @@ DEFAULT_ESIGN_PREFERENCES: dict[str, Any] = {
 DOCUMENT_TYPE_LABELS = {
     "settlement": "Settlement Agreement",
     "settlement_agreement": "Settlement Agreement",
+    "additional_settlement": "Additional Settlement Agreement",
     "closing_statement": "Closing Statement",
     "w9": "Form W-9",
     "credit_disclosure": "Credit Disclosure",

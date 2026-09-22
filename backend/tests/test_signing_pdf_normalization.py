@@ -470,6 +470,53 @@ class SigningPdfNormalizationTests(unittest.TestCase):
                 return_placement=True,
             )
 
+    def test_additional_settlement_without_execution_line_receives_certificate_page(self):
+        document = fitz.open()
+        document.new_page(width=612, height=792).insert_text(
+            (72, 160), "Additional settlement notice for client review", fontsize=12
+        )
+        source_pdf = document.tobytes()
+        document.close()
+
+        signed_pdf, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            "Keshaun Wiggins",
+            "Keshaun Wiggins",
+            document_type="additional_settlement",
+            document_title="Additional Settlement Agreement — Keshaun Wiggins Transunion",
+            return_placement=True,
+        )
+
+        self.assertTrue(signed_pdf.startswith(b"%PDF"))
+        self.assertEqual(placement["strategy"], "supplemental_signature_certificate")
+        self.assertEqual(placement["page"], 1)
+        signed_document = fitz.open(stream=signed_pdf, filetype="pdf")
+        self.assertEqual(len(signed_document), 2)
+        certificate_text = signed_document[1].get_text()
+        signed_document.close()
+        self.assertIn("LEGALFLOW ELECTRONIC SIGNATURE CERTIFICATE", certificate_text)
+        self.assertIn("Signed electronically on", certificate_text)
+
+    def test_existing_additional_settlement_title_receives_certificate_without_data_migration(self):
+        document = fitz.open()
+        document.new_page(width=612, height=792).insert_text((72, 160), "Supplemental agreement", fontsize=12)
+        source_pdf = document.tobytes()
+        document.close()
+
+        _, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            "Keshaun Wiggins",
+            "Keshaun Wiggins",
+            # Existing additional documents used the old settlement type.
+            document_type="settlement",
+            document_title="Additional Settlement Agreement — Keshaun Wiggins Transunion",
+            return_placement=True,
+        )
+
+        self.assertEqual(placement["strategy"], "supplemental_signature_certificate")
+
     def test_vertical_plaintiff_settlement_uses_signature_and_date_lines(self):
         document = fitz.open()
         page = document.new_page(width=612, height=792)
