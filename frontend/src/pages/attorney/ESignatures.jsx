@@ -9,7 +9,7 @@ import {
 import {
   getEsignConfig, getEsignTemplates, sendSignatureRequest,
   sendDocumentForSignature, createSigningSession, testSigningStorage,
-  deleteSigningSession,
+  deleteSigningSession, createCorrectedSigningRequest,
   getGroupedSignatureDashboard, getSignatureRequest, remindSigner,
   cancelSignatureRequest, downloadOriginalAttachment, downloadSignedDocument, getCases,
   sendOiseEngagementContract, notifyW9Signer, getAllPayoutInformationRequests, getAttorneys, sendCompletedSettlementPackage,
@@ -377,6 +377,19 @@ export default function ESignatures() {
                 }
               }}
               onDownload={(document) => handleDownload(document.id)}
+              onCorrectSignature={async (document) => {
+                const name = document.signer_name || 'the client';
+                if (!window.confirm(`Send ${name} a new corrected signature request? The existing signed record will remain unchanged, and ${name} must sign the replacement agreement.`)) return;
+                try {
+                  const result = await createCorrectedSigningRequest(document.id);
+                  setPayoutNotice(result?.reused
+                    ? `A corrected signature request is already active for ${name}.`
+                    : `Corrected signature request sent to ${result?.signer_email || name}. The original signed record remains preserved.`);
+                  loadData();
+                } catch (err) {
+                  alert('Could not send the corrected signature request: ' + (err.message || 'Please try again.'));
+                }
+              }}
               onSendToAttorney={() => openAttorneyDelivery(group)}
               onRequestPayout={() => {
                 if (!group.case?.id) return;
@@ -591,7 +604,7 @@ function BankingFormsTab({ requests, loading, onRefresh, onOpenCase }) {
   </section>;
 }
 
-function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onSendToAttorney, onRequestPayout, onDelete }) {
+function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload, onCorrectSignature, onSendToAttorney, onRequestPayout, onDelete }) {
   const counts = group.document_counts || {};
   const clientName = group.client?.name || 'Unassigned client';
   const caseLabel = group.case?.label || 'Unassigned case';
@@ -637,6 +650,7 @@ function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload
               onOpen={onOpen}
               onView={onView}
               onDownload={onDownload}
+              onCorrectSignature={onCorrectSignature}
               onDelete={onDelete}
             />
           ))}
@@ -646,12 +660,14 @@ function ClientCaseGroup({ group, expanded, onToggle, onOpen, onView, onDownload
   );
 }
 
-function SignatureDocumentRow({ document, onOpen, onView, onDownload, onDelete }) {
+function SignatureDocumentRow({ document, onOpen, onView, onDownload, onCorrectSignature, onDelete }) {
   const status = documentStatus(document.status);
   const StatusIcon = status.icon;
   const isPending = PENDING_STATUSES.has(document.status);
   const isW9 = document.secure_only || document.provider === 'legalflow_w9';
   const isViewOnly = Boolean(document.review_only) || document.document_type === 'credit_disclosure';
+  const isSettlement = ['settlement', 'settlement_agreement', 'additional_settlement'].includes(document.document_type)
+    || String(document.title || '').toLowerCase().startsWith('additional settlement');
   const date = formattedDate(document.signed_at || document.sent_at || document.created_at);
 
   function openFromKeyboard(event) {
@@ -688,6 +704,12 @@ function SignatureDocumentRow({ document, onOpen, onView, onDownload, onDelete }
           <button type="button" onClick={() => onDownload(document)}
             className="rounded-lg p-2 text-blue-500 hover:bg-blue-50 hover:text-blue-700" title="Download signed PDF">
             <Download className="h-4 w-4" />
+          </button>
+        )}
+        {document.has_signed_document && document.provider === 'legalflow' && isSettlement && (
+          <button type="button" onClick={() => onCorrectSignature(document)}
+            className="rounded-lg p-2 text-amber-600 hover:bg-amber-50 hover:text-amber-800" title="Send corrected signature request">
+            <RefreshCw className="h-4 w-4" />
           </button>
         )}
         {document.provider === 'legalflow' && (

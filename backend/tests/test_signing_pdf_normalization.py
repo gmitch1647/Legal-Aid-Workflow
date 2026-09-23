@@ -267,6 +267,56 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(supabase.bucket.uploads, [])
         self.assertEqual(supabase.queries["signing_sessions"].insert_payloads, [])
 
+    def test_corrected_settlement_request_copies_source_and_preserves_completed_record(self):
+        source_id = "0f7c75a1-b44d-4d6c-9c85-dc6dfe62591a"
+        source_path = f"signing/{source_id}/source_Keshaun_Transunion_Agreement.pdf"
+        source_bytes = b"%PDF-1.7\nsource-agreement"
+        source_session = {
+            "id": source_id,
+            "token": "completed-token",
+            "title": "Additional Settlement Agreement — Keshaun Wiggins Transunion",
+            "document_type": "settlement",
+            "original_path": source_path,
+            "signed_path": f"signing/{source_id}/signed_Keshaun_Transunion_Agreement.pdf",
+            "signer_name": "Keshaun Wiggins",
+            "signer_email": "keshaun@example.test",
+            "case_id": "case-1",
+            "client_id": "client-1",
+            "sent_by": "attorney-1",
+            "status": "signed",
+        }
+        supabase = _FakeSigningSupabase(
+            downloads={source_path: source_bytes},
+            table_rows={"signing_sessions": [source_session]},
+        )
+
+        with patch.dict(os.environ, {"FRONTEND_URL": "https://legalflow.example"}), patch.object(
+            signing, "get_supabase", return_value=supabase
+        ), patch.object(signing, "_get_current_user", _attorney_user), patch(
+            "utils.email_service.send_email", new=AsyncMock(return_value=True)
+        ) as send_email, patch.object(signing, "notify_attorney_of_esign_event", new=AsyncMock()):
+            result = asyncio.run(
+                signing.create_corrected_signing_request(
+                    signing.CorrectedSigningRequest(source_session_id=source_id, confirmed=True),
+                    authorization="Bearer token",
+                )
+            )
+
+        self.assertFalse(result["reused"])
+        self.assertEqual(result["source_session_id"], source_id)
+        self.assertEqual(result["signer_email"], "keshaun@example.test")
+        self.assertNotEqual(result["session_id"], source_id)
+        self.assertIn("/sign/", result["signing_url"])
+        copied_attachment = supabase.bucket.uploads[0]
+        self.assertEqual(copied_attachment["file"], source_bytes)
+        self.assertNotEqual(copied_attachment["path"], source_path)
+        replacement_record = supabase.queries["signing_sessions"].insert_payloads[0]
+        self.assertEqual(replacement_record["document_type"], "additional_settlement")
+        self.assertEqual(replacement_record["status"], "awaiting_signature")
+        self.assertEqual(source_session["status"], "signed")
+        self.assertEqual(source_session["signed_path"], f"signing/{source_id}/signed_Keshaun_Transunion_Agreement.pdf")
+        send_email.assert_awaited_once()
+
     def test_docx_session_generates_separate_pdf_without_mutating_source_path(self):
         source_path = "signing/session-123/source_agreement.docx"
         derivative_path = "signing/session-123/signing_agreement.pdf"
@@ -470,11 +520,31 @@ class SigningPdfNormalizationTests(unittest.TestCase):
                 return_placement=True,
             )
 
-    def test_additional_settlement_without_execution_line_receives_certificate_page(self):
+    def test_additional_settlement_without_execution_line_is_not_signed_on_a_separate_page(self):
         document = fitz.open()
         document.new_page(width=612, height=792).insert_text(
             (72, 160), "Additional settlement notice for client review", fontsize=12
         )
+        source_pdf = document.tobytes()
+        document.close()
+
+        with self.assertRaisesRegex(ValueError, "verifiable client signature line"):
+            signing._embed_signature(
+                source_pdf,
+                self._signature_png(),
+                "Keshaun Wiggins",
+                "Keshaun Wiggins",
+                document_type="additional_settlement",
+                document_title="Additional Settlement Agreement — Keshaun Wiggins Transunion",
+                return_placement=True,
+            )
+
+    def test_named_signer_execution_line_is_used_when_by_label_is_absent(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((72, 500), "AGREED AND ACCEPTED", fontsize=11)
+        page.insert_text((72, 605), "Keshaun Wiggins", fontsize=11)
+        page.insert_text((72, 660), "Date", fontsize=11)
         source_pdf = document.tobytes()
         document.close()
 
@@ -489,33 +559,11 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         )
 
         self.assertTrue(signed_pdf.startswith(b"%PDF"))
-        self.assertEqual(placement["strategy"], "supplemental_signature_certificate")
-        self.assertEqual(placement["page"], 1)
-        signed_document = fitz.open(stream=signed_pdf, filetype="pdf")
-        self.assertEqual(len(signed_document), 2)
-        certificate_text = signed_document[1].get_text()
-        signed_document.close()
-        self.assertIn("LEGALFLOW ELECTRONIC SIGNATURE CERTIFICATE", certificate_text)
-        self.assertIn("Signed electronically on", certificate_text)
-
-    def test_existing_additional_settlement_title_receives_certificate_without_data_migration(self):
-        document = fitz.open()
-        document.new_page(width=612, height=792).insert_text((72, 160), "Supplemental agreement", fontsize=12)
-        source_pdf = document.tobytes()
-        document.close()
-
-        _, placement = signing._embed_signature(
-            source_pdf,
-            self._signature_png(),
-            "Keshaun Wiggins",
-            "Keshaun Wiggins",
-            # Existing additional documents used the old settlement type.
-            document_type="settlement",
-            document_title="Additional Settlement Agreement — Keshaun Wiggins Transunion",
-            return_placement=True,
-        )
-
-        self.assertEqual(placement["strategy"], "supplemental_signature_certificate")
+        self.assertEqual(placement["strategy"], "named_signer_execution_block")
+        self.assertEqual(placement["page"], 0)
+        self.assertGreater(placement["signature_rect"][1], 550)
+        self.assertLess(placement["signature_rect"][3], 605)
+        self.assertLess(placement["date_origin"][1], 660)
 
     def test_vertical_plaintiff_settlement_uses_signature_and_date_lines(self):
         document = fitz.open()

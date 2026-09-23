@@ -66,6 +66,13 @@ class EngagementContractSendRequest(BaseModel):
     confirmed: bool = False
 
 
+class CorrectedSigningRequest(BaseModel):
+    """Create one replacement request without altering a completed source record."""
+
+    source_session_id: str
+    confirmed: bool = False
+
+
 def _is_view_only_document(document_type: str | None) -> bool:
     # Direct route tests may use FastAPI's Form default instead of a submitted
     # string. Treat every non-string value as a normal signature document.
@@ -73,17 +80,12 @@ def _is_view_only_document(document_type: str | None) -> bool:
 
 
 def _uses_supplemental_signature_certificate(document_type: str | None, title: str | None) -> bool:
-    """Return whether a signer certificate is appropriate for an added document.
+    """Identify additional settlement documents needing native-line validation.
 
-    The primary settlement agreement is never allowed to fall back from its
-    native client By/Date execution line. Additional settlement documents are
-    different: many attorney-provided amendments and notices contain no drawn
-    signature field. Those documents receive a dedicated certificate page so a
-    signer can complete them without placing a mark over the source document.
-
-    The title condition keeps existing additional-document requests, sent before
-    the distinct document type was introduced, signable without changing their
-    source file or their audit record.
+    Both primary and additional settlement documents must use a native client
+    execution line. The title condition keeps existing additional-document
+    requests, created before the distinct document type was introduced, covered
+    by the same no-fallback safeguard.
     """
     normalized_type = str(document_type or "").strip().lower()
     normalized_title = " ".join(str(title or "").split()).lower()
@@ -908,6 +910,206 @@ async def create_signing_session(
 
 
 # ---------------------------------------------------------------------------
+# POST /corrected-signature — create a replacement settlement signing request
+# ---------------------------------------------------------------------------
+
+@router.post("/corrected-signature")
+async def create_corrected_signing_request(
+    body: CorrectedSigningRequest,
+    authorization: str = Header(default=None),
+):
+    """Send a new settlement signature request while preserving the prior record.
+
+    Completed agreements are immutable audit artifacts.  A correction therefore
+    clones the original *source attachment* into a new session and asks the
+    signer to execute that replacement.  The new copy has its own storage path,
+    token, status, and eventual signed PDF; it can never overwrite the source
+    session's original or completed document.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    if not body.confirmed:
+        raise HTTPException(status_code=400, detail="Confirm the corrected signature request before emailing the signer.")
+
+    supabase = get_supabase()
+    source_response = (
+        supabase.table("signing_sessions")
+        .select("*")
+        .eq("id", body.source_session_id)
+        .eq("sent_by", profile["id"])
+        .limit(1)
+        .execute()
+    )
+    if not source_response.data:
+        raise HTTPException(status_code=404, detail="The original signing record was not found.")
+    source = source_response.data[0]
+    if source.get("status") not in {"signed", "complete"}:
+        raise HTTPException(status_code=409, detail="Only a completed signing record can be replaced for a signature correction.")
+    if not source.get("original_path"):
+        raise HTTPException(status_code=409, detail="The original source attachment is unavailable for a corrected request.")
+    if not source.get("signer_email"):
+        raise HTTPException(status_code=409, detail="The signer email is missing from the original request.")
+
+    document_type = str(source.get("document_type") or "").strip().lower()
+    if document_type not in STRICT_SETTLEMENT_DOCUMENT_TYPES and not _uses_supplemental_signature_certificate(
+        document_type, source.get("title")
+    ):
+        raise HTTPException(status_code=400, detail="Only settlement agreements can use the corrected-signature workflow.")
+    if _uses_supplemental_signature_certificate(document_type, source.get("title")):
+        document_type = ADDITIONAL_SETTLEMENT_DOCUMENT_TYPE
+
+    # Determinism prevents a browser retry from creating two replacement
+    # requests for the same completed source record.
+    replacement_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"legalflow:corrected-signature:{source['id']}"))
+    existing_response = (
+        supabase.table("signing_sessions")
+        .select("id,token,status,original_path")
+        .eq("id", replacement_id)
+        .eq("sent_by", profile["id"])
+        .limit(1)
+        .execute()
+    )
+    if existing_response.data:
+        existing = existing_response.data[0]
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+        return {
+            "session_id": existing["id"],
+            "source_session_id": source["id"],
+            "signing_url": f"{frontend_url}/sign/{existing['token']}",
+            "status": existing.get("status") or "awaiting_signature",
+            "signer_email": source["signer_email"],
+            "reused": True,
+            "message": "A corrected signature request is already active. The original signed record remains unchanged.",
+        }
+
+    try:
+        original_bytes = supabase.storage.from_(STORAGE_BUCKET).download(source["original_path"])
+    except Exception as exc:
+        logger.exception("Could not retrieve source attachment for corrected signing request %s", source["id"])
+        raise HTTPException(status_code=500, detail="Could not retrieve the original agreement for correction.") from exc
+    if not original_bytes:
+        raise HTTPException(status_code=500, detail="The original agreement is empty or unavailable for correction.")
+
+    source_filename = _safe_filename(
+        Path(str(source["original_path"])).name.removeprefix("source_").removeprefix("original_")
+    )
+    replacement_path = f"signing/{replacement_id}/source_{source_filename}"
+    suffix = Path(source_filename).suffix.lower()
+    content_type = (
+        DOCX_MIME_TYPE if suffix == ".docx" else DOC_MIME_TYPE if suffix == ".doc" else "application/pdf"
+    )
+    try:
+        supabase.storage.from_(STORAGE_BUCKET).upload(
+            path=replacement_path,
+            file=original_bytes,
+            file_options={"content-type": content_type},
+        )
+    except Exception as exc:
+        logger.exception("Could not copy source attachment for corrected signing request %s", source["id"])
+        raise HTTPException(status_code=500, detail="Could not prepare the corrected agreement.") from exc
+
+    now = datetime.now(timezone.utc).isoformat()
+    token = _generate_token()
+    source_title = " ".join(str(source.get("title") or "Settlement Agreement").split())
+    corrected_title = f"{source_title} — Corrected Signature"
+    message = (
+        "A correction is required before this agreement can be finalized. "
+        "Please review the agreement and complete the replacement signature request. "
+        "LegalFlow will record your signature on the agreement's designated execution line."
+    )
+    record = {
+        "id": replacement_id,
+        "token": token,
+        "title": corrected_title,
+        "document_type": document_type,
+        "original_path": replacement_path,
+        "signer_name": source.get("signer_name") or "Client",
+        "signer_email": source["signer_email"],
+        "case_id": source.get("case_id"),
+        "client_id": source.get("client_id"),
+        "sent_by": profile["id"],
+        "notification_recipient_id": profile["id"],
+        "notification_recipient_email": profile.get("email", ""),
+        "attorney_name": profile.get("full_name", ""),
+        "message": message,
+        "status": "awaiting_signature",
+        "created_at": now,
+    }
+    try:
+        supabase.table("signing_sessions").insert(record).execute()
+    except Exception as exc:
+        try:
+            supabase.storage.from_(STORAGE_BUCKET).remove([replacement_path])
+        except Exception:
+            logger.warning("Could not clean up copied source attachment %s", replacement_path)
+        logger.exception("Could not create corrected signing session for %s", source["id"])
+        raise HTTPException(status_code=500, detail="Could not create the corrected signature request.") from exc
+
+    try:
+        supabase.table("signature_requests").insert({
+            "id": replacement_id,
+            "title": corrected_title,
+            "document_type": document_type,
+            "signer_name": record["signer_name"],
+            "signer_email": record["signer_email"],
+            "case_id": record["case_id"],
+            "client_id": record["client_id"],
+            "sent_by": profile["id"],
+            "notification_recipient_id": profile["id"],
+            "notification_recipient_email": profile.get("email", ""),
+            "status": "awaiting_signature",
+            "sent_at": now,
+            "created_at": now,
+        }).execute()
+    except Exception:
+        logger.warning("Could not mirror corrected signing session %s in signature_requests", replacement_id)
+
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    signing_url = f"{frontend_url}/sign/{token}"
+    from html import escape
+    from utils.email_service import get_last_email_error, send_email
+    delivered = await send_email(
+        to=record["signer_email"],
+        subject=f"Correction Required: Signature Required — {corrected_title}",
+        body=f"""
+        <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;">
+          <h2 style="color:#1e40af;">Corrected Signature Required</h2>
+          <p>Hello {escape(str(record['signer_name']))},</p>
+          <p>{escape(message)}</p>
+          <p><strong>Document:</strong> {escape(corrected_title)}</p>
+          <p><strong>From:</strong> {escape(str(profile.get('full_name') or 'Your Attorney'))}</p>
+          <p><a href="{signing_url}" style="background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">Review &amp; Sign Corrected Agreement</a></p>
+          <p style="font-size:12px;color:#64748b;">This is a replacement signature request. Do not forward this secure link.</p>
+        </div>
+        """,
+        idempotency_key=f"corrected-signature:{replacement_id}",
+    )
+    if not delivered:
+        detail = get_last_email_error() or "The email provider did not accept the message."
+        raise HTTPException(status_code=502, detail=f"The corrected agreement was prepared but could not be emailed: {detail}")
+
+    try:
+        await notify_attorney_of_esign_event(
+            supabase=supabase,
+            record=record,
+            event="sent",
+            source_table="signing_sessions",
+        )
+    except Exception:
+        logger.exception("Could not send corrected-signature notification for %s", replacement_id)
+
+    return {
+        "session_id": replacement_id,
+        "source_session_id": source["id"],
+        "signing_url": signing_url,
+        "status": "awaiting_signature",
+        "signer_email": record["signer_email"],
+        "reused": False,
+        "message": "The corrected agreement was sent. The original signed record remains unchanged for audit purposes.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /engagement-contract/send — confirmed Oise Law pipeline automation
 # ---------------------------------------------------------------------------
 
@@ -1691,7 +1893,7 @@ def _execution_label_rects(page, label: str):
     return matches
 
 
-def _execution_block_placement(doc) -> Optional[dict]:
+def _execution_block_placement(doc, signer_name: str | None = None) -> Optional[dict]:
     """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
 
     The detector chooses the leftmost paired fields on the execution page. It
@@ -1846,6 +2048,55 @@ def _execution_block_placement(doc) -> Optional[dict]:
                 round(date_rect.x1, 2), round(date_rect.y1, 2),
             ],
         }
+    # Some agreements place the printed client name beneath a blank execution
+    # line rather than using a literal ``By:`` label.  When that name is paired
+    # with a nearby Date line, the blank band immediately above it is the native
+    # client execution line.  The reverse page order prevents a case-caption
+    # reference on an earlier page from winning over the final signature block.
+    normalized_signer_name = " ".join(str(signer_name or "").split())
+    if normalized_signer_name:
+        for page in reversed(doc):
+            page_rect = page.rect
+            minimum_execution_y = max(72.0, page_rect.height * 0.40)
+            signer_rects = [
+                rect for rect in _execution_label_rects(page, normalized_signer_name)
+                if rect.y0 >= minimum_execution_y
+            ]
+            date_labels = [
+                rect for rect in _execution_label_rects(page, "Date")
+                if rect.y0 >= minimum_execution_y
+            ]
+            for signer_rect in signer_rects:
+                matching_dates = [
+                    date_rect for date_rect in date_labels
+                    if date_rect.y0 > signer_rect.y1 + 18
+                    and date_rect.y0 - signer_rect.y0 <= 180
+                    and abs(date_rect.x0 - signer_rect.x0) <= 90
+                ]
+                if not matching_dates:
+                    continue
+                date_rect = min(matching_dates, key=lambda rect: rect.y0)
+                field_left = max(36.0, signer_rect.x0 - 8)
+                field_right = min(max(signer_rect.x1 + 80, field_left + 150), page_rect.width - 54)
+                signature_bottom = signer_rect.y0 - 3.0
+                signature_top = max(signer_rect.y0 - 34.0, 36.0)
+                if field_right - field_left < 80 or signature_bottom - signature_top < 14:
+                    continue
+                return {
+                    "strategy": "named_signer_execution_block",
+                    "layout": "vertical_named_signer",
+                    "page": page.number,
+                    "signature_rect": [
+                        round(field_left, 2), round(signature_top, 2),
+                        round(field_right, 2), round(signature_bottom, 2),
+                    ],
+                    "date_origin": [round(field_left + 2, 2), round(date_rect.y0 - 3.0, 2)],
+                    "date_label_rect": [
+                        round(date_rect.x0, 2), round(date_rect.y0, 2),
+                        round(date_rect.x1, 2), round(date_rect.y1, 2),
+                    ],
+                }
+
     # Some settlements use a vertical plaintiff execution block instead of a
     # horizontal By:/Date: row. The plaintiff label sits above a blank signature
     # line and printed client name, followed by a separate blank line labelled
@@ -2133,21 +2384,22 @@ def _embed_signature(
 ):
     """Embed a signature in detected execution fields, with a safe visual fallback.
 
-    Primary settlement agreements require a real client execution line. They
-    never use the legacy footer fallback because that would create a misleading
-    signed artifact on the wrong part of the agreement. Supplemental settlement
-    documents without fields receive a separate signature-certificate page.
+    Settlement agreements require a real client execution line. They never use
+    a detached certificate or legacy footer fallback because either would create
+    a misleading signed artifact outside the agreement's native execution area.
     """
     import fitz  # PyMuPDF
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     date_str = datetime.now(timezone.utc).strftime("%m/%d/%Y")
     display_name = typed_name or signer_name
-    placement = _execution_block_placement(doc)
+    placement = _execution_block_placement(doc, signer_name=signer_name)
     if placement is None:
         if _uses_supplemental_signature_certificate(document_type, document_title):
-            placement = _supplemental_signature_certificate_placement(doc, document_title)
-            logger.info("No execution block detected; adding supplemental signature certificate page")
+            raise ValueError(
+                "LegalFlow could not locate a verifiable client signature line in this additional settlement document. "
+                "The document was not signed; ask the attorney to review the execution page before trying again."
+            )
         elif str(document_type or "").lower() in STRICT_SETTLEMENT_DOCUMENT_TYPES:
             raise ValueError(
                 "LegalFlow could not locate the client By/Date execution line in this settlement agreement. "
@@ -2169,14 +2421,6 @@ def _embed_signature(
     date_x, date_y = placement["date_origin"]
     date_label_rect = fitz.Rect(placement.get("date_label_rect", [date_x, date_y - 10, date_x + 1, date_y]))
     date_style = _nearby_text_style(date_page, date_label_rect)
-    if placement["strategy"] == "supplemental_signature_certificate":
-        page.insert_text(
-            fitz.Point(sig_rect.x0, sig_rect.y1 + 27),
-            f"Signer: {display_name}",
-            fontsize=10,
-            fontname="helv",
-            color=(0.12, 0.12, 0.12),
-        )
     fitted_signature_bytes, rendered_sig_rect = _fit_signature_image(sig_image_bytes, sig_rect)
     placement["rendered_signature_rect"] = [
         round(rendered_sig_rect.x0, 2), round(rendered_sig_rect.y0, 2),
@@ -2196,28 +2440,7 @@ def _embed_signature(
             color=(0, 0, 0),
         )
 
-    if placement["strategy"] == "supplemental_signature_certificate":
-        page.draw_line(
-            fitz.Point(sig_rect.x0, sig_rect.y1 + 7),
-            fitz.Point(sig_rect.x1, sig_rect.y1 + 7),
-            color=(0.25, 0.25, 0.25),
-            width=0.5,
-        )
-        page.insert_text(
-            fitz.Point(date_x, date_y),
-            f"Signed electronically on: {date_str}",
-            fontsize=10,
-            fontname="helv",
-            color=(0.12, 0.12, 0.12),
-        )
-        page.insert_text(
-            fitz.Point(sig_rect.x0, date_y + 34),
-            "Electronic signature completed through LegalFlow.",
-            fontsize=8,
-            fontname="helv",
-            color=(0.35, 0.35, 0.35),
-        )
-    elif placement["strategy"] != "fallback_last_page":
+    if placement["strategy"] != "fallback_last_page":
         date_page.insert_text(
             fitz.Point(date_x, date_y),
             date_str,

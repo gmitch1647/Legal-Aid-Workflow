@@ -1495,6 +1495,13 @@ export async function createSigningSession(formData) {
   return response.json();
 }
 
+export async function createCorrectedSigningRequest(sourceSessionId) {
+  return request('/signing/corrected-signature', {
+    method: 'POST',
+    body: JSON.stringify({ source_session_id: sourceSessionId, confirmed: true }),
+  });
+}
+
 export async function sendDocumentForSignature(formData) {
   const token = await getAccessToken();
   const response = await fetch(`${BASE_URL}/esign/send-document`, {
