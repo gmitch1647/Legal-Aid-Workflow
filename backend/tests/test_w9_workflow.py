@@ -47,6 +47,48 @@ class _FakeOwnedW9Supabase:
         return self.query
 
 
+class _FakeW9CaseOptionsQuery:
+    def __init__(self, data):
+        self.data = data
+        self.filters = []
+        self.selected_fields = ""
+
+    def select(self, fields):
+        self.selected_fields = fields
+        return self
+
+    def eq(self, field, value):
+        self.filters.append((field, value))
+        return self
+
+    def in_(self, field, values):
+        self.filters.append((field, list(values)))
+        return self
+
+    def limit(self, _count):
+        return self
+
+    def order(self, _field, desc=False):
+        self.order_by = (_field, desc)
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self.data)
+
+
+class _FakeW9CaseOptionsSupabase:
+    def __init__(self, cases, clients):
+        self.case_query = _FakeW9CaseOptionsQuery(cases)
+        self.client_query = _FakeW9CaseOptionsQuery(clients)
+
+    def table(self, table_name):
+        if table_name == "cases":
+            return self.case_query
+        if table_name == "profiles":
+            return self.client_query
+        raise AssertionError(f"Unexpected table: {table_name}")
+
+
 class W9WorkflowTests(unittest.TestCase):
     def _submission(self, **overrides):
         values = {
@@ -377,6 +419,40 @@ class W9WorkflowTests(unittest.TestCase):
         self.assertIn(("sent_by", "attorney-1"), supabase.query.filters)
         self.assertIn(("case_id", "case-1"), supabase.query.filters)
         self.assertEqual(supabase.query.order_by, ("created_at", True))
+
+    def test_w9_case_options_use_compact_case_and_client_queries(self):
+        supabase = _FakeW9CaseOptionsSupabase(
+            cases=[{
+                "id": "case-1",
+                "client_id": "client-1",
+                "case_number": "LF-100",
+                "plaintiff_name": "Case Plaintiff",
+            }],
+            clients=[{
+                "id": "client-1",
+                "full_name": "Profile Client",
+                "email": "client@example.com",
+            }],
+        )
+        profile = {"id": "attorney-1", "role": "attorney"}
+
+        with patch.object(w9, "get_supabase", return_value=supabase):
+            with patch.object(w9, "_get_current_user", new=AsyncMock(return_value=profile)):
+                rows = asyncio.run(w9.list_w9_case_options())
+
+        self.assertEqual(rows, [{
+            "id": "case-1",
+            "client_id": "client-1",
+            "case_number": "LF-100",
+            "client_name": "Case Plaintiff",
+            "client_email": "client@example.com",
+        }])
+        self.assertEqual(
+            supabase.case_query.selected_fields,
+            "id,client_id,case_number,plaintiff_name,created_at",
+        )
+        self.assertEqual(supabase.client_query.selected_fields, "id,full_name,email")
+        self.assertEqual(supabase.case_query.order_by, ("created_at", True))
 
     def test_service_role_w9_lookup_hides_other_attorney_record(self):
         supabase = _FakeOwnedW9Supabase([])

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
@@ -20,9 +20,9 @@ import {
   createCorrectedW9SignatureRequest,
   createW9Request,
   downloadCompletedW9,
-  getCases,
   getW9Request,
   inspectW9Prefill,
+  listW9CaseOptions,
   listW9Requests,
   notifyW9Signer,
 } from '../../lib/api';
@@ -94,6 +94,9 @@ export default function W9Requests() {
   const [requests, setRequests] = useState([]);
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [caseOptionsLoading, setCaseOptionsLoading] = useState(false);
+  const [caseOptionsLoaded, setCaseOptionsLoaded] = useState(false);
+  const [caseOptionsError, setCaseOptionsError] = useState('');
   const [sending, setSending] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
@@ -105,6 +108,7 @@ export default function W9Requests() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [openedFromSettlement, setOpenedFromSettlement] = useState(false);
   const [openedRequestedRecord, setOpenedRequestedRecord] = useState(false);
+  const caseOptionsRequest = useRef(null);
 
   const requestCounts = useMemo(() => ({
     pending: requests.filter((request) => request.status === 'awaiting_submission').length,
@@ -115,9 +119,8 @@ export default function W9Requests() {
     setLoading(true);
     setError('');
     try {
-      const [requestRows, caseRows] = await Promise.all([listW9Requests(), getCases()]);
+      const requestRows = await listW9Requests();
       setRequests(Array.isArray(requestRows) ? requestRows : requestRows?.data || []);
-      setCases(Array.isArray(caseRows) ? caseRows : caseRows?.cases || caseRows?.data || []);
     } catch (err) {
       setError(err.message || 'Unable to load W-9 requests.');
     } finally {
@@ -128,13 +131,17 @@ export default function W9Requests() {
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
-    if (!settlementCaseId || openedFromSettlement || cases.length === 0) return;
+    if (!settlementCaseId || openedFromSettlement) return;
+    if (!caseOptionsLoaded) {
+      void loadCaseOptions();
+      return;
+    }
     const matchingCase = cases.find((item) => String(item.id) === String(settlementCaseId));
     if (!matchingCase) return;
     setOpenedFromSettlement(true);
     setShowComposer(true);
     chooseCase(String(matchingCase.id));
-  }, [settlementCaseId, openedFromSettlement, cases]);
+  }, [settlementCaseId, openedFromSettlement, caseOptionsLoaded, cases]);
 
   useEffect(() => {
     if (!requestedRecordId || openedRequestedRecord || loading) return;
@@ -154,6 +161,32 @@ export default function W9Requests() {
     setForm(blankRequest);
     setDetectedPrefill(null);
     setShowComposer(true);
+    void loadCaseOptions();
+  }
+
+  async function loadCaseOptions() {
+    if (caseOptionsLoaded) return cases;
+    if (caseOptionsRequest.current) return caseOptionsRequest.current;
+
+    setCaseOptionsLoading(true);
+    setCaseOptionsError('');
+    const request = listW9CaseOptions()
+      .then((caseRows) => {
+        const options = Array.isArray(caseRows) ? caseRows : caseRows?.data || [];
+        setCases(options);
+        setCaseOptionsLoaded(true);
+        return options;
+      })
+      .catch((err) => {
+        setCaseOptionsError(err.message || 'Unable to load the case selector. You can still send a W-9 without linking a case.');
+        return [];
+      })
+      .finally(() => {
+        caseOptionsRequest.current = null;
+        setCaseOptionsLoading(false);
+      });
+    caseOptionsRequest.current = request;
+    return request;
   }
 
   async function chooseCase(caseId) {
@@ -330,10 +363,12 @@ export default function W9Requests() {
           <form onSubmit={sendRequest} className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
             <label className="block md:col-span-2">
               <span className="block text-sm font-semibold text-slate-700">Related case <span className="font-normal text-slate-400">(optional)</span></span>
-              <select value={form.case_id} onChange={(event) => chooseCase(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5">
+              <select value={form.case_id} onChange={(event) => chooseCase(event.target.value)} disabled={caseOptionsLoading} className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 disabled:cursor-wait disabled:bg-slate-50">
                 <option value="">No linked case</option>
                 {cases.map((caseItem) => <option key={caseItem.id} value={caseItem.id}>{caseItem.case_number ? `${caseItem.case_number} — ` : ''}{caseItem.client_name || caseItem.title || caseItem.id}</option>)}
               </select>
+              {caseOptionsLoading && <p className="mt-1.5 text-xs text-slate-500">Loading case selector…</p>}
+              {caseOptionsError && <div className="mt-2 flex items-center justify-between gap-3 text-xs text-amber-800"><span>{caseOptionsError}</span><button type="button" onClick={() => loadCaseOptions()} className="shrink-0 font-semibold text-blue-700 hover:text-blue-800">Retry</button></div>}
             </label>
 
             <label className="block">

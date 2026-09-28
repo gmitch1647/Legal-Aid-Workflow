@@ -1596,6 +1596,10 @@ export async function listW9Requests(caseId = null) {
   return request(`/w9/attorney/requests${query ? `?${query}` : ''}`);
 }
 
+export async function listW9CaseOptions() {
+  return request('/w9/attorney/case-options');
+}
+
 export async function getW9Request(id) {
   return request(`/w9/attorney/requests/${id}`);
 }

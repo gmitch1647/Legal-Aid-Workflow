@@ -1114,6 +1114,63 @@ async def list_w9_requests(
     return response.data or []
 
 
+@router.get("/attorney/case-options")
+async def list_w9_case_options(authorization: str = Header(default=None)):
+    """Return only the compact case metadata needed by the W-9 composer.
+
+    The W-9 Center must not wait for the Case Pipeline's full board payload.
+    That endpoint enriches each case with referral and defendant information,
+    which is unnecessary for selecting a W-9 recipient and can delay the
+    request list from rendering on large workspaces.
+    """
+    profile = await _get_current_user(authorization)
+    _require_attorney(profile)
+    supabase = get_supabase()
+
+    query = supabase.table("cases").select(
+        "id,client_id,case_number,plaintiff_name,created_at"
+    )
+    if profile.get("role") == "staff_attorney":
+        assigned_clients = (
+            supabase.table("profiles")
+            .select("id")
+            .eq("assigned_attorney_id", profile["id"])
+            .eq("role", "client")
+            .execute()
+        )
+        client_ids = [str(row["id"]) for row in (assigned_clients.data or []) if row.get("id")]
+        if not client_ids:
+            return []
+        query = query.in_("client_id", client_ids)
+
+    case_rows = query.order("created_at", desc=True).limit(500).execute().data or []
+    client_ids = list({str(case["client_id"]) for case in case_rows if case.get("client_id")})
+    clients_by_id: dict[str, dict] = {}
+    if client_ids:
+        client_rows = (
+            supabase.table("profiles")
+            .select("id,full_name,email")
+            .in_("id", client_ids)
+            .execute()
+        ).data or []
+        clients_by_id = {str(row["id"]): row for row in client_rows if row.get("id")}
+
+    return [
+        {
+            "id": case.get("id"),
+            "client_id": case.get("client_id"),
+            "case_number": case.get("case_number"),
+            "client_name": (
+                case.get("plaintiff_name")
+                or (clients_by_id.get(str(case.get("client_id"))) or {}).get("full_name")
+                or "Unknown Client"
+            ),
+            "client_email": (clients_by_id.get(str(case.get("client_id"))) or {}).get("email") or "",
+        }
+        for case in case_rows
+    ]
+
+
 @router.post("/attorney/requests/{request_id}/notify")
 async def notify_w9_signer(request_id: str, authorization: str = Header(default=None)):
     """Send a fresh notification for an existing pending W-9 request."""
