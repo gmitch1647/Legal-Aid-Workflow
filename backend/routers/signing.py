@@ -82,10 +82,11 @@ def _is_view_only_document(document_type: str | None) -> bool:
 def _uses_supplemental_signature_certificate(document_type: str | None, title: str | None) -> bool:
     """Identify additional settlement documents needing native-line validation.
 
-    Both primary and additional settlement documents must use a native client
-    execution line. The title condition keeps existing additional-document
-    requests, created before the distinct document type was introduced, covered
-    by the same no-fallback safeguard.
+    Additional settlement documents may be sent as a supplemental attachment
+    without a printed execution line.  When that happens LegalFlow must append
+    its explicit certificate page rather than placing a signature in an
+    arbitrary footer.  The generic ``Document — <signer>`` title covers legacy
+    supplemental requests created before the distinct document type was added.
     """
     normalized_type = str(document_type or "").strip().lower()
     normalized_title = " ".join(str(title or "").split()).lower()
@@ -93,7 +94,11 @@ def _uses_supplemental_signature_certificate(document_type: str | None, title: s
         normalized_type == ADDITIONAL_SETTLEMENT_DOCUMENT_TYPE
         or (
             normalized_type in STRICT_SETTLEMENT_DOCUMENT_TYPES
-            and normalized_title.startswith("additional settlement")
+            and (
+                normalized_title.startswith("additional settlement")
+                or normalized_title.startswith("document —")
+                or normalized_title.startswith("document -")
+            )
         )
     )
 
@@ -2300,7 +2305,11 @@ def _supplemental_signature_certificate_placement(doc, document_title: str | Non
     page = doc.new_page(width=612, height=792)
     page_rect = page.rect
     margin = 72
-    title = " ".join(str(document_title or "Additional Document").split())[:220]
+    title = (
+        " ".join(str(document_title or "Additional Document").split())
+        .replace("—", "-")
+        .replace("–", "-")
+    )[:220]
     page.draw_rect(
         fitz.Rect(margin, 62, page_rect.width - margin, 702),
         color=(0.65, 0.69, 0.75),
@@ -2384,9 +2393,9 @@ def _embed_signature(
 ):
     """Embed a signature in detected execution fields, with a safe visual fallback.
 
-    Settlement agreements require a real client execution line. They never use
-    a detached certificate or legacy footer fallback because either would create
-    a misleading signed artifact outside the agreement's native execution area.
+    Primary settlement agreements require a real client execution line. A
+    supplemental attachment that has no such line receives a clearly labeled
+    certificate page; neither type ever uses the ambiguous footer fallback.
     """
     import fitz  # PyMuPDF
 
@@ -2396,10 +2405,8 @@ def _embed_signature(
     placement = _execution_block_placement(doc, signer_name=signer_name)
     if placement is None:
         if _uses_supplemental_signature_certificate(document_type, document_title):
-            raise ValueError(
-                "LegalFlow could not locate a verifiable client signature line in this additional settlement document. "
-                "The document was not signed; ask the attorney to review the execution page before trying again."
-            )
+            placement = _supplemental_signature_certificate_placement(doc, document_title)
+            logger.info("No native supplemental execution line found; appending certificate page")
         elif str(document_type or "").lower() in STRICT_SETTLEMENT_DOCUMENT_TYPES:
             raise ValueError(
                 "LegalFlow could not locate the client By/Date execution line in this settlement agreement. "

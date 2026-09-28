@@ -520,7 +520,7 @@ class SigningPdfNormalizationTests(unittest.TestCase):
                 return_placement=True,
             )
 
-    def test_additional_settlement_without_execution_line_is_not_signed_on_a_separate_page(self):
+    def test_additional_settlement_without_execution_line_uses_explicit_certificate_page(self):
         document = fitz.open()
         document.new_page(width=612, height=792).insert_text(
             (72, 160), "Additional settlement notice for client review", fontsize=12
@@ -528,16 +528,47 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         source_pdf = document.tobytes()
         document.close()
 
-        with self.assertRaisesRegex(ValueError, "verifiable client signature line"):
-            signing._embed_signature(
-                source_pdf,
-                self._signature_png(),
-                "Keshaun Wiggins",
-                "Keshaun Wiggins",
-                document_type="additional_settlement",
-                document_title="Additional Settlement Agreement — Keshaun Wiggins Transunion",
-                return_placement=True,
-            )
+        signed_pdf, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            "Keshaun Wiggins",
+            "Keshaun Wiggins",
+            document_type="additional_settlement",
+            document_title="Additional Settlement Agreement — Keshaun Wiggins Transunion",
+            return_placement=True,
+        )
+
+        self.assertEqual(placement["strategy"], "supplemental_signature_certificate")
+        signed_document = fitz.open(stream=signed_pdf, filetype="pdf")
+        self.assertEqual(len(signed_document), 2)
+        certificate_text = signed_document[1].get_text()
+        signed_document.close()
+        self.assertIn("LEGALFLOW ELECTRONIC SIGNATURE CERTIFICATE", certificate_text)
+        self.assertIn("Additional Settlement Agreement", certificate_text)
+
+    def test_legacy_generic_supplemental_document_without_execution_line_uses_certificate(self):
+        document = fitz.open()
+        document.new_page(width=612, height=792).insert_text(
+            (72, 160), "Supplemental notice for client review", fontsize=12
+        )
+        source_pdf = document.tobytes()
+        document.close()
+
+        signed_pdf, placement = signing._embed_signature(
+            source_pdf,
+            self._signature_png(),
+            "Keshaun Wiggins",
+            "Keshaun Wiggins",
+            document_type="settlement",
+            document_title="Document — Keshaun Wiggins",
+            return_placement=True,
+        )
+
+        self.assertEqual(placement["strategy"], "supplemental_signature_certificate")
+        signed_document = fitz.open(stream=signed_pdf, filetype="pdf")
+        self.assertEqual(len(signed_document), 2)
+        self.assertIn("Document - Keshaun Wiggins", signed_document[1].get_text())
+        signed_document.close()
 
     def test_named_signer_execution_line_is_used_when_by_label_is_absent(self):
         document = fitz.open()
