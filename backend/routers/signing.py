@@ -2053,12 +2053,87 @@ def _execution_block_placement(doc, signer_name: str | None = None) -> Optional[
                 round(date_rect.x1, 2), round(date_rect.y1, 2),
             ],
         }
+
+    # Some filed settlement agreements use the plaintiff's printed name below a
+    # horizontal signature line, followed immediately by a separate ``Dated:``
+    # line. They intentionally do not include a ``By:`` label. This appears near
+    # the top of the final execution page when an agreement is followed by an
+    # attorney approval block and exhibits, so it must be considered before the
+    # lower-page named-signer layouts below.
+    #
+    # Require a real horizontal line directly above the printed signer name.
+    # Matching the name and Dated label alone would be too weak: a client name
+    # can also appear in a caption or recital. The visible line makes this a
+    # verifiable native execution field instead of an inferred blank area.
+    normalized_signer_name = " ".join(str(signer_name or "").split())
+    if normalized_signer_name:
+        for page in reversed(doc):
+            page_rect = page.rect
+            signer_rects = _execution_label_rects(page, normalized_signer_name)
+            dated_labels = _execution_label_rects(page, "Dated:")
+            if not signer_rects or not dated_labels:
+                continue
+
+            execution_lines = []
+            try:
+                for drawing in page.get_drawings():
+                    line_rect = drawing.get("rect")
+                    if not line_rect or line_rect.width < 100:
+                        continue
+                    # A stroked horizontal line and a very thin filled rule are
+                    # both represented as drawings by different PDF producers.
+                    if line_rect.height <= 2.5:
+                        execution_lines.append(line_rect)
+            except Exception as exc:
+                logger.warning("Could not inspect printed signature lines: %s", exc)
+
+            for signer_rect in signer_rects:
+                matching_dates = [
+                    date_rect for date_rect in dated_labels
+                    if date_rect.y0 >= signer_rect.y1 + 3
+                    and date_rect.y0 - signer_rect.y0 <= 72
+                    and abs(date_rect.x0 - signer_rect.x0) <= 42
+                ]
+                if not matching_dates:
+                    continue
+                date_rect = min(matching_dates, key=lambda rect: rect.y0)
+
+                matching_lines = [
+                    line_rect for line_rect in execution_lines
+                    if signer_rect.y0 - 24 <= line_rect.y1 <= signer_rect.y0 + 3
+                    and line_rect.x0 <= signer_rect.x0 + 20
+                    and line_rect.x1 >= signer_rect.x1 + 55
+                ]
+                if not matching_lines:
+                    continue
+                line_rect = max(matching_lines, key=lambda rect: rect.y1)
+
+                field_left = max(36.0, line_rect.x0 + 6.0)
+                field_right = min(line_rect.x1 - 6.0, page_rect.width - 36.0)
+                signature_bottom = min(line_rect.y0 - 2.0, signer_rect.y0 - 3.0)
+                signature_top = max(signature_bottom - 30.0, 36.0)
+                if field_right - field_left < 100 or signature_bottom - signature_top < 14:
+                    continue
+                return {
+                    "strategy": "printed_signer_dated_execution_line",
+                    "layout": "printed_name_dated",
+                    "page": page.number,
+                    "signature_rect": [
+                        round(field_left, 2), round(signature_top, 2),
+                        round(field_right, 2), round(signature_bottom, 2),
+                    ],
+                    "date_origin": [round(date_rect.x1 + 5.0, 2), round(date_rect.y1 - 2.0, 2)],
+                    "date_label_rect": [
+                        round(date_rect.x0, 2), round(date_rect.y0, 2),
+                        round(date_rect.x1, 2), round(date_rect.y1, 2),
+                    ],
+                }
+
     # Some agreements place the printed client name beneath a blank execution
     # line rather than using a literal ``By:`` label.  When that name is paired
     # with a nearby Date line, the blank band immediately above it is the native
     # client execution line.  The reverse page order prevents a case-caption
     # reference on an earlier page from winning over the final signature block.
-    normalized_signer_name = " ".join(str(signer_name or "").split())
     if normalized_signer_name:
         for page in reversed(doc):
             page_rect = page.rect

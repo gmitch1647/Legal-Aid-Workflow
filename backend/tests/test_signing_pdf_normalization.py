@@ -570,6 +570,41 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertIn("Document - Keshaun Wiggins", signed_document[1].get_text())
         signed_document.close()
 
+    def test_printed_signer_name_and_dated_line_use_native_agreement_execution_line(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        # Matches the filed-agreement layout: a horizontal client signature line,
+        # the printed client name beneath it, and then a Dated: entry line.
+        page.draw_line((286.5, 108.4), (541.4, 108.4), color=(0, 0, 0), width=0.5)
+        page.insert_text((288, 123.3), "KESHAUN WIGGINS", fontsize=13, fontname="tibo")
+        page.insert_text((288, 147.3), "Dated:____________________________________", fontsize=13, fontname="tibo")
+        page.insert_text((72, 245), "APPROVED AS TO FORM:", fontsize=13, fontname="tibo")
+        source_pdf = document.tobytes()
+        document.close()
+
+        signed_pdf, placement = signing._embed_signature(
+            source_pdf,
+            self._wide_signature_png(),
+            "Keshaun Wiggins",
+            "Keshaun Wiggins",
+            document_type="settlement",
+            document_title="Confidential Settlement and Release Agreement",
+            return_placement=True,
+        )
+
+        self.assertEqual(placement["strategy"], "printed_signer_dated_execution_line")
+        self.assertEqual(placement["layout"], "printed_name_dated")
+        self.assertEqual(placement["page"], 0)
+        self.assertGreater(placement["signature_rect"][0], 286)
+        self.assertLess(placement["signature_rect"][2], 542)
+        self.assertLess(placement["signature_rect"][3], 108.4)
+        self.assertGreater(placement["date_origin"][0], 322)
+        self.assertLess(placement["date_origin"][1], 151)
+        signed_document = fitz.open(stream=signed_pdf, filetype="pdf")
+        self.assertEqual(len(signed_document), 1)
+        self.assertIn(datetime.now(timezone.utc).strftime("%m/%d/%Y"), signed_document[0].get_text())
+        signed_document.close()
+
     def test_named_signer_execution_line_is_used_when_by_label_is_absent(self):
         document = fitz.open()
         page = document.new_page(width=612, height=792)
