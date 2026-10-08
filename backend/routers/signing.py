@@ -17,8 +17,10 @@ Flow:
 
 import base64
 import io
+import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import tempfile
@@ -106,6 +108,47 @@ def _uses_supplemental_signature_certificate(document_type: str | None, title: s
 def _form_text(value: object, fallback: str) -> str:
     """Return submitted form text, falling back safely for FastAPI defaults."""
     return value.strip() if isinstance(value, str) and value.strip() else fallback
+
+
+def _normalized_person_name(value: object) -> str:
+    """Normalize a client name for a conservative identity comparison."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _submitted_case_contact(case: dict) -> tuple[str, str]:
+    """Return the submitted client name/email embedded in an imported matter.
+
+    External imports can store structured JSON while ordinary LegalFlow intake
+    uses labeled facts.  This helper reads only the client contact values needed
+    to verify a contract recipient; it does not expose the case narrative.
+    """
+    raw_facts = str(case.get("case_facts") or "").strip()
+    submitted_name = ""
+    submitted_email = ""
+    if raw_facts.startswith("{"):
+        try:
+            values = json.loads(raw_facts)
+            if isinstance(values, dict):
+                submitted_name = str(values.get("client_name") or values.get("full_name") or "").strip()
+                submitted_email = str(values.get("email") or values.get("client_email") or "").strip()
+        except (TypeError, ValueError):
+            pass
+
+    if not submitted_name:
+        match = re.search(r"(?im)^\s*Name:\s*([^\r\n]+)", raw_facts)
+        if match:
+            submitted_name = match.group(1).strip()
+    if not submitted_email:
+        match = re.search(r"(?im)^\s*Email:\s*([^\s\r\n]+@[^\s\r\n]+)", raw_facts)
+        if match:
+            submitted_email = match.group(1).strip()
+
+    if not submitted_name:
+        submitted_name = str(case.get("plaintiff_name") or "").strip()
+    # A case caption is not a legal name. Keep only the plaintiff portion for
+    # comparison (for example, "Jane Doe v. TransUnion" → "Jane Doe").
+    submitted_name = re.split(r"\s+v(?:\.|s\.?|ersus)?\s+", submitted_name, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    return submitted_name, submitted_email
 
 
 async def _get_current_user(authorization: str) -> dict:
@@ -1140,7 +1183,7 @@ async def send_oise_engagement_contract(
     supabase = get_supabase()
     case_response = (
         supabase.table("cases")
-        .select("id, client_id, plaintiff_name, status")
+        .select("id, client_id, plaintiff_name, case_facts, status")
         .eq("id", body.case_id)
         .limit(1)
         .execute()
@@ -1165,6 +1208,29 @@ async def send_oise_engagement_contract(
         raise HTTPException(
             status_code=400,
             detail="Add the client's email address before sending the representation agreement.",
+        )
+
+    submitted_name, submitted_email = _submitted_case_contact(case)
+    linked_name = str(client.get("full_name") or "").strip()
+    linked_email = str(client.get("email") or "").strip()
+    has_name_conflict = bool(
+        submitted_name
+        and linked_name
+        and _normalized_person_name(submitted_name) != _normalized_person_name(linked_name)
+    )
+    has_email_conflict = bool(
+        submitted_email
+        and linked_email
+        and submitted_email.casefold() != linked_email.casefold()
+    )
+    if has_name_conflict or has_email_conflict:
+        expected = submitted_name or "the submitted client"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This matter is linked to {linked_name or 'a different profile'}, but its submitted "
+                f"client is {expected}. Correct the client profile before sending any contract."
+            ),
         )
 
     assigned_attorney_id = client.get("assigned_attorney_id")

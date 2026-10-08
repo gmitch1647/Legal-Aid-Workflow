@@ -281,58 +281,24 @@ async def submit_intake(body: IntakeSubmission):
         body.affiliate_name = referral_workspace.get("full_name") or body.affiliate_name
 
     # ── 1. Create client in LegalFlow ────────────────────────────────
-    # Check if client already exists
-    profile_id = None
+    # External intakes must be owned by their real client profile. Never fall
+    # back to an attorney/owner account: doing so makes later contracts appear
+    # to have been sent to the owner instead of the submitted client.
+    from routers.integrations import ClientIdentityResolutionError, _find_or_create_client
+
     try:
-        existing = supabase.table("profiles").select("id").eq("email", body.email).limit(1).execute()
-        if existing.data:
-            profile_id = existing.data[0]["id"]
-    except Exception:
-        pass
-
-    if not profile_id:
-        # Create auth user + profile
-        try:
-            import secrets, string
-            temp_pw = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
-            auth_resp = supabase.auth.admin.create_user({
-                "email": body.email,
-                "password": temp_pw,
-                "email_confirm": True,
-                "user_metadata": {"full_name": name},
-            })
-            if auth_resp and hasattr(auth_resp, 'user') and auth_resp.user:
-                profile_id = str(auth_resp.user.id)
-        except Exception as e:
-            logger.warning(f"Auth user creation failed: {e}")
-
-        if not profile_id:
-            # Fallback — use attorney profile
-            try:
-                atty = supabase.table("profiles").select("id").eq("role", "attorney").limit(1).execute()
-                if atty.data:
-                    profile_id = atty.data[0]["id"]
-            except Exception:
-                pass
-
-        if not profile_id:
-            raise HTTPException(status_code=500, detail="Could not create client")
-
-        # Create profile row
-        try:
-            full_address = ", ".join(p for p in [body.address, body.city, body.state, body.zip_code] if p)
-            supabase.table("profiles").insert({
-                "id": profile_id,
-                "role": "client",
-                "full_name": name,
-                "email": body.email,
-                "phone": body.phone or "",
-                "address": full_address,
-                "county": "",
-                "state": body.state or "",
-            }).execute()
-        except Exception as e:
-            logger.warning(f"Profile insert failed (may exist): {e}")
+        full_address = ", ".join(p for p in [body.address, body.city, body.state, body.zip_code] if p)
+        profile_id = _find_or_create_client(
+            supabase,
+            name=name,
+            email=body.email,
+            phone=body.phone or "",
+            address=full_address,
+            county="",
+            state=body.state or "",
+        )
+    except ClientIdentityResolutionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # ── 2. Create case in LegalFlow ──────────────────────────────────
     defendants = [d.strip() for d in (body.adverse_party or "").split(",") if d.strip()]
@@ -361,6 +327,7 @@ async def submit_intake(body: IntakeSubmission):
 
     case_resp = supabase.table("cases").insert({
         "client_id": profile_id,
+        "plaintiff_name": name or None,
         "status": "submitted",
         "case_facts": structured_facts,
         "damages_description": "",

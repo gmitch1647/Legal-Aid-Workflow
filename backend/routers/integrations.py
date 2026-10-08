@@ -112,25 +112,84 @@ class GenericWebhook(BaseModel):
 # Helper: find or create client profile
 # ---------------------------------------------------------------------------
 
+class ClientIdentityResolutionError(ValueError):
+    """Raised when an external submission cannot be linked to a real client."""
+
+
+def _auth_user_value(user: object, field: str) -> object:
+    """Read a field from the Supabase auth SDK's object or dict user shapes."""
+    if isinstance(user, dict):
+        return user.get(field)
+    return getattr(user, field, None)
+
+
+def _find_auth_user_id_by_email(supabase, email: str) -> Optional[str]:
+    """Return the existing Auth user ID for an email without exposing user data.
+
+    Auth users are paginated.  The prior one-page lookup missed older users and
+    then incorrectly attached their matters to the firm owner.  Only the ID and
+    normalized email are inspected here so a missing profile can be repaired.
+    """
+    normalized_email = (email or "").strip().casefold()
+    if not normalized_email:
+        return None
+
+    for page in range(1, 21):
+        try:
+            users = supabase.auth.admin.list_users(page=page, per_page=1000)
+        except TypeError:
+            # Older Supabase SDKs accepted no paging arguments.
+            users = supabase.auth.admin.list_users()
+            page = 20
+        except Exception as exc:
+            logger.warning("Could not look up an existing auth user: %s", exc)
+            return None
+
+        users = list(users or [])
+        for user in users:
+            if str(_auth_user_value(user, "email") or "").strip().casefold() == normalized_email:
+                user_id = _auth_user_value(user, "id")
+                return str(user_id) if user_id else None
+        if len(users) < 1000:
+            break
+    return None
+
+
 def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
                             address: str = "", county: str = "", state: str = "") -> str:
-    """Find existing client by email or create a new one. Returns profile ID."""
+    """Find or create a *client* profile for an external submission.
+
+    A matter must never be linked to an attorney/owner merely because a client
+    Auth user exists without a profile row.  If that orphaned Auth identity is
+    found, LegalFlow repairs the missing client profile; if it cannot identify a
+    client safely, the submission is rejected rather than misdirecting future
+    contracts or signature requests.
+    """
+    normalized_email = (email or "").strip().casefold()
+    if not normalized_email:
+        raise ClientIdentityResolutionError("A client email address is required to create a case.")
 
     # Check if client profile already exists
-    if email:
-        try:
-            existing = (
-                supabase.table("profiles")
-                .select("id")
-                .eq("email", email)
-                .limit(1)
-                .execute()
+    try:
+        existing = (
+            supabase.table("profiles")
+            .select("id,role")
+            .ilike("email", normalized_email)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            profile = existing.data[0]
+            if profile.get("role") == "client":
+                logger.info("Found existing client profile for external submission")
+                return str(profile["id"])
+            raise ClientIdentityResolutionError(
+                "The submitted email belongs to a LegalFlow staff account, not a client profile."
             )
-            if existing.data:
-                logger.info(f"Found existing client: {email}")
-                return existing.data[0]["id"]
-        except Exception as e:
-            logger.warning(f"Profile lookup failed: {e}")
+    except ClientIdentityResolutionError:
+        raise
+    except Exception as exc:
+        raise ClientIdentityResolutionError("LegalFlow could not verify the submitted client profile.") from exc
 
     # Must create auth.users row FIRST because profiles.id references auth.users
     import secrets
@@ -139,47 +198,28 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
 
     profile_id = None
 
-    if email:
-        try:
-            # Use Supabase auth admin to create user
-            auth_resp = supabase.auth.admin.create_user({
-                "email": email,
-                "password": temp_password,
-                "email_confirm": True,
-                "user_metadata": {"full_name": name},
-            })
-            if auth_resp and hasattr(auth_resp, 'user') and auth_resp.user:
-                profile_id = str(auth_resp.user.id)
-                logger.info(f"Created auth user for {email}: {profile_id}")
-        except Exception as e:
-            error_str = str(e)
-            logger.warning(f"Auth user creation failed: {error_str}")
-            # If user already exists in auth, find their ID
-            if "already" in error_str.lower() or "duplicate" in error_str.lower():
-                try:
-                    # Query auth users by email
-                    users_resp = supabase.auth.admin.list_users()
-                    if hasattr(users_resp, '__iter__'):
-                        for u in users_resp:
-                            user_obj = u if hasattr(u, 'email') else None
-                            if user_obj and user_obj.email == email:
-                                profile_id = str(user_obj.id)
-                                logger.info(f"Found existing auth user: {profile_id}")
-                                break
-                except Exception as e2:
-                    logger.warning(f"Could not list auth users: {e2}")
+    try:
+        # Use Supabase auth admin to create user
+        auth_resp = supabase.auth.admin.create_user({
+            "email": normalized_email,
+            "password": temp_password,
+            "email_confirm": True,
+            "user_metadata": {"full_name": name},
+        })
+        if auth_resp and hasattr(auth_resp, "user") and auth_resp.user:
+            profile_id = str(auth_resp.user.id)
+            logger.info("Created auth user for external client")
+    except Exception as exc:
+        error_str = str(exc).lower()
+        if "already" in error_str or "duplicate" in error_str or "exists" in error_str:
+            profile_id = _find_auth_user_id_by_email(supabase, normalized_email)
+        if not profile_id:
+            raise ClientIdentityResolutionError(
+                "LegalFlow could not create or recover the submitted client account."
+            ) from exc
 
     if not profile_id:
-        # If we still don't have an ID, use the attorney's ID as a fallback
-        # This means the case will be under the attorney until reassigned
-        try:
-            attorney = supabase.table("profiles").select("id").eq("role", "attorney").limit(1).execute()
-            if attorney.data:
-                logger.warning(f"Using attorney profile as fallback for {email}")
-                return attorney.data[0]["id"]
-        except Exception:
-            pass
-        raise ValueError(f"Could not create or find user for {email}")
+        raise ClientIdentityResolutionError("LegalFlow could not resolve the submitted client account.")
 
     # Now create the profile row (linked to the auth user)
     try:
@@ -187,16 +227,29 @@ def _find_or_create_client(supabase, name: str, email: str, phone: str = "",
             "id": profile_id,
             "role": "client",
             "full_name": name or "Unknown Client",
-            "email": email or "",
+            "email": normalized_email,
             "phone": phone or "",
             "address": address or "",
             "county": county or "",
             "state": state or "",
         }).execute()
-        logger.info(f"Created client profile: {name} ({email})")
-    except Exception as e:
-        # Profile might already exist
-        logger.warning(f"Could not create profile (may already exist): {e}")
+        logger.info("Created client profile for external submission")
+    except Exception as exc:
+        # A concurrent request may have created the profile first; only accept
+        # it if it is genuinely a client profile for the same Auth identity.
+        try:
+            existing = (
+                supabase.table("profiles")
+                .select("id,role")
+                .eq("id", profile_id)
+                .limit(1)
+                .execute()
+            )
+            if existing.data and existing.data[0].get("role") == "client":
+                return str(existing.data[0]["id"])
+        except Exception:
+            pass
+        raise ClientIdentityResolutionError("LegalFlow could not create the client profile.") from exc
 
     return profile_id
 
@@ -368,6 +421,7 @@ async def suitedash_webhook(request: Request):
 
         case_resp = supabase.table("cases").insert({
             "client_id": client_id,
+            "plaintiff_name": name or None,
             "status": "submitted",
             "case_facts": structured_facts,
             "damages_description": damages,

@@ -1137,7 +1137,7 @@ function SendSignatureModal({ initialMode = 'upload', templates, loadingTemplate
           {mode === 'oise_contract' && confirmingOiseSend && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               <p className="font-semibold">Confirm contract delivery</p>
-              <p className="mt-1 text-xs leading-5">Selecting <strong>Send Contract for Signature</strong> will email the Oise Law representation agreement to this client. LegalFlow will then move the case to Doc Sent for Signature after the invitation is accepted for delivery.</p>
+              <p className="mt-1 text-xs leading-5">Selecting <strong>Send Contract for Signature</strong> will verify the matter’s client name and email before delivery. If the selected profile does not match the submitted client, LegalFlow will stop the send rather than email the wrong person. A verified delivery moves the case to Doc Sent for Signature.</p>
             </div>
           )}
 
