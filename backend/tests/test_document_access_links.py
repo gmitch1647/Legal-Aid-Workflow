@@ -27,8 +27,10 @@ class _FakeBucket:
 class _FakeStorage:
     def __init__(self, bucket):
         self.bucket = bucket
+        self.bucket_names = []
 
-    def from_(self, _bucket_name):
+    def from_(self, bucket_name):
+        self.bucket_names.append(bucket_name)
         return self.bucket
 
 
@@ -75,10 +77,10 @@ class DocumentAccessLinkTests(unittest.TestCase):
             result = asyncio.run(
                 documents.get_document_access_url("case-1", document["id"], "Bearer test-token")
             )
-        return result, supabase.bucket.requests
+        return result, supabase.bucket.requests, supabase.storage.bucket_names
 
     def test_pii_access_reissues_a_short_lived_link_after_authorization(self):
-        result, requests = self._open({
+        result, requests, bucket_names = self._open({
             "id": "document-pii",
             "case_id": "case-1",
             "storage_path": "cases/case-1/identity.pdf",
@@ -87,11 +89,12 @@ class DocumentAccessLinkTests(unittest.TestCase):
         })
 
         self.assertEqual(requests, [("cases/case-1/identity.pdf", 300)])
+        self.assertEqual(bucket_names, ["documents"])
         self.assertEqual(result["expires_in"], 300)
         self.assertIn("expires=300", result["url"])
 
     def test_signed_contract_access_uses_a_new_authorized_link(self):
-        result, requests = self._open({
+        result, requests, bucket_names = self._open({
             "id": "document-contract",
             "case_id": "case-1",
             "storage_path": "signing/session-1/signed_Representation_Agreement.pdf",
@@ -100,6 +103,7 @@ class DocumentAccessLinkTests(unittest.TestCase):
         })
 
         self.assertEqual(requests, [("signing/session-1/signed_Representation_Agreement.pdf", 900)])
+        self.assertEqual(bucket_names, ["documents"])
         self.assertEqual(result["expires_in"], 900)
         self.assertEqual(result["file_name"], "Client_Signed_Representation_Agreement.pdf")
 
@@ -121,6 +125,19 @@ class DocumentAccessLinkTests(unittest.TestCase):
         self.assertEqual(getattr(raised.exception, "status_code", None), 404)
         self.assertIn("re-upload", str(getattr(raised.exception, "detail", "")))
         self.assertEqual(supabase.bucket.requests, [])
+
+    def test_completed_w9_uses_the_separate_w9_storage_bucket(self):
+        result, requests, bucket_names = self._open({
+            "id": "completed-w9",
+            "case_id": "case-1",
+            "storage_path": "w9/request-1/completed_form_w9.pdf",
+            "document_category": "other",
+            "file_name": "completed_form_w9.pdf",
+        })
+
+        self.assertEqual(requests, [("w9/request-1/completed_form_w9.pdf", 900)])
+        self.assertEqual(bucket_names, ["w9-documents"])
+        self.assertEqual(result["file_name"], "completed_form_w9.pdf")
 
 
 if __name__ == "__main__":

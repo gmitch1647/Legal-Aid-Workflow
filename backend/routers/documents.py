@@ -26,9 +26,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 STORAGE_BUCKET = "documents"
+W9_STORAGE_BUCKET = "w9-documents"
 STAFF_ROLES = {"attorney", "staff_attorney"}
 MAX_DISCOVERY_DELIVERY_FILES = 10
 MAX_DISCOVERY_DELIVERY_BYTES = 20 * 1024 * 1024
+
+
+def _storage_bucket_for_path(storage_path: str | None) -> str:
+    """Return the protected bucket that owns a case document's object path.
+
+    Completed W-9s are deliberately stored in a separate private bucket and
+    then linked into the relevant case's document list. Their stored path
+    begins with ``w9/``; every other case attachment remains in ``documents``.
+    """
+    return W9_STORAGE_BUCKET if str(storage_path or "").startswith("w9/") else STORAGE_BUCKET
 
 
 class DiscoveryDocumentDeliveryPayload(BaseModel):
@@ -439,7 +450,8 @@ async def list_documents(case_id: str, authorization: str = Header(...)):
     for doc in docs:
         if doc.get("storage_path"):
             try:
-                url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
+                bucket = _storage_bucket_for_path(doc["storage_path"])
+                url_resp = supabase.storage.from_(bucket).create_signed_url(
                     doc["storage_path"], 3600
                 )
                 doc["url"] = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
@@ -493,7 +505,7 @@ async def get_document_access_url(
 
     category = str(doc.get("document_category") or "").lower()
     expires_in = 300 if category == "pii" else 900
-    bucket = supabase.storage.from_(STORAGE_BUCKET)
+    bucket = supabase.storage.from_(_storage_bucket_for_path(storage_path))
     try:
         bucket.info(storage_path)
     except Exception as exc:
@@ -646,7 +658,7 @@ async def delete_document(case_id: str, doc_id: str, authorization: str = Header
     storage_path = doc.get("storage_path")
     if storage_path:
         try:
-            supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+            supabase.storage.from_(_storage_bucket_for_path(storage_path)).remove([storage_path])
         except Exception as e:
             logger.warning("Could not delete file from storage: %s", e)
 
