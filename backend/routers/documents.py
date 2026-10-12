@@ -493,8 +493,17 @@ async def get_document_access_url(
 
     category = str(doc.get("document_category") or "").lower()
     expires_in = 300 if category == "pii" else 900
+    bucket = supabase.storage.from_(STORAGE_BUCKET)
     try:
-        url_resp = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(storage_path, expires_in)
+        bucket.info(storage_path)
+    except Exception as exc:
+        logger.warning("Case document %s has no accessible storage object: %s", doc_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This attachment is no longer available in secure storage. Please re-upload it to the case file.",
+        ) from exc
+    try:
+        url_resp = bucket.create_signed_url(storage_path, expires_in)
         url = url_resp.get("signedURL") or url_resp.get("signedUrl") or ""
     except Exception as exc:
         logger.exception("Could not create a fresh document access URL for %s", doc_id)

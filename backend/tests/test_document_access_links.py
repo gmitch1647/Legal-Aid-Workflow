@@ -8,8 +8,16 @@ from routers import documents
 
 
 class _FakeBucket:
-    def __init__(self):
+    def __init__(self, missing_paths=None):
         self.requests = []
+        self.info_requests = []
+        self.missing_paths = set(missing_paths or [])
+
+    def info(self, path):
+        self.info_requests.append(path)
+        if path in self.missing_paths:
+            raise RuntimeError("Object not found")
+        return {"name": path}
 
     def create_signed_url(self, path, expires_in):
         self.requests.append((path, expires_in))
@@ -48,8 +56,8 @@ class _FakeQuery:
 
 
 class _FakeSupabase:
-    def __init__(self, rows):
-        self.bucket = _FakeBucket()
+    def __init__(self, rows, missing_paths=None):
+        self.bucket = _FakeBucket(missing_paths)
         self.storage = _FakeStorage(self.bucket)
         self.documents = _FakeQuery(rows)
 
@@ -94,6 +102,25 @@ class DocumentAccessLinkTests(unittest.TestCase):
         self.assertEqual(requests, [("signing/session-1/signed_Representation_Agreement.pdf", 900)])
         self.assertEqual(result["expires_in"], 900)
         self.assertEqual(result["file_name"], "Client_Signed_Representation_Agreement.pdf")
+
+    def test_missing_storage_object_returns_a_reupload_instruction(self):
+        document = {
+            "id": "document-missing",
+            "case_id": "case-1",
+            "storage_path": "cases/case-1/missing.pdf",
+            "document_category": "other",
+            "file_name": "missing.pdf",
+        }
+        supabase = _FakeSupabase([document], missing_paths={document["storage_path"]})
+        with patch.object(documents, "get_supabase", return_value=supabase), \
+             patch.object(documents, "_get_current_user", new=AsyncMock(return_value={"id": "attorney-1", "role": "attorney"})), \
+             patch.object(documents, "_fetch_case_with_access", return_value={"id": "case-1"}):
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(documents.get_document_access_url("case-1", document["id"], "Bearer test-token"))
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 404)
+        self.assertIn("re-upload", str(getattr(raised.exception, "detail", "")))
+        self.assertEqual(supabase.bucket.requests, [])
 
 
 if __name__ == "__main__":

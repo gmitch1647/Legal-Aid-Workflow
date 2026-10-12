@@ -12,8 +12,8 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import unquote, urlparse
 from uuid import UUID
-
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 
 from models.schemas import (
@@ -242,6 +242,73 @@ def _fetch_case(case_id: str, *, profile: dict | None = None) -> dict:
                 detail="You do not have access to this referral case.",
             )
     return case
+
+
+def _plaintiff_name_from_case(case: dict) -> str:
+    """Return the persisted plaintiff name, with a safe legacy fallback."""
+    name = str(case.get("plaintiff_name") or "").strip()
+    if name:
+        return name
+    facts = str(case.get("case_facts") or "")
+    if "=== PLAINTIFF ===" in facts:
+        for line in facts.splitlines():
+            if line.strip().startswith("Name:"):
+                return line.split("Name:", 1)[1].strip()
+    return ""
+
+
+def _documents_storage_path_from_reference(reference: str | None) -> str | None:
+    """Extract an object path from a legacy Supabase documents URL when possible."""
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    if not value.startswith(("http://", "https://")):
+        return value
+    path = urlparse(value).path
+    for marker in ("/storage/v1/object/sign/documents/", "/storage/v1/object/public/documents/"):
+        if marker in path:
+            return unquote(path.split(marker, 1)[1]).lstrip("/") or None
+    return None
+
+
+def _rebuild_complaint_docx(supabase, case: dict, complaint: dict) -> str:
+    """Regenerate a missing complaint Word file from the preserved complaint text."""
+    complaint_text = str(complaint.get("complaint_text") or "").strip()
+    if not complaint_text:
+        raise HTTPException(status_code=404, detail="The complaint text is unavailable, so a Word download cannot be rebuilt.")
+
+    from utils.docx_formatter import generate_complaint_docx
+
+    defendant_names: list[str] = []
+    case_id = str(case["id"])
+    try:
+        case_defendants = supabase.table("case_defendants").select("defendant_id").eq("case_id", case_id).execute()
+        for row in case_defendants.data or []:
+            defendant = supabase.table("defendants").select("name").eq("id", row["defendant_id"]).limit(1).execute()
+            if defendant.data and str(defendant.data[0].get("name") or "").strip():
+                defendant_names.append(str(defendant.data[0]["name"]).strip())
+
+        buffer = generate_complaint_docx(
+            complaint_text=complaint_text,
+            plaintiff_name=_plaintiff_name_from_case(case),
+            defendant_names=defendant_names,
+            court=str(case.get("court") or ""),
+            jury_demand=bool(case.get("jury_demand", True)),
+        )
+        storage_path = f"cases/{case_id}/approved_complaint_v{complaint.get('version', 1)}.docx"
+        supabase.storage.from_("documents").upload(
+            storage_path,
+            buffer.read(),
+            {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"},
+        )
+        supabase.table("complaints").update({"complaint_docx_url": storage_path}).eq("id", complaint["id"]).execute()
+        logger.info("Rebuilt complaint Word download for case %s", case_id)
+        return storage_path
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Could not rebuild complaint Word download for case %s", case_id)
+        raise HTTPException(status_code=500, detail="LegalFlow could not rebuild the complaint Word download. Please try again.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1145,7 +1212,12 @@ async def deny_case(
 
 @router.get("/{case_id}/download/complaint")
 async def download_complaint(case_id: str, authorization: str = Header(...)):
-    """Return the complaint DOCX download URL from Supabase Storage."""
+    """Return a fresh, authorized complaint Word download URL.
+
+    Historic complaints may retain their approved text while lacking the older
+    generated file. Rebuild that file on demand rather than blocking the
+    attorney's download.
+    """
     profile = await get_current_user(authorization)
     case = _fetch_case(case_id, profile=profile)
 
@@ -1153,29 +1225,38 @@ async def download_complaint(case_id: str, authorization: str = Header(...)):
 
     complaint_resp = (
         supabase.table("complaints")
-        .select("complaint_docx_url")
+        .select("id,complaint_text,version,complaint_docx_url")
         .eq("case_id", case_id)
         .eq("is_current", True)
         .limit(1)
         .execute()
     )
-    if not complaint_resp.data or not complaint_resp.data[0].get("complaint_docx_url"):
+    if not complaint_resp.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Complaint DOCX not available for this case.",
+            detail="No current complaint is available for this case.",
         )
 
-    url = complaint_resp.data[0]["complaint_docx_url"]
-
-    # If the URL is a storage path (not a full URL), generate a signed URL
-    if not url.startswith("http"):
+    complaint = complaint_resp.data[0]
+    storage_path = _documents_storage_path_from_reference(complaint.get("complaint_docx_url"))
+    if storage_path:
         try:
-            signed = supabase.storage.from_("documents").create_signed_url(
-                url, 3600  # 1 hour
-            )
-            url = signed.get("signedURL", signed.get("signedUrl", url))
+            supabase.storage.from_("documents").info(storage_path)
         except Exception:
-            logger.warning("Could not generate signed URL for %s", url)
+            logger.warning("Complaint Word file is unavailable for case %s; rebuilding it", case_id)
+            storage_path = None
+    if not storage_path:
+        storage_path = _rebuild_complaint_docx(supabase, case, complaint)
+
+    try:
+        signed = supabase.storage.from_("documents").create_signed_url(storage_path, 900)
+        url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("url")
+    except Exception as exc:
+        logger.exception("Could not create complaint download link for case %s", case_id)
+        raise HTTPException(status_code=500, detail="LegalFlow could not prepare the complaint download. Please try again.") from exc
+
+    if not url:
+        raise HTTPException(status_code=500, detail="LegalFlow could not prepare the complaint download. Please try again.")
 
     return {"url": url}
 
