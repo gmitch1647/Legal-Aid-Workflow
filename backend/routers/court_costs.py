@@ -137,6 +137,8 @@ async def create_court_cost(body: CourtCostCreate, authorization: str = Header(.
     if body.status not in ALLOWED_STATUSES:
         raise HTTPException(status_code=422, detail="Invalid court-cost status.")
     supabase = get_supabase()
+    if str(body.submission_key or "").startswith("quick-court-cost:") and profile.get("role") not in STAFF_ROLES and not _is_owner(supabase, profile):
+        raise HTTPException(status_code=403, detail="Only firm staff can add the one-click filing and service costs.")
     case_result = supabase.table("cases").select("id,case_number,plaintiff_name,client_id,referral_partner_id").eq("id", body.case_id).limit(1).execute()
     if not case_result.data:
         raise HTTPException(status_code=404, detail="Case not found.")
