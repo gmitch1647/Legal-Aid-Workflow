@@ -1759,6 +1759,23 @@ export async function getCourtCosts() {
   return request('/court-costs');
 }
 
+export async function exportUnpaidCourtCosts(requestIds) {
+  const token = await getAccessToken();
+  const response = await fetch(`${BASE_URL}/court-costs/unpaid-export`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ request_ids: requestIds }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(apiErrorMessage(errorBody, 'Could not export the unpaid Court Costs PDF.'));
+  }
+  return response.blob();
+}
+
 export async function createCourtCost(data) {
   return request('/court-costs', { method: 'POST', body: JSON.stringify(data) });
 }

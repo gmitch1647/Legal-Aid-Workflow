@@ -7,8 +7,10 @@ from html import escape
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from utils.court_costs_pdf import render_unpaid_court_costs_pdf
 from utils.email_service import send_email
 from utils.supabase_client import get_supabase
 from routers.cases import get_current_user
@@ -47,6 +49,10 @@ class CourtCostUpdate(BaseModel):
     payment_method: Optional[str] = Field(default=None, max_length=100)
     payment_reference: Optional[str] = Field(default=None, max_length=180)
     payment_note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CourtCostUnpaidExport(BaseModel):
+    request_ids: list[str] = Field(min_length=1, max_length=500)
 
 
 def _profile_partner_id(supabase, profile: dict):
@@ -161,6 +167,51 @@ async def create_court_cost(body: CourtCostCreate, authorization: str = Header(.
         body_html = f"<p>Hello {escape(str(partner.get('full_name') or 'there'))},</p><p>A court-cost reimbursement request has been submitted for <strong>{escape(str(case.get('plaintiff_name') or case.get('case_number') or 'a matter'))}</strong>.</p><p><strong>Amount:</strong> ${body.amount:,.2f}<br><strong>Court:</strong> {escape(body.court_name)}<br><strong>Date:</strong> {escape(body.expense_date.isoformat())}<br><strong>Description:</strong> {escape(body.description)}</p><p>Please sign in to LegalFlow to review and mark the request paid or return it for correction.</p>"
         await _notify([partner.get("email"), owner.get("email")], subject, body_html, request_id)
     return _enrich(supabase, row, profile, _is_owner(supabase, profile))
+
+
+@router.post("/unpaid-export")
+async def export_unpaid_court_costs(body: CourtCostUnpaidExport, authorization: str = Header(...)):
+    """Download a PDF ledger for selected unpaid court-cost matters.
+
+    Every requested row is checked against the caller's normal Court Costs
+    access. Paid rows are intentionally excluded to keep payment history
+    separate from the outstanding reimbursement report.
+    """
+    profile = await get_current_user(authorization)
+    _require_role(profile)
+    request_ids = list(dict.fromkeys(str(item).strip() for item in body.request_ids if str(item).strip()))
+    if not request_ids:
+        raise HTTPException(status_code=422, detail="Select at least one unpaid court-cost matter to export.")
+
+    supabase = get_supabase()
+    rows = (
+        supabase.table("court_cost_requests")
+        .select("*")
+        .in_("id", request_ids)
+        .order("expense_date", desc=False)
+        .limit(500)
+        .execute()
+        .data
+        or []
+    )
+    unpaid_rows = [row for row in rows if _can_view(supabase, profile, row) and row.get("status") != "paid"]
+    if {str(row.get("id")) for row in unpaid_rows} != set(request_ids):
+        raise HTTPException(
+            status_code=403,
+            detail="One or more selected matters are paid, unavailable, or outside your Court Costs access.",
+        )
+
+    enriched_rows = [_enrich(supabase, row, profile, _is_owner(supabase, profile)) for row in unpaid_rows]
+    pdf = render_unpaid_court_costs_pdf(
+        enriched_rows,
+        generated_for=profile.get("full_name") or profile.get("email") or "Authorized LegalFlow user",
+    )
+    filename = f"LegalFlow-unpaid-court-costs-{date.today().isoformat()}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{request_id}")
