@@ -10,7 +10,7 @@ const ETHAN_REFERRAL_PARTNER_ID = 'b61a812f-dba1-41b1-bbba-07bbb28a58a5';
 const newSubmissionKey = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const COURT_COST_PRESETS = {
   service: { label: 'Service of process', amount: '90.00', courtName: 'Service of process', description: 'Service of process cost' },
-  state: { label: 'State court filing', amount: '323.35', courtName: 'State Court', description: 'State court filing cost' },
+  state: { label: 'State court filing', amount: '233.35', courtName: 'State Court', description: 'State court filing cost' },
   federal: { label: 'Federal court filing', amount: '405.00', courtName: 'Federal Court', description: 'Federal court filing cost' },
 };
 const emptyCourtCostForm = () => ({ case_id: '', cost_type: '', amount: '', expense_date: new Date().toISOString().slice(0, 10), court_name: '', description: '', receipt_url: '', submission_key: newSubmissionKey() });
