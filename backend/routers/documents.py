@@ -262,6 +262,16 @@ async def upload_document(
     file_size = len(file_content)
     file_name = file.filename or "upload"
     file_type = file.content_type or "application/octet-stream"
+    detected_case_number = None
+    case_number_source = None
+    if category == "stamped_complaint":
+        from utils.case_number_extractor import extract_case_number_from_stamped_complaint
+
+        detected_case_number, case_number_source = extract_case_number_from_stamped_complaint(
+            file_content,
+            file_name=file_name,
+            file_type=file_type,
+        )
 
     # Keep complaint exhibits under their parent complaint folder and stamped
     # court filings in their own immutable-looking case-file folder. This makes
@@ -357,7 +367,40 @@ async def upload_document(
         doc_resp = supabase.table("case_documents").insert(doc_payload).execute()
         if not doc_resp.data:
             raise RuntimeError("Document insert returned no data.")
-        return doc_resp.data[0]
+        result = dict(doc_resp.data[0])
+        if category == "stamped_complaint" and detected_case_number:
+            result["detected_case_number"] = detected_case_number
+            result["case_number_source"] = case_number_source
+            existing_case_number = str(case.get("case_number") or "").strip()
+            if existing_case_number:
+                # A newly scanned filing must not silently overwrite an already
+                # confirmed docket number. Return the detection for review.
+                result["case_number"] = existing_case_number
+                result["case_number_auto_saved"] = False
+                result["case_number_detection_status"] = "review_required"
+            else:
+                try:
+                    update_response = (
+                        supabase.table("cases")
+                        .update({
+                            "case_number": detected_case_number,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        .eq("id", case_id)
+                        .execute()
+                    )
+                    if update_response.data:
+                        result["case_number"] = detected_case_number
+                        result["case_number_auto_saved"] = True
+                        result["case_number_detection_status"] = "saved"
+                    else:
+                        result["case_number_auto_saved"] = False
+                        result["case_number_detection_status"] = "detected_not_saved"
+                except Exception:
+                    logger.exception("Could not automatically save detected case number for case %s", case_id)
+                    result["case_number_auto_saved"] = False
+                    result["case_number_detection_status"] = "detected_not_saved"
+        return result
     except Exception as exc:
         logger.exception("Failed to create document record for case %s", case_id)
         # Best-effort: remove both the uploaded source and a generated Word

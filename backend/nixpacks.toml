@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["python311", "gcc", "libreoffice"]
+nixPkgs = ["python311", "gcc", "libreoffice", "tesseract"]
 
 [phases.install]
 cmds = [

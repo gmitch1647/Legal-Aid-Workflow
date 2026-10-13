@@ -1143,10 +1143,20 @@ function StampedComplaintFilingSection({ caseId, caseData, documents, onRefresh 
     setError('');
     setMessage('');
     try {
+      const uploadedDocuments = [];
       for (const file of Array.from(files)) {
-        await uploadDocument(caseId, file, 'stamped_complaint');
+        uploadedDocuments.push(await uploadDocument(caseId, file, 'stamped_complaint'));
       }
-      setMessage(`${files.length === 1 ? 'Stamped complaint uploaded.' : `${files.length} stamped complaints uploaded.`} Add the court case number below.`);
+      const autoSaved = uploadedDocuments.find((document) => document.case_number_auto_saved && document.case_number);
+      const needsReview = uploadedDocuments.find((document) => document.detected_case_number && !document.case_number_auto_saved);
+      if (autoSaved) {
+        setCaseNumber(autoSaved.case_number);
+        setMessage(`Stamped complaint uploaded. Court case number “${autoSaved.case_number}” was detected and saved automatically.`);
+      } else if (needsReview?.detected_case_number) {
+        setMessage(`Stamped complaint uploaded. LegalFlow detected “${needsReview.detected_case_number}”, but kept the existing saved case number for review.`);
+      } else {
+        setMessage(`${files.length === 1 ? 'Stamped complaint uploaded.' : `${files.length} stamped complaints uploaded.`} No reliable case number was found, so enter it below.`);
+      }
       await onRefresh();
     } catch (err) {
       setError(err.message || 'Could not upload the stamped complaint.');
