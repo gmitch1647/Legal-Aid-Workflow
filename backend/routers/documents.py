@@ -188,6 +188,30 @@ def _fetch_case_with_access(case_id: str, profile: dict) -> dict:
     return case
 
 
+def _require_stamped_complaint_uploader(supabase, profile: dict, case: dict) -> None:
+    """Limit court-filed complaints to the owner or that case's attorney."""
+    if profile.get("role") == "attorney":
+        return
+    if profile.get("role") != "staff_attorney":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the LegalFlow owner or the assigned attorney can upload a stamped complaint.",
+        )
+    client_response = (
+        supabase.table("profiles")
+        .select("assigned_attorney_id")
+        .eq("id", case.get("client_id"))
+        .limit(1)
+        .execute()
+    )
+    client = (client_response.data or [None])[0]
+    if not client or str(client.get("assigned_attorney_id")) != str(profile.get("id")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can upload a stamped complaint only for a case assigned to you.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # POST /cases/{case_id}/documents -- upload document
 # ---------------------------------------------------------------------------
@@ -208,7 +232,7 @@ async def upload_document(
     created in ``case_documents``.
     """
     profile = await _get_current_user(authorization)
-    _fetch_case_with_access(case_id, profile)
+    case = _fetch_case_with_access(case_id, profile)
 
     supabase = get_supabase()
     category = str(document_category or "other").strip().lower()
@@ -229,11 +253,7 @@ async def upload_document(
         if not parent_result.data or str(parent_result.data[0].get("document_category") or "").lower() != "complaint":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exhibits must be attached to an uploaded complaint in the same case.")
     elif category == "stamped_complaint":
-        if profile.get("role") not in ("attorney", "staff_attorney"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only the LegalFlow owner or the assigned attorney can upload a stamped complaint.",
-            )
+        _require_stamped_complaint_uploader(supabase, profile, case)
     elif parent_document_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only complaint exhibits can have a parent complaint.")
 
