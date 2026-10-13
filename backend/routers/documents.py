@@ -228,6 +228,12 @@ async def upload_document(
         )
         if not parent_result.data or str(parent_result.data[0].get("document_category") or "").lower() != "complaint":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exhibits must be attached to an uploaded complaint in the same case.")
+    elif category == "stamped_complaint":
+        if profile.get("role") not in ("attorney", "staff_attorney"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the LegalFlow owner or the assigned attorney can upload a stamped complaint.",
+            )
     elif parent_document_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only complaint exhibits can have a parent complaint.")
 
@@ -237,13 +243,15 @@ async def upload_document(
     file_name = file.filename or "upload"
     file_type = file.content_type or "application/octet-stream"
 
-    # Determine storage path.  Keep complaint exhibits under their parent
-    # complaint folder so related supporting material remains easy to audit.
-    storage_path = (
-        f"cases/{case_id}/complaints/{parent_document_id}/exhibits/{file_name}"
-        if category == "complaint_exhibit"
-        else f"cases/{case_id}/{file_name}"
-    )
+    # Keep complaint exhibits under their parent complaint folder and stamped
+    # court filings in their own immutable-looking case-file folder. This makes
+    # the filed copy easy to distinguish from editable complaint drafts.
+    if category == "complaint_exhibit":
+        storage_path = f"cases/{case_id}/complaints/{parent_document_id}/exhibits/{file_name}"
+    elif category == "stamped_complaint":
+        storage_path = f"cases/{case_id}/stamped-complaints/{file_name}"
+    else:
+        storage_path = f"cases/{case_id}/{file_name}"
 
     # Upload to Supabase Storage
     try:
@@ -259,11 +267,12 @@ async def upload_document(
             name_base, ext = os.path.splitext(file_name)
             ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             file_name = f"{name_base}_{ts}{ext}"
-            storage_path = (
-                f"cases/{case_id}/complaints/{parent_document_id}/exhibits/{file_name}"
-                if category == "complaint_exhibit"
-                else f"cases/{case_id}/{file_name}"
-            )
+            if category == "complaint_exhibit":
+                storage_path = f"cases/{case_id}/complaints/{parent_document_id}/exhibits/{file_name}"
+            elif category == "stamped_complaint":
+                storage_path = f"cases/{case_id}/stamped-complaints/{file_name}"
+            else:
+                storage_path = f"cases/{case_id}/{file_name}"
             try:
                 supabase.storage.from_(STORAGE_BUCKET).upload(
                     path=storage_path,

@@ -17,6 +17,7 @@ from typing import Optional
 from urllib.parse import unquote, urlparse
 from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from models.schemas import (
     CaseCreate,
@@ -43,6 +44,12 @@ from utils.email_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class CaseFilingUpdate(BaseModel):
+    """Court-filing details recorded after a stamped complaint is uploaded."""
+
+    case_number: str = Field(min_length=1, max_length=160)
 
 # ---------------------------------------------------------------------------
 # Valid agent names (must match the agent_outputs CHECK constraint)
@@ -928,6 +935,57 @@ async def update_case_status(
     result["referral_notification_email"] = referral_notification_email
     result["referral_notification_error"] = referral_notification_error
     return result
+
+
+# ---------------------------------------------------------------------------
+# PATCH /{case_id}/filing -- record the docket number for a stamped complaint
+# ---------------------------------------------------------------------------
+@router.patch("/{case_id}/filing")
+async def update_case_filing(
+    case_id: str,
+    body: CaseFilingUpdate,
+    authorization: str = Header(...),
+):
+    """Save a court case number after a stamped complaint is in the case file."""
+    profile = await get_current_user(authorization)
+    case = _fetch_case(case_id, profile=profile)
+    _require_pipeline_case_mover(profile, case)
+
+    case_number = body.case_number.strip()
+    if not case_number:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enter the court case number.")
+
+    supabase = get_supabase()
+    stamped_complaint = (
+        supabase.table("case_documents")
+        .select("id")
+        .eq("case_id", case_id)
+        .eq("document_category", "stamped_complaint")
+        .limit(1)
+        .execute()
+    )
+    if not stamped_complaint.data:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Upload a stamped complaint before recording the court case number.",
+        )
+
+    updated = (
+        supabase.table("cases")
+        .update({
+            "case_number": case_number,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        .eq("id", case_id)
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not save the court case number.")
+    return {
+        "case_id": case_id,
+        "case_number": updated.data[0].get("case_number"),
+        "stamped_complaint_id": stamped_complaint.data[0].get("id"),
+    }
 
 
 # ---------------------------------------------------------------------------

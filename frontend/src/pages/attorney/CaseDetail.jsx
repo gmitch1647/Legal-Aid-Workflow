@@ -35,6 +35,7 @@ import {
 import { useAuth } from '../../App';
 import {
   getCase,
+  saveCaseFiling,
   getPipelineStatus,
   approveForProcessing,
   approveComplaint,
@@ -1002,13 +1003,14 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
 
   const generalDocs = documents.filter(d => {
     const cat = (d.document_category || d.category || '').toLowerCase();
-    return cat !== 'pii' && cat !== 'complaint';
+    return cat !== 'pii' && cat !== 'complaint' && cat !== 'stamped_complaint';
   });
 
   const documentCategoryLabel = (doc) => {
     const category = String(doc.document_category || doc.category || doc.type || 'File').toLowerCase();
     if (category === 'signed_contract' || category === 'signed_engagement_agreement') return 'Signed Contract';
     if (category === 'signed_closing_statement') return 'Signed Closing Statement';
+    if (category === 'stamped_complaint') return 'Stamped Complaint';
     return category.replace(/_/g, ' ');
   };
 
@@ -1113,6 +1115,168 @@ function DocumentsUploadSection({ caseId, documents, onRefresh }) {
           <p className="text-sm text-slate-400">No documents uploaded.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+
+function StampedComplaintFilingSection({ caseId, caseData, documents, onRefresh }) {
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [caseNumber, setCaseNumber] = useState(caseData?.case_number || '');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setCaseNumber(caseData?.case_number || '');
+  }, [caseData?.case_number]);
+
+  const stampedComplaints = documents.filter((document) => (
+    String(document.document_category || document.category || '').toLowerCase() === 'stamped_complaint'
+  ));
+  const hasStampedComplaint = stampedComplaints.length > 0;
+
+  async function handleUpload(files) {
+    if (!files?.length) return;
+    setUploading(true);
+    setError('');
+    setMessage('');
+    try {
+      for (const file of Array.from(files)) {
+        await uploadDocument(caseId, file, 'stamped_complaint');
+      }
+      setMessage(`${files.length === 1 ? 'Stamped complaint uploaded.' : `${files.length} stamped complaints uploaded.`} Add the court case number below.`);
+      await onRefresh();
+    } catch (err) {
+      setError(err.message || 'Could not upload the stamped complaint.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleSaveCaseNumber() {
+    const value = caseNumber.trim();
+    if (!value) {
+      setError('Enter the court case number from the stamped complaint.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await saveCaseFiling(caseId, value);
+      setCaseNumber(result.case_number || value);
+      setMessage('Court case number saved to this matter.');
+      await onRefresh();
+    } catch (err) {
+      setError(err.message || 'Could not save the court case number.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(document) {
+    if (!confirm(`Delete stamped complaint "${document.file_name}"?`)) return;
+    setError('');
+    setMessage('');
+    try {
+      await deleteDocument(caseId, document.id);
+      await onRefresh();
+    } catch (err) {
+      setError(err.message || 'Could not delete the stamped complaint.');
+    }
+  }
+
+  return (
+    <div className="card border-emerald-200 bg-emerald-50/30">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+            <FileSignature className="h-5 w-5 text-emerald-700" />
+            Stamped Complaint & Court Filing
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-slate-600">
+            Upload the court-stamped filing here. LegalFlow keeps it separate from editable complaint drafts and lets you record the court case number.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          {uploading ? 'Uploading...' : 'Upload Stamped Complaint'}
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.doc,.docx"
+          className="hidden"
+          onChange={(event) => handleUpload(event.target.files)}
+        />
+      </div>
+
+      {stampedComplaints.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {stampedComplaints.map((document) => (
+            <div key={document.id} className="flex items-center gap-3 rounded-lg border border-emerald-100 bg-white p-3">
+              <FileText className="h-5 w-5 shrink-0 text-emerald-600" />
+              <SecureDocumentLink
+                caseId={caseId}
+                document={document}
+                className="min-w-0 flex-1 text-left"
+                onError={setError}
+              >
+                <span className="block truncate text-sm font-medium text-slate-800">{document.file_name || 'Stamped complaint'}</span>
+                <span className="block text-xs text-slate-500">Uploaded {formatDate(document.created_at)}</span>
+              </SecureDocumentLink>
+              <button
+                type="button"
+                onClick={() => handleDelete(document)}
+                className="rounded-lg p-1.5 text-slate-300 transition hover:bg-red-50 hover:text-red-500"
+                aria-label={`Delete ${document.file_name || 'stamped complaint'}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-4 border-t border-emerald-200 pt-4">
+        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600" htmlFor="court-case-number">
+          Court Case Number
+        </label>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <input
+            id="court-case-number"
+            value={caseNumber}
+            onChange={(event) => setCaseNumber(event.target.value)}
+            disabled={!hasStampedComplaint || saving}
+            placeholder={hasStampedComplaint ? 'Enter the case number exactly as stamped' : 'Upload a stamped complaint first'}
+            className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+          />
+          <button
+            type="button"
+            onClick={handleSaveCaseNumber}
+            disabled={!hasStampedComplaint || saving || !caseNumber.trim()}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {caseData?.case_number ? 'Update Case Number' : 'Save Case Number'}
+          </button>
+        </div>
+        {!hasStampedComplaint && (
+          <p className="mt-2 text-xs text-slate-500">The case number is intentionally unavailable until a stamped complaint is attached to this case file.</p>
+        )}
+      </div>
+
+      {message && <p className="mt-3 text-xs font-medium text-emerald-700">{message}</p>}
+      {error && <p className="mt-3 text-xs font-medium text-red-600">{error}</p>}
     </div>
   );
 }
@@ -2603,6 +2767,16 @@ export default function CaseDetail() {
 
           {/* Secure Client Payout Information */}
           <PayoutInformationPanel caseId={id} />
+
+          {/* Court-filed complaint and docket number */}
+          <StampedComplaintFilingSection
+            caseId={id}
+            caseData={caseData}
+            documents={documents}
+            onRefresh={async () => {
+              await Promise.all([fetchCase(), fetchDocuments()]);
+            }}
+          />
 
           {/* Documents */}
           <DocumentsUploadSection caseId={id} documents={documents} onRefresh={fetchDocuments} />

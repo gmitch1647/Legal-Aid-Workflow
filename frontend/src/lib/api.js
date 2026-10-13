@@ -154,6 +154,13 @@ export async function getCase(id) {
   return request(`/cases/${id}`);
 }
 
+export async function saveCaseFiling(caseId, caseNumber) {
+  return request(`/cases/${caseId}/filing`, {
+    method: 'PATCH',
+    body: JSON.stringify({ case_number: caseNumber }),
+  });
+}
+
 export async function submitCase(data) {
   return request('/cases/submit', {
     method: 'POST',
