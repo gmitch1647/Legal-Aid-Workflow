@@ -15,7 +15,7 @@ import fitz
 from fastapi import HTTPException
 from starlette.requests import Request
 from docx import Document
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from routers import signing
 
@@ -271,7 +271,7 @@ class SigningPdfNormalizationTests(unittest.TestCase):
     def test_corrected_settlement_request_copies_source_and_preserves_completed_record(self):
         source_id = "0f7c75a1-b44d-4d6c-9c85-dc6dfe62591a"
         source_path = f"signing/{source_id}/source_Keshaun_Transunion_Agreement.pdf"
-        source_bytes = b"%PDF-1.7\nsource-agreement"
+        source_bytes = self._two_party_execution_pdf()
         source_session = {
             "id": source_id,
             "token": "completed-token",
@@ -312,19 +312,26 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(copied_attachment["file"], source_bytes)
         self.assertNotEqual(copied_attachment["path"], source_path)
         replacement_record = supabase.queries["signing_sessions"].insert_payloads[0]
-        self.assertEqual(replacement_record["document_type"], "additional_settlement")
+        self.assertEqual(replacement_record["document_type"], "settlement_agreement")
         self.assertEqual(replacement_record["status"], "awaiting_signature")
         self.assertEqual(source_session["status"], "signed")
         self.assertEqual(source_session["signed_path"], f"signing/{source_id}/signed_Keshaun_Transunion_Agreement.pdf")
         send_email.assert_awaited_once()
 
-    def test_corrected_request_requires_a_real_signer_line_after_certificate_placement(self):
+    def test_corrected_request_requires_verified_native_line_after_certificate_placement(self):
         source_id = "575d97a4-6927-48c3-b5a4-f1387227108e"
+        source_path = f"signing/{source_id}/source_Jada_Agreement.pdf"
+        source_doc = fitz.open()
+        source_doc.new_page(width=612, height=792).insert_text(
+            fitz.Point(72, 144), "Supplemental document without signature fields", fontsize=12
+        )
+        source_bytes = source_doc.tobytes()
+        source_doc.close()
         source_session = {
             "id": source_id,
             "title": "Document — Jada Wiggins",
             "document_type": "settlement",
-            "original_path": f"signing/{source_id}/source_Jada_Agreement.pdf",
+            "original_path": source_path,
             "signer_name": "Jada Wiggins",
             "signer_email": "jada@example.test",
             "sent_by": "attorney-1",
@@ -333,7 +340,10 @@ class SigningPdfNormalizationTests(unittest.TestCase):
                 "signature_placement": {"strategy": "supplemental_signature_certificate"},
             },
         }
-        supabase = _FakeSigningSupabase(table_rows={"signing_sessions": [source_session]})
+        supabase = _FakeSigningSupabase(
+            downloads={source_path: source_bytes},
+            table_rows={"signing_sessions": [source_session]},
+        )
 
         with patch.object(signing, "get_supabase", return_value=supabase), patch.object(
             signing, "_get_current_user", _attorney_user
@@ -346,7 +356,7 @@ class SigningPdfNormalizationTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertIn("designated client signature line", raised.exception.detail)
+        self.assertIn("could not verify a client signature line", raised.exception.detail)
         self.assertEqual(supabase.bucket.uploads, [])
 
     def test_docx_session_generates_separate_pdf_without_mutating_source_path(self):
@@ -636,6 +646,32 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(len(signed_document), 1)
         self.assertIn(datetime.now(timezone.utc).strftime("%m/%d/%Y"), signed_document[0].get_text())
         signed_document.close()
+
+    def test_scanned_printed_signer_line_is_verified_before_signature_placement(self):
+        # A flattened agreement page exposes no PDF text or vector drawings;
+        # the page has the same visible native signer line a client sees.
+        image = Image.new("RGB", (1224, 1584), "white")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.truetype("DejaVuSans.ttf", 32)
+        draw.line((570, 920, 1110, 920), fill="black", width=3)
+        draw.text((575, 936), "Jada Wiggins", fill="black", font=font)
+        draw.text((575, 1010), "Dated:", fill="black", font=font)
+        page_png = io.BytesIO()
+        image.save(page_png, format="PNG")
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_image(page.rect, stream=page_png.getvalue())
+        source_pdf = document.tobytes()
+        document.close()
+
+        placement = signing._native_execution_placement_from_pdf(source_pdf, signer_name="Jada Wiggins")
+
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement["strategy"], "ocr_printed_signer_execution_line")
+        self.assertEqual(placement["page"], 0)
+        self.assertGreater(placement["signature_rect"][0], 280)
+        self.assertLess(placement["signature_rect"][3], 460)
 
     def test_named_signer_execution_line_is_used_when_by_label_is_absent(self):
         document = fitz.open()

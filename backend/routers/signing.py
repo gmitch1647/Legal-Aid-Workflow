@@ -96,7 +96,11 @@ def _uses_supplemental_signature_certificate(document_type: str | None, title: s
     return (
         normalized_type == ADDITIONAL_SETTLEMENT_DOCUMENT_TYPE
         or (
-            normalized_type in STRICT_SETTLEMENT_DOCUMENT_TYPES
+            # This title convention only identifies older generic supplemental
+            # uploads.  A correction that has passed native-line preflight uses
+            # ``settlement_agreement`` explicitly so it can never regress to a
+            # certificate page when the signer completes it.
+            normalized_type == "settlement"
             and (
                 normalized_title.startswith("additional settlement")
                 or normalized_title.startswith("document —")
@@ -999,23 +1003,6 @@ async def create_corrected_signing_request(
     if not source.get("signer_email"):
         raise HTTPException(status_code=409, detail="The signer email is missing from the original request.")
 
-    source_audit = source.get("audit_trail") or {}
-    if isinstance(source_audit, str):
-        try:
-            source_audit = json.loads(source_audit)
-        except (TypeError, ValueError):
-            source_audit = {}
-    prior_placement = (source_audit.get("signature_placement") or {}) if isinstance(source_audit, dict) else {}
-    if prior_placement.get("strategy") == "supplemental_signature_certificate":
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This document has no detected client signature line, so its completed record uses an attached "
-                "signature certificate. Upload a version with a designated client signature line before sending a "
-                "replacement request; the original signed record remains unchanged."
-            ),
-        )
-
     document_type = str(source.get("document_type") or "").strip().lower()
     if document_type not in STRICT_SETTLEMENT_DOCUMENT_TYPES and not _uses_supplemental_signature_certificate(
         document_type, source.get("title")
@@ -1059,8 +1046,27 @@ async def create_corrected_signing_request(
     source_filename = _safe_filename(
         Path(str(source["original_path"])).name.removeprefix("source_").removeprefix("original_")
     )
-    replacement_path = f"signing/{replacement_id}/source_{source_filename}"
     suffix = Path(source_filename).suffix.lower()
+    native_placement = None
+    if suffix == ".pdf":
+        native_placement = _native_execution_placement_from_pdf(
+            original_bytes,
+            signer_name=str(source.get("signer_name") or ""),
+        )
+        if native_placement is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "LegalFlow could not verify a client signature line in the original agreement. "
+                    "The corrected request was not created or emailed; the original signed record remains unchanged."
+                ),
+            )
+        # A verified native line turns even a legacy generic upload into a
+        # strict agreement session. The subsequent signing step must therefore
+        # reject rather than append a certificate if the source layout changes.
+        document_type = "settlement_agreement"
+
+    replacement_path = f"signing/{replacement_id}/source_{source_filename}"
     content_type = (
         DOCX_MIME_TYPE if suffix == ".docx" else DOC_MIME_TYPE if suffix == ".doc" else "application/pdf"
     )
@@ -1077,6 +1083,8 @@ async def create_corrected_signing_request(
     now = datetime.now(timezone.utc).isoformat()
     token = _generate_token()
     source_title = " ".join(str(source.get("title") or "Settlement Agreement").split())
+    if native_placement and _uses_supplemental_signature_certificate(source.get("document_type"), source.get("title")):
+        source_title = f"Settlement Agreement — {source.get('signer_name') or 'Client'}"
     corrected_title = f"{source_title} — Corrected Signature"
     message = (
         "A correction is required before this agreement can be finalized. "
@@ -2438,6 +2446,172 @@ def _execution_block_placement(doc, signer_name: str | None = None) -> Optional[
     return None
 
 
+def _ocr_printed_signer_execution_line(doc, signer_name: str | None = None) -> Optional[dict]:
+    """Locate a flattened/scanned client signature line with bounded OCR.
+
+    Some settlement PDFs preserve the visible signature line as page artwork,
+    not a PDF drawing or text object.  This recognises only the conservative
+    combination of (1) the exact signer name, (2) a substantial horizontal line
+    directly above it, and (3) a nearby Date/Dated label.  It never guesses at a
+    blank area or uses OCR alone as a signature target.
+    """
+    normalized_name = " ".join(str(signer_name or "").split())
+    name_key = re.sub(r"[^a-z0-9]+", "", normalized_name.casefold())
+    if len(name_key) < 4:
+        return None
+
+    try:
+        import fitz
+        import pytesseract
+        from PIL import Image
+        from pytesseract import Output
+    except Exception as exc:
+        logger.info("OCR signature-line detection is unavailable: %s", exc)
+        return None
+
+    for page in reversed(doc):
+        page_rect = page.rect
+        try:
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("L")
+            ocr = pytesseract.image_to_data(image, output_type=Output.DICT, config="--psm 6")
+        except Exception as exc:
+            logger.info("Could not OCR possible signature page %s: %s", page.number + 1, exc)
+            continue
+
+        width, height = image.size
+        scale_x = width / page_rect.width
+        scale_y = height / page_rect.height
+        words = []
+        for index, raw_text in enumerate(ocr.get("text", [])):
+            text = " ".join(str(raw_text or "").split())
+            if not text:
+                continue
+            try:
+                confidence = float(ocr.get("conf", ["-1"])[index])
+            except (TypeError, ValueError):
+                confidence = -1
+            if confidence < 25:
+                continue
+            words.append({
+                "text": text,
+                "key": re.sub(r"[^a-z0-9]+", "", text.casefold()),
+                "left": int(ocr["left"][index]),
+                "top": int(ocr["top"][index]),
+                "width": int(ocr["width"][index]),
+                "height": int(ocr["height"][index]),
+                "block": int(ocr["block_num"][index]),
+                "paragraph": int(ocr["par_num"][index]),
+                "line": int(ocr["line_num"][index]),
+            })
+        if not words:
+            continue
+
+        lines = {}
+        for word in words:
+            lines.setdefault((word["block"], word["paragraph"], word["line"]), []).append(word)
+        text_lines = []
+        for line_words in lines.values():
+            line_words.sort(key=lambda item: item["left"])
+            line_key = "".join(word["key"] for word in line_words)
+            text_lines.append((line_key, line_words))
+
+        signer_candidates = []
+        for line_key, line_words in text_lines:
+            if name_key not in line_key:
+                continue
+            left = min(word["left"] for word in line_words)
+            top = min(word["top"] for word in line_words)
+            right = max(word["left"] + word["width"] for word in line_words)
+            bottom = max(word["top"] + word["height"] for word in line_words)
+            if top / scale_y < page_rect.height * 0.20:
+                continue
+            signer_candidates.append((left, top, right, bottom))
+        if not signer_candidates:
+            continue
+
+        date_candidates = [
+            word for word in words
+            if word["key"] in {"date", "dated"}
+        ]
+        if not date_candidates:
+            continue
+
+        pixels = image.load()
+        for signer_left, signer_top, signer_right, signer_bottom in signer_candidates:
+            matching_dates = [
+                word for word in date_candidates
+                if word["top"] >= signer_bottom + int(3 * scale_y)
+                and word["top"] - signer_top <= int(185 * scale_y)
+                and abs(word["left"] - signer_left) <= int(130 * scale_x)
+            ]
+            if not matching_dates:
+                continue
+            date_word = min(matching_dates, key=lambda word: word["top"])
+
+            x_start = max(0, signer_left - int(28 * scale_x))
+            x_end = min(width, max(signer_right + int(105 * scale_x), x_start + int(115 * scale_x)))
+            y_start = max(0, signer_top - int(64 * scale_y))
+            y_end = min(height, signer_top + int(4 * scale_y))
+            best_line = None
+            for y in range(y_start, y_end):
+                run_start = None
+                for x in range(x_start, x_end + 1):
+                    is_dark = x < x_end and pixels[x, y] < 185
+                    if is_dark and run_start is None:
+                        run_start = x
+                    elif not is_dark and run_start is not None:
+                        run_width = x - run_start
+                        if run_width >= int(90 * scale_x):
+                            score = (run_width, -abs(y - signer_top))
+                            if best_line is None or score > best_line[0]:
+                                best_line = (score, run_start, x, y)
+                        run_start = None
+            if best_line is None:
+                continue
+
+            _, line_left, line_right, line_y = best_line
+            signature_bottom = min(line_y / scale_y - 2.0, signer_top / scale_y - 3.0)
+            signature_top = max(signature_bottom - 30.0, 36.0)
+            field_left = max(36.0, line_left / scale_x + 5.0)
+            field_right = min(page_rect.width - 36.0, line_right / scale_x - 5.0)
+            if field_right - field_left < 80 or signature_bottom - signature_top < 14:
+                continue
+            return {
+                "strategy": "ocr_printed_signer_execution_line",
+                "layout": "ocr_printed_name_dated",
+                "page": page.number,
+                "signature_rect": [
+                    round(field_left, 2), round(signature_top, 2),
+                    round(field_right, 2), round(signature_bottom, 2),
+                ],
+                "date_origin": [
+                    round((date_word["left"] + date_word["width"]) / scale_x + 6.0, 2),
+                    round((date_word["top"] + date_word["height"]) / scale_y - 2.0, 2),
+                ],
+                "date_label_rect": [
+                    round(date_word["left"] / scale_x, 2), round(date_word["top"] / scale_y, 2),
+                    round((date_word["left"] + date_word["width"]) / scale_x, 2),
+                    round((date_word["top"] + date_word["height"]) / scale_y, 2),
+                ],
+            }
+    return None
+
+
+def _native_execution_placement_from_pdf(pdf_bytes: bytes, signer_name: str | None = None) -> Optional[dict]:
+    """Return one verified native execution target without mutating the PDF."""
+    import fitz
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return _execution_block_placement(doc, signer_name=signer_name) or _ocr_printed_signer_execution_line(
+            doc,
+            signer_name=signer_name,
+        )
+    finally:
+        doc.close()
+
+
 def _fallback_placement(page) -> dict:
     """Return the legacy last-page placement only when no execution block is found."""
     page_rect = page.rect
@@ -2561,7 +2735,10 @@ def _embed_signature(
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     date_str = datetime.now(timezone.utc).strftime("%m/%d/%Y")
     display_name = typed_name or signer_name
-    placement = _execution_block_placement(doc, signer_name=signer_name)
+    placement = _execution_block_placement(doc, signer_name=signer_name) or _ocr_printed_signer_execution_line(
+        doc,
+        signer_name=signer_name,
+    )
     if placement is None:
         if _uses_supplemental_signature_certificate(document_type, document_title):
             placement = _supplemental_signature_certificate_placement(doc, document_title)

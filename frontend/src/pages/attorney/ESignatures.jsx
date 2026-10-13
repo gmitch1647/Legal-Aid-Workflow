@@ -1238,7 +1238,7 @@ function DetailModal({ requestId, data, onClose, onCancel, onDownloadOriginal, o
                     <dd className="text-slate-700">{(() => {
                       const strategy = data.signing_audit.signature_placement?.strategy;
                       if (strategy === 'supplemental_signature_certificate') return 'Attached signature certificate (no signer line detected)';
-                      if (['detected_execution_block', 'explicit_client_execution_block', 'printed_signer_dated_execution_line', 'named_signer_execution_block', 'vertical_plaintiff_execution_block', 'closing_statement_execution_block'].includes(strategy)) return 'Agreement execution line';
+                      if (['detected_execution_block', 'explicit_client_execution_block', 'printed_signer_dated_execution_line', 'ocr_printed_signer_execution_line', 'named_signer_execution_block', 'vertical_plaintiff_execution_block', 'closing_statement_execution_block'].includes(strategy)) return 'Agreement execution line';
                       if (strategy === 'fallback_last_page') return 'Last-page fallback — review recommended';
                       return 'Signature placement unavailable';
                     })()}</dd>
