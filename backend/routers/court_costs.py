@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from utils.court_costs_pdf import render_unpaid_court_costs_pdf
 from utils.email_service import send_email
-from utils.firm_notifications import firm_notification_recipient
+from utils.firm_notifications import firm_notification_recipient, notification_email_for_profile
 from utils.supabase_client import get_supabase
 from routers.cases import get_current_user
 
@@ -128,6 +128,18 @@ async def _notify(recipients, subject, body, key):
         except Exception:
             logger.exception("Court-cost notification failed for %s", email)
     return sent
+
+
+def _court_cost_update_recipients(submitter, firm_email, esther_email=None, include_esther=False):
+    """Resolve operational alerts without sending the owner to a legacy login inbox."""
+    candidates = [notification_email_for_profile(submitter), firm_email]
+    if include_esther:
+        candidates.append(esther_email)
+    return list(dict.fromkeys(
+        str(email or "").strip().lower()
+        for email in candidates
+        if str(email or "").strip()
+    ))
 
 
 @router.get("")
@@ -278,7 +290,7 @@ async def update_court_cost(request_id: str, body: CourtCostUpdate, authorizatio
     supabase.table("court_cost_requests").update(payload).eq("id", request_id).execute()
     supabase.table("court_cost_events").insert({"id": str(uuid.uuid4()), "request_id": request_id, "actor_id": profile.get("id"), "action": body.status, "from_status": row.get("status"), "to_status": body.status, "note": body.note or body.payment_note, "amount": body.paid_amount if body.status == "paid" else row.get("amount"), "created_at": timestamp}).execute()
     if body.status in {"needs_correction", "paid"}:
-        submitter = (supabase.table("profiles").select("email,full_name").eq("id", row.get("submitted_by")).limit(1).execute().data or [{}])[0]
+        submitter = (supabase.table("profiles").select("email,full_name,notification_preferences").eq("id", row.get("submitted_by")).limit(1).execute().data or [{}])[0]
         owner_email = _owner_notification_email(supabase)
         esther = (supabase.table("profiles").select("email,full_name").ilike("full_name", "Esther Oise").limit(1).execute().data or [{}])[0]
         case = (supabase.table("cases").select("plaintiff_name,case_number").eq("id", row.get("case_id")).limit(1).execute().data or [{}])[0]
@@ -289,7 +301,11 @@ async def update_court_cost(request_id: str, body: CourtCostUpdate, authorizatio
         else:
             subject = f"Court-cost request needs correction: {matter}"
             message = f"<p>The court-cost request for <strong>{escape(str(matter))}</strong> needs correction.</p><p><strong>Note:</strong> {escape(body.note or 'Please review the request in LegalFlow.')}</p>"
-        recipients = [submitter.get("email"), owner_email]
-        if body.status == "paid": recipients.append(esther.get("email"))
+        recipients = _court_cost_update_recipients(
+            submitter,
+            owner_email,
+            esther.get("email"),
+            include_esther=body.status == "paid",
+        )
         await _notify(recipients, subject, message, request_id + body.status)
     return _enrich(supabase, {**row, **payload, "id": request_id}, profile, _is_owner(supabase, profile))
