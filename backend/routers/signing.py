@@ -999,6 +999,23 @@ async def create_corrected_signing_request(
     if not source.get("signer_email"):
         raise HTTPException(status_code=409, detail="The signer email is missing from the original request.")
 
+    source_audit = source.get("audit_trail") or {}
+    if isinstance(source_audit, str):
+        try:
+            source_audit = json.loads(source_audit)
+        except (TypeError, ValueError):
+            source_audit = {}
+    prior_placement = (source_audit.get("signature_placement") or {}) if isinstance(source_audit, dict) else {}
+    if prior_placement.get("strategy") == "supplemental_signature_certificate":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This document has no detected client signature line, so its completed record uses an attached "
+                "signature certificate. Upload a version with a designated client signature line before sending a "
+                "replacement request; the original signed record remains unchanged."
+            ),
+        )
+
     document_type = str(source.get("document_type") or "").strip().lower()
     if document_type not in STRICT_SETTLEMENT_DOCUMENT_TYPES and not _uses_supplemental_signature_certificate(
         document_type, source.get("title")

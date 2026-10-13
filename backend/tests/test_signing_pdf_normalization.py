@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import fitz
+from fastapi import HTTPException
 from starlette.requests import Request
 from docx import Document
 from PIL import Image
@@ -316,6 +317,37 @@ class SigningPdfNormalizationTests(unittest.TestCase):
         self.assertEqual(source_session["status"], "signed")
         self.assertEqual(source_session["signed_path"], f"signing/{source_id}/signed_Keshaun_Transunion_Agreement.pdf")
         send_email.assert_awaited_once()
+
+    def test_corrected_request_requires_a_real_signer_line_after_certificate_placement(self):
+        source_id = "575d97a4-6927-48c3-b5a4-f1387227108e"
+        source_session = {
+            "id": source_id,
+            "title": "Document — Jada Wiggins",
+            "document_type": "settlement",
+            "original_path": f"signing/{source_id}/source_Jada_Agreement.pdf",
+            "signer_name": "Jada Wiggins",
+            "signer_email": "jada@example.test",
+            "sent_by": "attorney-1",
+            "status": "signed",
+            "audit_trail": {
+                "signature_placement": {"strategy": "supplemental_signature_certificate"},
+            },
+        }
+        supabase = _FakeSigningSupabase(table_rows={"signing_sessions": [source_session]})
+
+        with patch.object(signing, "get_supabase", return_value=supabase), patch.object(
+            signing, "_get_current_user", _attorney_user
+        ), self.assertRaises(HTTPException) as raised:
+            asyncio.run(
+                signing.create_corrected_signing_request(
+                    signing.CorrectedSigningRequest(source_session_id=source_id, confirmed=True),
+                    authorization="Bearer token",
+                )
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("designated client signature line", raised.exception.detail)
+        self.assertEqual(supabase.bucket.uploads, [])
 
     def test_docx_session_generates_separate_pdf_without_mutating_source_path(self):
         source_path = "signing/session-123/source_agreement.docx"
