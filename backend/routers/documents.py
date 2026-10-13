@@ -212,6 +212,141 @@ def _require_stamped_complaint_uploader(supabase, profile: dict, case: dict) -> 
         )
 
 
+_DOCUMENT_CATEGORY_LABELS = {
+    "stamped_complaint": "Stamped Complaint",
+    "complaint": "Complaint",
+    "complaint_exhibit": "Complaint Exhibit",
+    "discovery": "Discovery Document",
+    "credit_report": "Credit Report",
+    "dispute_letter": "Dispute Letter",
+    "bureau_response": "Bureau Response",
+    "collection_notice": "Collection Notice",
+    "call_log": "Call Log",
+    "pii": "Secure Client Document",
+    "other": "Case Document",
+}
+
+
+def _referral_portal_document_recipients(supabase, referral_partner_id: str | None) -> tuple[dict | None, list[dict]]:
+    """Return unique active referral-portal recipients for one referred case.
+
+    A referral partner's contact email is retained for backwards-compatible
+    notifications. Active portal owners and active team members are included as
+    well, which ensures a co-owner such as Ethan receives the alert at the
+    email tied to the LegalFlow account rather than only at the firm's primary
+    referral inbox.
+    """
+    if not referral_partner_id:
+        return None, []
+
+    partner_response = (
+        supabase.table("referral_partners")
+        .select("id,full_name,email,portal_user_id,portal_active")
+        .eq("id", referral_partner_id)
+        .eq("portal_active", True)
+        .limit(1)
+        .execute()
+    )
+    partner = (partner_response.data or [None])[0]
+    if not partner:
+        return None, []
+
+    profile_ids = {str(partner.get("portal_user_id") or "").strip()}
+    member_response = (
+        supabase.table("referral_portal_team_members")
+        .select("profile_id")
+        .eq("referral_partner_id", partner["id"])
+        .eq("status", "active")
+        .execute()
+    )
+    profile_ids.update(
+        str(member.get("profile_id") or "").strip()
+        for member in (member_response.data or [])
+    )
+    profile_ids.discard("")
+
+    recipients: list[dict] = []
+    contact_email = str(partner.get("email") or "").strip().lower()
+    if contact_email:
+        recipients.append({"email": contact_email, "full_name": partner.get("full_name") or "Referral Partner"})
+
+    if profile_ids:
+        profile_response = (
+            supabase.table("profiles")
+            .select("id,full_name,email")
+            .in_("id", list(profile_ids))
+            .execute()
+        )
+        recipients.extend(
+            {"email": str(profile.get("email") or "").strip().lower(), "full_name": profile.get("full_name") or "Referral Partner"}
+            for profile in (profile_response.data or [])
+            if str(profile.get("email") or "").strip()
+        )
+
+    unique_recipients: list[dict] = []
+    seen_emails: set[str] = set()
+    for recipient in recipients:
+        email = str(recipient.get("email") or "").strip().lower()
+        if email and email not in seen_emails:
+            seen_emails.add(email)
+            unique_recipients.append({**recipient, "email": email})
+    return partner, unique_recipients
+
+
+async def _notify_referral_portal_document_upload(supabase, case: dict, document: dict, uploaded_by: dict) -> list[str]:
+    """Email portal users after a document is added to one of their own matters.
+
+    Notifications disclose only the matter label, document category, and file
+    name. Recipients must still authenticate to LegalFlow before opening the
+    secure document. Notification failures are deliberately isolated from the
+    completed upload so an available case file is never rolled back by email.
+    """
+    partner, recipients = _referral_portal_document_recipients(supabase, case.get("referral_partner_id"))
+    if not partner or not recipients:
+        return []
+
+    client_label = str(case.get("plaintiff_name") or case.get("case_number") or "your referred matter").strip()
+    document_label = _DOCUMENT_CATEGORY_LABELS.get(
+        str(document.get("document_category") or "other").strip().lower(),
+        "Case Document",
+    )
+    file_name = str(document.get("file_name") or "Document").strip()
+    uploader_name = str(uploaded_by.get("full_name") or "the LegalFlow team").strip()
+    frontend_url = str(os.environ.get("FRONTEND_URL", "https://legalflow.me")).rstrip("/")
+    subject = f"New {document_label}: {client_label}"
+    sent_to: list[str] = []
+
+    for recipient in recipients:
+        email = recipient["email"]
+        try:
+            delivered = await send_email(
+                to=email,
+                subject=subject,
+                body=(
+                    "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2937;max-width:560px;\">"
+                    f"<h2 style=\"color:#1e40af;\">New {escape(document_label)} Uploaded</h2>"
+                    f"<p>Hello {escape(str(recipient.get('full_name') or 'there'))},</p>"
+                    f"<p>A file was added to <strong>{escape(client_label)}</strong>.</p>"
+                    f"<p><strong>File:</strong> {escape(file_name)}<br>"
+                    f"<strong>Category:</strong> {escape(document_label)}<br>"
+                    f"<strong>Uploaded by:</strong> {escape(uploader_name)}</p>"
+                    f"<p><a href=\"{escape(frontend_url)}/attorney/documents\">Open My Case Documents in LegalFlow</a> to view the file securely.</p>"
+                    "<p style=\"font-size:12px;color:#64748b;\">For your security, the file is not attached to this email.</p>"
+                    "</div>"
+                ),
+                idempotency_key=f"referral-document-upload:{document.get('id')}:{email}",
+            )
+            if delivered:
+                sent_to.append(email)
+        except Exception:
+            logger.exception(
+                "Could not notify referral portal recipient %s about document %s",
+                email,
+                document.get("id"),
+            )
+    return sent_to
+
+
 # ---------------------------------------------------------------------------
 # POST /cases/{case_id}/documents -- upload document
 # ---------------------------------------------------------------------------
@@ -400,6 +535,19 @@ async def upload_document(
                     logger.exception("Could not automatically save detected case number for case %s", case_id)
                     result["case_number_auto_saved"] = False
                     result["case_number_detection_status"] = "detected_not_saved"
+        try:
+            sent_to = await _notify_referral_portal_document_upload(
+                supabase,
+                case,
+                result,
+                profile,
+            )
+            result["referral_notification_sent_to"] = sent_to
+        except Exception:
+            # Sending a partner notification is never allowed to make a
+            # successfully stored case document look like a failed upload.
+            logger.exception("Could not prepare referral notification for document %s", result.get("id"))
+            result["referral_notification_sent_to"] = []
         return result
     except Exception as exc:
         logger.exception("Failed to create document record for case %s", case_id)
