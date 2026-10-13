@@ -8,8 +8,10 @@ approval/revision/denial, and file downloads.
 
 import asyncio
 import html
+import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import unquote, urlparse
@@ -172,6 +174,63 @@ def _require_attorney(profile: dict) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only attorneys can perform this action.",
         )
+
+
+def _is_client_profile(profile: Optional[dict]) -> bool:
+    """Return whether a linked profile may be used as a case client.
+
+    Imported legacy matters can still contain a client_id that points to the
+    firm owner or another staff account.  Those profiles must never supply a
+    client-facing name, contact, or profile link.
+    """
+    return bool(profile and profile.get("role") == "client")
+
+
+def _client_profile_matches_case_plaintiff(profile: Optional[dict], plaintiff_name: Optional[str]) -> bool:
+    """Return whether a client profile matches the plaintiff portion of a matter.
+
+    Case labels commonly include a defendant (for example, ``Avery Doe v.
+    Equifax``), whereas the profile stores only ``Avery Doe``.  A mismatched
+    client profile is treated as unresolved rather than linking the matter to
+    another person's client page or contact details.
+    """
+    if not _is_client_profile(profile):
+        return False
+    profile_name = str(profile.get("full_name") or "").strip()
+    case_name = str(plaintiff_name or "").strip()
+    if not profile_name or not case_name:
+        return True
+    plaintiff_only = re.split(r"\s+v\.?\s+", case_name, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    return plaintiff_only.casefold() == profile_name.casefold()
+
+
+def _case_plaintiff_name(case: dict, client_profile: Optional[dict]) -> str:
+    """Resolve a display plaintiff without falling back to an owner profile."""
+    facts = str(case.get("case_facts") or "").strip()
+    if facts.startswith("{"):
+        try:
+            structured_facts = json.loads(facts)
+            if isinstance(structured_facts, dict):
+                for key in ("client_name", "plaintiff_name", "name"):
+                    candidate = str(structured_facts.get(key) or "").strip()
+                    if candidate:
+                        return candidate
+        except (TypeError, ValueError):
+            pass
+
+    if "=== PLAINTIFF ===" in facts:
+        for line in facts.split("\n"):
+            if line.strip().startswith("Name:"):
+                candidate = line.replace("Name:", "", 1).strip()
+                if candidate:
+                    return candidate
+
+    stored_name = str(case.get("plaintiff_name") or "").strip()
+    if stored_name:
+        return stored_name
+    if _is_client_profile(client_profile):
+        return str(client_profile.get("full_name") or "").strip() or "Unknown Client"
+    return "Unknown Client"
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +562,12 @@ async def list_cases(
 
     enriched: list[dict] = []
     for case in cases:
-        client_profile = clients_by_id.get(str(case.get("client_id")))
+        raw_client_profile = clients_by_id.get(str(case.get("client_id")))
+        client_profile = (
+            raw_client_profile
+            if _client_profile_matches_case_plaintiff(raw_client_profile, case.get("plaintiff_name"))
+            else None
+        )
         case["client"] = client_profile
         case["plaintiff_name"] = (
             case.get("plaintiff_name")
@@ -511,6 +575,11 @@ async def list_cases(
             or "Unknown Client"
         )
         case["client_name"] = case["plaintiff_name"]
+        if raw_client_profile and not client_profile:
+            # Retain the case-side plaintiff label, but do not expose the owner
+            # or staff profile as a client link in the pipeline response.
+            case["unresolved_client_id"] = case.get("client_id")
+            case["client_id"] = None
         case["referral_partner"] = referral_partners_by_id.get(
             str(case.get("referral_partner_id"))
         ) if case.get("referral_partner_id") else None
@@ -564,23 +633,21 @@ async def get_case_detail(case_id: str, authorization: str = Header(...)):
         .limit(1)
         .execute()
     )
-    client_profile = client_resp.data[0] if client_resp.data else None
-    case["client"] = client_profile
-
-    # Extract plaintiff name from case_facts header
-    plaintiff_name = ""
-    facts = case.get("case_facts") or ""
-    if "=== PLAINTIFF ===" in facts:
-        for line in facts.split("\n"):
-            if line.strip().startswith("Name:"):
-                plaintiff_name = line.replace("Name:", "").strip()
-                break
-
-    case["plaintiff_name"] = (
-        plaintiff_name or
-        (client_profile.get("full_name") if client_profile else None) or
-        "Unknown Client"
+    raw_client_profile = client_resp.data[0] if client_resp.data else None
+    client_profile = (
+        raw_client_profile
+        if _client_profile_matches_case_plaintiff(raw_client_profile, case.get("plaintiff_name"))
+        else None
     )
+    case["client"] = client_profile
+    if raw_client_profile and not client_profile:
+        # Never expose an attorney/staff profile or a different client's profile
+        # as this matter's client. The attorney can relink it after verifying a
+        # client profile through the existing Assign Client control.
+        case["unresolved_client_id"] = case.get("client_id")
+        case["client_id"] = None
+
+    case["plaintiff_name"] = _case_plaintiff_name(case, client_profile)
     case["client_name"] = case["plaintiff_name"]
 
     # Defendants
