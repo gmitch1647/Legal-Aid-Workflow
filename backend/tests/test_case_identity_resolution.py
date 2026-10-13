@@ -46,6 +46,10 @@ class CaseIdentityResolutionTests(unittest.TestCase):
         }
         self.assertEqual(cases._case_plaintiff_name(case, None), "Shauna Turner Wright")
 
+    def test_client_profile_is_accepted_when_legacy_case_label_is_blank(self):
+        client = {"id": "client-1", "role": "client", "full_name": "Shannon Cholko"}
+        self.assertTrue(cases._client_profile_matches_case_plaintiff(client, None))
+
 
 if __name__ == "__main__":
     unittest.main()

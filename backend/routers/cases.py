@@ -522,7 +522,7 @@ async def list_cases(
     if client_ids:
         client_rows = (
             supabase.table("profiles")
-            .select("id,full_name,email")
+            .select("id,full_name,email,role")
             .in_("id", client_ids)
             .execute()
         ).data or []
