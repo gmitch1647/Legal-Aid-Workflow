@@ -23,7 +23,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr, Field, field_validator
-
+from utils.firm_notifications import notification_email_for_profile
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -1070,15 +1070,15 @@ async def complete_w9_request(token: str, payload: W9PublicSubmission, request: 
 
         attorney = (
             supabase.table("profiles")
-            .select("email, full_name")
+            .select("email, full_name, notification_preferences")
             .eq("id", request_row["sent_by"])
             .limit(1)
             .execute()
         )
-        if attorney.data:
+        if attorney.data and notification_email_for_profile(attorney.data[0]):
             frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
             await send_email(
-                to=attorney.data[0]["email"],
+                to=notification_email_for_profile(attorney.data[0]),
                 subject=f"Completed W-9: {submission.legal_name}",
                 body=f"""
                 <div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;\">

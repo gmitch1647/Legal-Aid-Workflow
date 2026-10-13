@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from routers.w9 import W9_STORAGE_BUCKET
 from utils.esign_notifications import notify_attorney_of_esign_event, signed_document_filename
+from utils.firm_notifications import notification_email_for_profile
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -754,7 +755,7 @@ async def send_signature_request(
         "status": "awaiting_signature",
         "sent_by": profile["id"],
         "notification_recipient_id": profile["id"],
-        "notification_recipient_email": profile.get("email", ""),
+        "notification_recipient_email": notification_email_for_profile(profile) or "",
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -907,7 +908,7 @@ async def send_document_for_signature(
         "status": "awaiting_signature",
         "sent_by": profile["id"],
         "notification_recipient_id": profile["id"],
-        "notification_recipient_email": profile.get("email", ""),
+        "notification_recipient_email": notification_email_for_profile(profile) or "",
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

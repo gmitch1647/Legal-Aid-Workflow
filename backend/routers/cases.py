@@ -26,6 +26,7 @@ from models.schemas import (
     DenialRequest,
     RevisionRequest,
 )
+from utils.firm_notifications import firm_notification_recipient
 from utils.supabase_client import get_supabase
 from utils.referral_portal_access import get_referral_portal_partner
 from utils.notifications import (
@@ -432,16 +433,10 @@ async def submit_case(
 
     # Notify attorney (email -- best effort)
     try:
-        attorney_resp = (
-            supabase.table("profiles")
-            .select("email")
-            .eq("role", "attorney")
-            .limit(1)
-            .execute()
-        )
-        if attorney_resp.data:
+        attorney_email, _owner_profile = firm_notification_recipient(supabase)
+        if attorney_email:
             await send_case_submitted_notification(
-                attorney_email=attorney_resp.data[0]["email"],
+                attorney_email=attorney_email,
                 client_name=profile.get("full_name", "Client"),
             )
     except Exception:

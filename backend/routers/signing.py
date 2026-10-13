@@ -33,6 +33,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from pydantic import BaseModel
 
 from utils.esign_notifications import notify_attorney_of_esign_event, signed_document_filename
+from utils.firm_notifications import notification_email_for_profile
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -673,7 +674,7 @@ async def create_generated_pdf_signing_session(
         "client_id": client_id,
         "sent_by": profile["id"],
         "notification_recipient_id": profile["id"],
-        "notification_recipient_email": profile.get("email", ""),
+        "notification_recipient_email": notification_email_for_profile(profile) or "",
         "attorney_name": profile.get("full_name", ""),
         "message": message,
         "status": "awaiting_signature",
@@ -700,7 +701,7 @@ async def create_generated_pdf_signing_session(
             "client_id": client_id,
             "sent_by": profile["id"],
             "notification_recipient_id": profile["id"],
-            "notification_recipient_email": profile.get("email", ""),
+            "notification_recipient_email": notification_email_for_profile(profile) or "",
             "status": "awaiting_signature",
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -833,7 +834,7 @@ async def create_signing_session(
         "client_id": client_id if client_id else None,
         "sent_by": profile["id"],
         "notification_recipient_id": profile["id"],
-        "notification_recipient_email": profile.get("email", ""),
+        "notification_recipient_email": notification_email_for_profile(profile) or "",
         "attorney_name": profile.get("full_name", ""),
         "message": message,
         "status": session_status,
@@ -869,7 +870,7 @@ async def create_signing_session(
             "client_id": client_id if client_id else None,
             "sent_by": profile["id"],
             "notification_recipient_id": profile["id"],
-            "notification_recipient_email": profile.get("email", ""),
+            "notification_recipient_email": notification_email_for_profile(profile) or "",
             "status": session_status,
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1077,7 +1078,7 @@ async def create_corrected_signing_request(
         "client_id": source.get("client_id"),
         "sent_by": profile["id"],
         "notification_recipient_id": profile["id"],
-        "notification_recipient_email": profile.get("email", ""),
+        "notification_recipient_email": notification_email_for_profile(profile) or "",
         "attorney_name": profile.get("full_name", ""),
         "message": message,
         "status": "awaiting_signature",
@@ -1104,7 +1105,7 @@ async def create_corrected_signing_request(
             "client_id": record["client_id"],
             "sent_by": profile["id"],
             "notification_recipient_id": profile["id"],
-            "notification_recipient_email": profile.get("email", ""),
+            "notification_recipient_email": notification_email_for_profile(profile) or "",
             "status": "awaiting_signature",
             "sent_at": now,
             "created_at": now,
@@ -1314,7 +1315,7 @@ async def send_oise_engagement_contract(
             # activity notices return to the LegalFlow user who confirmed send.
             "sent_by": contract_attorney["id"],
             "notification_recipient_id": profile["id"],
-            "notification_recipient_email": profile.get("email", ""),
+            "notification_recipient_email": notification_email_for_profile(profile) or "",
             "attorney_name": contract_attorney.get("full_name") or OISE_ENGAGEMENT_ATTORNEY_NAME,
             "message": "Please review and sign your Oise Law Group PC representation agreement.",
             "status": "awaiting_signature",
@@ -1332,7 +1333,7 @@ async def send_oise_engagement_contract(
                 "client_id": case["client_id"],
                 "sent_by": contract_attorney["id"],
                 "notification_recipient_id": profile["id"],
-                "notification_recipient_email": profile.get("email", ""),
+                "notification_recipient_email": notification_email_for_profile(profile) or "",
                 "status": "awaiting_signature",
                 "sent_at": record["created_at"],
                 "created_at": record["created_at"],

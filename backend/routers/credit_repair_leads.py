@@ -8,8 +8,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, EmailStr, Field
-
 from utils.email_service import send_email
+from utils.firm_notifications import firm_notification_recipient
 from utils.referral_portal_access import get_referral_portal_partner
 from utils.supabase_client import get_supabase
 
@@ -67,33 +67,9 @@ def _safe_file_name(value: str | None) -> str:
 
 
 def _owner_email(supabase) -> str | None:
-    """Resolve the configured LegalFlow owner with an attorney fallback."""
-    try:
-        reviewer = (
-            supabase.table("settlement_package_reviewers")
-            .select("owner_profile_id")
-            .eq("active", True)
-            .limit(1)
-            .execute()
-        )
-        owner_id = ((reviewer.data or [None])[0] or {}).get("owner_profile_id")
-        if owner_id:
-            owner = supabase.table("profiles").select("email").eq("id", owner_id).limit(1).execute()
-            email = str((((owner.data or [None])[0] or {}).get("email") or "")).strip()
-            if email:
-                return email
-        fallback = (
-            supabase.table("profiles")
-            .select("email")
-            .eq("role", "attorney")
-            .order("created_at")
-            .limit(1)
-            .execute()
-        )
-        return str((((fallback.data or [None])[0] or {}).get("email") or "")).strip() or None
-    except Exception:
-        logger.exception("Could not resolve the Credit Repair Lead notification owner")
-        return None
+    """Resolve the dedicated firm inbox for new-lead alerts."""
+    recipient, _profile = firm_notification_recipient(supabase)
+    return recipient
 
 
 async def _notify_owner_of_new_lead(lead: dict, partner_name: str | None, document_count: int) -> None:

@@ -16,7 +16,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
-
+from utils.firm_notifications import firm_notification_recipient
 from utils.supabase_client import SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SUPABASE_URL, get_supabase
 from utils.referral_portal_access import get_referral_portal_access_level, get_referral_portal_partner, is_referral_portal_owner
 
@@ -232,13 +232,7 @@ def _safe_inbound_text(text: str | None, html_body: str | None = None) -> str:
 async def _notify_owner_of_partner_reply(supabase, partner: dict, subject: str | None, body: str, channel: str) -> None:
     """Alert the configured LegalFlow owner when a referral-partner reply is stored."""
     try:
-        reviewer = supabase.table("settlement_package_reviewers").select("owner_profile_id").eq("active", True).limit(1).execute()
-        owner_id = ((reviewer.data or [None])[0] or {}).get("owner_profile_id")
-        owner = supabase.table("profiles").select("email").eq("id", owner_id).limit(1).execute() if owner_id else None
-        owner_email = str((((owner.data or [None])[0] or {}).get("email") if owner else "") or "").strip()
-        if not owner_email:
-            fallback = supabase.table("profiles").select("email").eq("role", "attorney").order("created_at").limit(1).execute()
-            owner_email = str((((fallback.data or [None])[0] or {}).get("email") or "")).strip()
+        owner_email, _owner_profile = firm_notification_recipient(supabase)
         if not owner_email:
             return
         from utils.email_service import send_email

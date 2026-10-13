@@ -13,6 +13,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, st
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from utils.firm_notifications import notification_email_for_profile
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -233,7 +234,7 @@ async def submit_settlement_package(
         try:
             reviewer_id = _reviewer_profile_id()
             reviewer_response = (
-                supabase.table("profiles").select("id,full_name,email")
+                supabase.table("profiles").select("id,full_name,email,notification_preferences")
                 .eq("id", reviewer_id).limit(1).execute()
                 if reviewer_id else None
             )
@@ -246,11 +247,12 @@ async def submit_settlement_package(
                     "A settlement package was submitted for your review before client delivery.",
                     case_id=case["id"],
                 )
-                if reviewer.get("email"):
+                reviewer_email = notification_email_for_profile(reviewer)
+                if reviewer_email:
                     from utils.email_service import send_email
                     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
                     await send_email(
-                        to=reviewer["email"],
+                        to=reviewer_email,
                         subject="Settlement Package Ready for Review",
                         body=(
                             "<div style=\"font-family:sans-serif;font-size:14px;line-height:1.6;\">"
@@ -460,7 +462,7 @@ async def send_approved_settlement_package_document(
         "client_id": client["id"],
         "sent_by": profile["id"],
         "notification_recipient_id": profile["id"],
-        "notification_recipient_email": profile.get("email", ""),
+        "notification_recipient_email": notification_email_for_profile(profile) or "",
         "attorney_name": profile.get("full_name", ""),
         "message": message,
         "status": session_status,
@@ -478,7 +480,7 @@ async def send_approved_settlement_package_document(
             "client_id": client["id"],
             "sent_by": profile["id"],
             "notification_recipient_id": profile["id"],
-            "notification_recipient_email": profile.get("email", ""),
+            "notification_recipient_email": notification_email_for_profile(profile) or "",
             "status": session_status,
             "sent_at": now,
             "created_at": now,

@@ -9,9 +9,9 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-
 from utils.court_costs_pdf import render_unpaid_court_costs_pdf
 from utils.email_service import send_email
+from utils.firm_notifications import firm_notification_recipient
 from utils.supabase_client import get_supabase
 from routers.cases import get_current_user
 
@@ -75,6 +75,11 @@ def _owner_id(supabase):
 
 def _is_owner(supabase, profile):
     return profile.get("id") == _owner_id(supabase)
+
+
+def _owner_notification_email(supabase):
+    recipient, _profile = firm_notification_recipient(supabase)
+    return recipient
 
 
 def _require_role(profile):
@@ -162,10 +167,10 @@ async def create_court_cost(body: CourtCostCreate, authorization: str = Header(.
     supabase.table("court_cost_events").insert({"id": str(uuid.uuid4()), "request_id": request_id, "actor_id": profile.get("id"), "action": "submitted" if body.status == "submitted" else "created", "to_status": body.status, "amount": body.amount, "created_at": timestamp}).execute()
     if body.status == "submitted" and partner_id:
         partner = (supabase.table("referral_partners").select("full_name,email").eq("id", partner_id).limit(1).execute().data or [{}])[0]
-        owner = (supabase.table("profiles").select("email").eq("id", _owner_id(supabase)).limit(1).execute().data or [{}])[0] if _owner_id(supabase) else {}
+        owner_email = _owner_notification_email(supabase)
         subject = f"Court-cost request: {case.get('plaintiff_name') or case.get('case_number') or 'LegalFlow matter'}"
         body_html = f"<p>Hello {escape(str(partner.get('full_name') or 'there'))},</p><p>A court-cost reimbursement request has been submitted for <strong>{escape(str(case.get('plaintiff_name') or case.get('case_number') or 'a matter'))}</strong>.</p><p><strong>Amount:</strong> ${body.amount:,.2f}<br><strong>Court:</strong> {escape(body.court_name)}<br><strong>Date:</strong> {escape(body.expense_date.isoformat())}<br><strong>Description:</strong> {escape(body.description)}</p><p>Please sign in to LegalFlow to review and mark the request paid or return it for correction.</p>"
-        await _notify([partner.get("email"), owner.get("email")], subject, body_html, request_id)
+        await _notify([partner.get("email"), owner_email], subject, body_html, request_id)
     return _enrich(supabase, row, profile, _is_owner(supabase, profile))
 
 
@@ -274,7 +279,7 @@ async def update_court_cost(request_id: str, body: CourtCostUpdate, authorizatio
     supabase.table("court_cost_events").insert({"id": str(uuid.uuid4()), "request_id": request_id, "actor_id": profile.get("id"), "action": body.status, "from_status": row.get("status"), "to_status": body.status, "note": body.note or body.payment_note, "amount": body.paid_amount if body.status == "paid" else row.get("amount"), "created_at": timestamp}).execute()
     if body.status in {"needs_correction", "paid"}:
         submitter = (supabase.table("profiles").select("email,full_name").eq("id", row.get("submitted_by")).limit(1).execute().data or [{}])[0]
-        owner = (supabase.table("profiles").select("email").eq("id", _owner_id(supabase)).limit(1).execute().data or [{}])[0] if _owner_id(supabase) else {}
+        owner_email = _owner_notification_email(supabase)
         esther = (supabase.table("profiles").select("email,full_name").ilike("full_name", "Esther Oise").limit(1).execute().data or [{}])[0]
         case = (supabase.table("cases").select("plaintiff_name,case_number").eq("id", row.get("case_id")).limit(1).execute().data or [{}])[0]
         matter = case.get("plaintiff_name") or case.get("case_number") or "your matter"
@@ -284,7 +289,7 @@ async def update_court_cost(request_id: str, body: CourtCostUpdate, authorizatio
         else:
             subject = f"Court-cost request needs correction: {matter}"
             message = f"<p>The court-cost request for <strong>{escape(str(matter))}</strong> needs correction.</p><p><strong>Note:</strong> {escape(body.note or 'Please review the request in LegalFlow.')}</p>"
-        recipients = [submitter.get("email"), owner.get("email")]
+        recipients = [submitter.get("email"), owner_email]
         if body.status == "paid": recipients.append(esther.get("email"))
         await _notify(recipients, subject, message, request_id + body.status)
     return _enrich(supabase, {**row, **payload, "id": request_id}, profile, _is_owner(supabase, profile))

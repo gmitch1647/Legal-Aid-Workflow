@@ -19,8 +19,8 @@ from typing import Literal, Optional
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
-
 from utils.email_service import send_email
+from utils.firm_notifications import notification_email_for_profile
 from utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -166,13 +166,13 @@ async def _notify_payout_information_completed(supabase, payout_request: dict) -
             return
         owner_response = (
             supabase.table("profiles")
-            .select("id,email,full_name")
+            .select("id,email,full_name,notification_preferences")
             .eq("id", owner_id)
             .limit(1)
             .execute()
         )
         owner = (owner_response.data or [None])[0]
-        owner_email = str((owner or {}).get("email") or "").strip()
+        owner_email = notification_email_for_profile(owner)
         if not owner_email:
             logger.warning("Payout owner %s has no email for request %s", owner_id, payout_request.get("id"))
             return
@@ -225,7 +225,7 @@ async def _notify_payment_recorded(
         owner_id = _owner_profile_id(supabase)
         owner_response = (
             supabase.table("profiles")
-            .select("full_name,email")
+            .select("full_name,email,notification_preferences")
             .eq("id", owner_id)
             .limit(1)
             .execute()
@@ -234,7 +234,11 @@ async def _notify_payment_recorded(
         owner = (owner_response.data or [None])[0] if owner_response else None
         recipients = []
         for profile in (client, owner):
-            email = str((profile or {}).get("email") or "").strip()
+            email = (
+                notification_email_for_profile(profile)
+                if profile is owner
+                else str((profile or {}).get("email") or "").strip()
+            )
             if email and email.lower() not in {item[0].lower() for item in recipients}:
                 recipients.append((email, profile))
         if not recipients:

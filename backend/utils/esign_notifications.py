@@ -16,6 +16,7 @@ import unicodedata
 from typing import Any
 
 from utils.email_service import send_email
+from utils.firm_notifications import notification_email_for_profile
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +166,8 @@ async def notify_attorney_of_esign_event(
     preferences, recipient_profile = await get_esign_preferences(supabase, recipient_profile_id)
     if not preferences[preference_key]:
         return False
-    recipient_email = str(
-        record.get("notification_recipient_email")
-        or (recipient_profile or {}).get("email")
-        or ""
+    recipient_email = notification_email_for_profile(recipient_profile) or str(
+        record.get("notification_recipient_email") or ""
     ).strip()
     if not recipient_email:
         logger.warning("No sender email is available for E-Signature event %s", record.get("id"))
