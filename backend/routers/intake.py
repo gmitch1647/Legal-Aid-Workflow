@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
@@ -23,6 +23,92 @@ router = APIRouter()
 REFERRAL_ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "txt", "png", "jpg", "jpeg"}
 REFERRAL_MAX_FILES = 10
 REFERRAL_MAX_FILE_BYTES = 10 * 1024 * 1024
+
+
+def _normalize_public_submission_id(value: str | None) -> str | None:
+    """Return a canonical UUID for a browser retry token, if one was supplied."""
+    # FastAPI supplies the Form default object when this handler is invoked
+    # directly by focused tests or internal callers. Treat that as omitted.
+    if not isinstance(value, str):
+        return None
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    try:
+        return str(UUID(cleaned))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="The referral submission ID is invalid. Refresh the form and try again.") from exc
+
+
+def _begin_public_referral_submission(supabase, submission_id: str | None) -> dict | None:
+    """Claim a public referral retry token without creating a duplicate matter."""
+    if not submission_id:
+        return None
+
+    existing_response = (
+        supabase.table("public_referral_submissions")
+        .select("submission_id,case_id,status,result,updated_at")
+        .eq("submission_id", submission_id)
+        .limit(1)
+        .execute()
+    )
+    existing = (existing_response.data or [None])[0]
+    if existing and existing.get("status") == "completed":
+        return existing
+    if existing and existing.get("status") == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="This referral is still being processed. Please wait a few seconds, then retry the same submission.",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    if existing:
+        claimed_response = (
+            supabase.table("public_referral_submissions")
+            .update({"status": "processing", "last_error": None, "updated_at": now})
+            .eq("submission_id", submission_id)
+            .execute()
+        )
+        return (claimed_response.data or [existing])[0]
+
+    try:
+        created_response = supabase.table("public_referral_submissions").insert({
+            "submission_id": submission_id,
+            "status": "processing",
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+        return (created_response.data or [{}])[0]
+    except Exception:
+        # A simultaneous retry can win the insert race. Read its state instead
+        # of ever creating a second client or case.
+        retry_response = (
+            supabase.table("public_referral_submissions")
+            .select("submission_id,case_id,status,result,updated_at")
+            .eq("submission_id", submission_id)
+            .limit(1)
+            .execute()
+        )
+        retry = (retry_response.data or [None])[0]
+        if retry:
+            if retry.get("status") == "completed":
+                return retry
+            raise HTTPException(
+                status_code=409,
+                detail="This referral is already being processed. Please wait a few seconds, then retry the same submission.",
+            )
+        raise
+
+
+def _record_public_referral_submission(supabase, submission_id: str | None, **values) -> None:
+    """Best-effort status update for a retryable public referral submission."""
+    if not submission_id:
+        return
+    values["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table("public_referral_submissions").update(values).eq("submission_id", submission_id).execute()
+    except Exception:
+        logger.exception("Could not update public referral submission state for %s", submission_id)
 
 
 async def _prepare_referral_documents(files: list[UploadFile]) -> list[dict]:
@@ -576,6 +662,7 @@ async def submit_case_referral(
     requested_assistance: str = Form(...),
     referral_slug: str = Form(""),
     certification: str = Form(...),
+    submission_id: str = Form(""),
     files: list[UploadFile] = File(default=[]),
     complaint: UploadFile | None = File(default=None),
     secure_information_form: UploadFile | None = File(default=None),
@@ -603,6 +690,7 @@ async def submit_case_referral(
     if str(certification).strip().lower() not in {"true", "1", "yes", "on"}:
         raise HTTPException(status_code=422, detail="Confirm that the referral information is accurate before submitting.")
 
+    normalized_submission_id = _normalize_public_submission_id(submission_id)
     prepared_complaint = await _prepare_referral_complaint(complaint)
     prepared_secure_information_form = await _prepare_secure_information_form(secure_information_form)
     prepared_documents = await _prepare_referral_documents(files) if files else []
@@ -633,10 +721,63 @@ async def submit_case_referral(
         referral_slug=referral_workspace.get("submission_slug") if referral_workspace else None,
         sync_to_suitedash=False,
     )
-    result = await submit_intake(body)
+    supabase = get_supabase() if normalized_submission_id else None
+    submission = _begin_public_referral_submission(supabase, normalized_submission_id) if normalized_submission_id else None
+    if submission and submission.get("status") == "completed":
+        previous_result = dict(submission.get("result") or {})
+        if previous_result:
+            previous_result["replayed"] = True
+            return previous_result
+        return {
+            "status": "success",
+            "case_id": submission.get("case_id"),
+            "files_uploaded": 0,
+            "replayed": True,
+            "message": f"Thank you {body.first_name}. Your referral was already received and is in Case Submission for review.",
+        }
+
+    # A failed response can be safely resumed against the existing case instead
+    # of creating a duplicate referral. The document step is retried below.
+    case_id = submission.get("case_id") if submission else None
+    if case_id:
+        result = {
+            "status": "success",
+            "case_id": case_id,
+            "suitedash_synced": False,
+        }
+    else:
+        try:
+            result = await submit_intake(body)
+        except HTTPException as exc:
+            if normalized_submission_id:
+                _record_public_referral_submission(
+                    supabase,
+                    normalized_submission_id,
+                    status="failed",
+                    last_error=str(exc.detail)[:1000],
+                )
+            raise
+        except Exception:
+            if normalized_submission_id:
+                _record_public_referral_submission(
+                    supabase,
+                    normalized_submission_id,
+                    status="failed",
+                    last_error="The referral could not be created.",
+                )
+            raise
     case_id = result.get("case_id")
     if not case_id:
+        if normalized_submission_id:
+            _record_public_referral_submission(
+                supabase,
+                normalized_submission_id,
+                status="failed",
+                last_error="The case submission could not be created.",
+            )
         raise HTTPException(status_code=500, detail="The case submission could not be created.")
+    if normalized_submission_id:
+        _record_public_referral_submission(supabase, normalized_submission_id, case_id=case_id, status="processing")
 
     try:
         result["files_uploaded"] = _store_prepared_referral_documents(
@@ -649,7 +790,24 @@ async def submit_case_referral(
         result["secure_information_form_uploaded"] = bool(prepared_secure_information_form)
     except Exception as exc:
         logger.exception("Case referral documents could not be stored for case %s", case_id)
+        if normalized_submission_id:
+            _record_public_referral_submission(
+                supabase,
+                normalized_submission_id,
+                case_id=case_id,
+                status="failed",
+                last_error="Supporting documents could not be stored.",
+            )
         raise HTTPException(status_code=500, detail="The case was created but supporting documents could not be stored. Please contact LegalFlow support.") from exc
 
     result["message"] = f"Thank you {body.first_name}. Your referral is now in Case Submission for review."
+    if normalized_submission_id:
+        _record_public_referral_submission(
+            supabase,
+            normalized_submission_id,
+            case_id=case_id,
+            status="completed",
+            result=result,
+            last_error=None,
+        )
     return result

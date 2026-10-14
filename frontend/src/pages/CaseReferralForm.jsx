@@ -92,6 +92,22 @@ export default function CaseReferralForm() {
   const fileInputRef = useRef(null);
   const complaintInputRef = useRef(null);
   const secureInformationFormInputRef = useRef(null);
+  const submissionIdRef = useRef('');
+
+  function referralSubmissionId() {
+    if (submissionIdRef.current) return submissionIdRef.current;
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+      submissionIdRef.current = globalThis.crypto.randomUUID();
+    } else {
+      // UUID v4-shaped fallback for older browsers. It is an idempotency key,
+      // not a security credential.
+      submissionIdRef.current = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+        const value = Math.floor(Math.random() * 16);
+        return (character === 'x' ? value : ((value & 0x3) | 0x8)).toString(16);
+      });
+    }
+    return submissionIdRef.current;
+  }
 
   useEffect(() => {
     if (!referralSlug) return;
@@ -190,6 +206,7 @@ export default function CaseReferralForm() {
       const payload = new FormData();
       Object.entries(form).forEach(([field, value]) => payload.append(field, value || ''));
       if (referralSlug) payload.append('referral_slug', referralSlug);
+      payload.append('submission_id', referralSubmissionId());
       payload.append('certification', String(certified));
       files.forEach((file) => payload.append('files', file));
       if (complaint) payload.append('complaint', complaint);

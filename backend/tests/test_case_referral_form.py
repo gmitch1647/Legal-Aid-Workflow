@@ -34,6 +34,16 @@ class CaseReferralFormTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 422)
         self.assertIn("not an accepted", error.exception.detail.lower())
 
+    def test_public_referral_submission_id_is_canonical_and_rejects_invalid_values(self):
+        self.assertEqual(
+            self.intake._normalize_public_submission_id("D2719B15-1EF2-47E0-BF89-C75A0C99419D"),
+            "d2719b15-1ef2-47e0-bf89-c75a0c99419d",
+        )
+        self.assertIsNone(self.intake._normalize_public_submission_id(""))
+        with self.assertRaises(HTTPException) as error:
+            self.intake._normalize_public_submission_id("not-a-uuid")
+        self.assertEqual(error.exception.status_code, 422)
+
     def test_uncertified_referral_is_rejected_before_case_creation(self):
         submit_mock = AsyncMock()
         with patch.object(self.intake, "submit_intake", submit_mock):
@@ -95,6 +105,71 @@ class CaseReferralFormTests(unittest.TestCase):
         self.assertFalse(submitted_body.sync_to_suitedash)
         self.assertEqual(submitted_body.requested_assistance, "LegalFlow Intake Team")
         store_mock.assert_called_once()
+
+    def test_completed_public_referral_replay_returns_previous_result_without_creating_a_case(self):
+        completed = {
+            "submission_id": "d2719b15-1ef2-47e0-bf89-c75a0c99419d",
+            "status": "completed",
+            "case_id": "case-submitted-789",
+            "result": {"status": "success", "case_id": "case-submitted-789", "files_uploaded": 2},
+        }
+        submit_mock = AsyncMock()
+        with patch.object(self.intake, "get_supabase", return_value=unittest.mock.Mock()), patch.object(self.intake, "_begin_public_referral_submission", return_value=completed), patch.object(self.intake, "submit_intake", submit_mock):
+            result = asyncio.run(self.intake.submit_case_referral(
+                first_name="Referral",
+                last_name="Client",
+                email="referral.client@example.com",
+                phone="5555551212",
+                date_of_birth="1990-01-01",
+                address="10 Main Street",
+                city="Atlanta",
+                state="Georgia",
+                zip_code="30301",
+                case_type="FCRA",
+                violation_type="E8",
+                specific_violation="",
+                adverse_party="Example Furnisher",
+                brief_description="Incorrect reporting after a dispute.",
+                affiliate_name="Example Referral Partner",
+                requested_assistance="LegalFlow Intake Team",
+                certification="true",
+                submission_id="d2719b15-1ef2-47e0-bf89-c75a0c99419d",
+                files=[self.upload()],
+            ))
+        self.assertTrue(result["replayed"])
+        self.assertEqual(result["case_id"], "case-submitted-789")
+        submit_mock.assert_not_awaited()
+
+    def test_failed_public_referral_creation_is_released_for_a_safe_retry(self):
+        submission = {"submission_id": "d2719b15-1ef2-47e0-bf89-c75a0c99419d", "status": "processing"}
+        submit_mock = AsyncMock(side_effect=HTTPException(status_code=422, detail="Client email needs review."))
+        record_mock = unittest.mock.Mock()
+        with patch.object(self.intake, "get_supabase", return_value=unittest.mock.Mock()), patch.object(self.intake, "_begin_public_referral_submission", return_value=submission), patch.object(self.intake, "_record_public_referral_submission", record_mock), patch.object(self.intake, "submit_intake", submit_mock):
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(self.intake.submit_case_referral(
+                    first_name="Referral",
+                    last_name="Client",
+                    email="referral.client@example.com",
+                    phone="5555551212",
+                    date_of_birth="1990-01-01",
+                    address="10 Main Street",
+                    city="Atlanta",
+                    state="Georgia",
+                    zip_code="30301",
+                    case_type="FCRA",
+                    violation_type="E8",
+                    specific_violation="",
+                    adverse_party="Example Furnisher",
+                    brief_description="Incorrect reporting after a dispute.",
+                    affiliate_name="Example Referral Partner",
+                    requested_assistance="LegalFlow Intake Team",
+                    certification="true",
+                    submission_id="d2719b15-1ef2-47e0-bf89-c75a0c99419d",
+                    files=[self.upload()],
+                ))
+        self.assertEqual(error.exception.status_code, 422)
+        self.assertEqual(record_mock.call_args.kwargs["status"], "failed")
+        self.assertIn("Client email", record_mock.call_args.kwargs["last_error"])
 
     def test_partner_specific_referral_uses_workspace_slug_and_internal_partner_name(self):
         created = {"case_id": "case-submitted-456", "status": "success"}

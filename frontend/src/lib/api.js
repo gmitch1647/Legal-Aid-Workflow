@@ -1223,17 +1223,42 @@ export async function getReferralWorkspaceConfig(referralSlug) {
 }
 
 export async function submitCaseReferralForm(formData) {
-  // Public Case Referral Hub endpoint. It validates supporting documents and creates a Submitted case.
+  // Public Case Referral Hub endpoint. The caller supplies one UUID submission
+  // ID, so retrying a transient connection failure cannot create a duplicate
+  // client or case.
   const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
-  const response = await fetch(`${BASE}/intake/referral-submit`, {
-    method: 'POST',
-    body: formData,
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Case referral could not be submitted' }));
-    throw new Error(err.detail || 'Case referral could not be submitted');
+  const retryableStatuses = new Set([408, 429, 500, 502, 503, 504]);
+  let lastNetworkError;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(`${BASE}/intake/referral-submit`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (response.ok) return response.json();
+
+      const err = await response.json().catch(() => ({ detail: 'Case referral could not be submitted' }));
+      const message = apiErrorMessage(err, 'Case referral could not be submitted');
+      if (attempt === 0 && retryableStatuses.has(response.status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        continue;
+      }
+      throw new Error(message);
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      lastNetworkError = error;
+      if (attempt === 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        continue;
+      }
+    }
   }
-  return response.json();
+
+  throw new Error(
+    'Could not reach LegalFlow to upload this referral. Your files are still selected; use Submit Case Referral again to retry safely.',
+    { cause: lastNetworkError },
+  );
 }
 
 export async function inviteStaffAttorney(data) {
