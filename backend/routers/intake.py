@@ -157,6 +157,19 @@ async def _prepare_secure_information_form(secure_information_form: UploadFile |
     return (await _prepare_referral_documents([secure_information_form]))[0]
 
 
+def _is_complaint_exhibit_filename(file_name: str) -> bool:
+    """Identify clearly labeled exhibits included with a referral complaint.
+
+    A referral form submits the complaint in its own field and supporting files
+    in a second field.  When a supporting-file name explicitly identifies it as
+    an exhibit, keep it nested under that complaint from the beginning.  Other
+    supporting files (credit reports, retainers, and secure forms) remain
+    independent case documents.
+    """
+    normalized = re.sub(r"[_\-.]+", " ", str(file_name or "").lower())
+    return bool(re.search(r"\b(?:exhibit|exhibits|exh)\b", normalized))
+
+
 def _store_prepared_referral_documents(
     case_id: str,
     documents: list[dict],
@@ -166,15 +179,33 @@ def _store_prepared_referral_documents(
 ) -> int:
     """Store public-referral files without public URLs, preserving special document categories."""
     supabase = get_supabase()
-    items = [(document, "other") for document in documents]
+    complaint_document_id = str(uuid4()) if complaint else None
+    items = []
     if complaint:
-        items.append((complaint, "complaint"))
+        # Store the complaint first so a clearly named exhibit can safely point
+        # at it even when the referral form submitted all files at once.
+        items.append((complaint, "complaint", None, complaint_document_id))
+    for document in documents:
+        is_exhibit = bool(complaint_document_id and _is_complaint_exhibit_filename(document.get("file_name", "")))
+        items.append((
+            document,
+            "complaint_exhibit" if is_exhibit else "other",
+            complaint_document_id if is_exhibit else None,
+            None,
+        ))
     if secure_information_form:
-        items.append((secure_information_form, "pii"))
+        items.append((secure_information_form, "pii", None, None))
 
     uploaded = 0
-    for document, category in items:
-        folder = "complaints" if category == "complaint" else "secure-information" if category == "pii" else "case-submission"
+    for document, category, parent_document_id, document_id in items:
+        if category == "complaint":
+            folder = "complaints"
+        elif category == "complaint_exhibit":
+            folder = f"complaints/{parent_document_id}/exhibits"
+        elif category == "pii":
+            folder = "secure-information"
+        else:
+            folder = "case-submission"
         storage_path = f"cases/{case_id}/{folder}/{uuid4().hex}_{document['safe_name']}"
         try:
             supabase.storage.from_("documents").upload(
@@ -216,7 +247,7 @@ def _store_prepared_referral_documents(
                     detail="The complaint PDF could not be converted to a Word document. Upload a Word complaint or a readable PDF and try again.",
                 ) from exc
 
-        supabase.table("case_documents").insert({
+        document_record = {
             "case_id": case_id,
             "file_name": document["file_name"],
             "file_type": document["file_type"],
@@ -224,7 +255,12 @@ def _store_prepared_referral_documents(
             "storage_path": storage_path,
             "word_document_path": word_document_path,
             "document_category": category,
-        }).execute()
+        }
+        if document_id:
+            document_record["id"] = document_id
+        if parent_document_id:
+            document_record["parent_document_id"] = parent_document_id
+        supabase.table("case_documents").insert(document_record).execute()
         uploaded += 1
     return uploaded
 

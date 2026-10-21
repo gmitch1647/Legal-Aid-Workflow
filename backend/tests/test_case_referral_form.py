@@ -240,6 +240,72 @@ class CaseReferralFormTests(unittest.TestCase):
         self.assertTrue(result["secure_information_form_uploaded"])
         self.assertEqual(store_mock.call_args.kwargs["secure_information_form"]["file_name"], "client-secure-information.pdf")
 
+    def test_referral_exhibit_files_are_linked_to_the_uploaded_complaint(self):
+        records = []
+        uploads = []
+
+        class FakeStorage:
+            def from_(self, bucket):
+                self.bucket = bucket
+                return self
+
+            def upload(self, path, file, file_options):
+                uploads.append((self.bucket, path, file_options))
+
+        class FakeTable:
+            def insert(self, record):
+                records.append(record)
+                return self
+
+            def execute(self):
+                return unittest.mock.Mock(data=[])
+
+        class FakeSupabase:
+            storage = FakeStorage()
+
+            def table(self, _name):
+                return FakeTable()
+
+        complaint = {
+            "file_name": "James Williams Complaint.docx",
+            "safe_name": "James_Williams_Complaint.docx",
+            "file_type": "docx",
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "content": b"complaint",
+        }
+        exhibit = {
+            "file_name": "James Williams - Exhibits A-G.pdf",
+            "safe_name": "James_Williams_Exhibits_A-G.pdf",
+            "file_type": "pdf",
+            "content_type": "application/pdf",
+            "content": b"exhibits",
+        }
+        credit_report = {
+            "file_name": "James Credit Report.pdf",
+            "safe_name": "James_Credit_Report.pdf",
+            "file_type": "pdf",
+            "content_type": "application/pdf",
+            "content": b"report",
+        }
+
+        with patch.object(self.intake, "get_supabase", return_value=FakeSupabase()):
+            count = self.intake._store_prepared_referral_documents(
+                "case-james",
+                [exhibit, credit_report],
+                complaint=complaint,
+            )
+
+        self.assertEqual(count, 3)
+        complaint_record = next(record for record in records if record["document_category"] == "complaint")
+        exhibit_record = next(record for record in records if record["file_name"] == exhibit["file_name"])
+        credit_report_record = next(record for record in records if record["file_name"] == credit_report["file_name"])
+        self.assertEqual(exhibit_record["document_category"], "complaint_exhibit")
+        self.assertEqual(exhibit_record["parent_document_id"], complaint_record["id"])
+        self.assertIn(f"complaints/{complaint_record['id']}/exhibits/", exhibit_record["storage_path"])
+        self.assertEqual(credit_report_record["document_category"], "other")
+        self.assertNotIn("parent_document_id", credit_report_record)
+        self.assertEqual(len(uploads), 3)
+
     def test_referral_case_title_uses_defendant_not_working_attorney(self):
         self.assertEqual(
             referrals._case_title("Kay Scott", ["TransUnion"]),
