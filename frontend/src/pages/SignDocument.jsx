@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import SignaturePad from 'signature_pad';
-import { CheckCircle2, Loader2, AlertCircle, FileText, Eraser, Type } from 'lucide-react';
+import { CheckCircle2, Loader2, AlertCircle, FileText, Eraser, Type, Download, ExternalLink } from 'lucide-react';
 
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
@@ -14,7 +14,11 @@ export default function SignDocument() {
   const [submitting, setSubmitting] = useState(false);
   const [typedName, setTypedName] = useState('');
   const [sigMode, setSigMode] = useState('draw');
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+  const [previewError, setPreviewError] = useState('');
   const isReviewOnly = Boolean(session?.review_only);
+  const pdfUrl = `${API_URL}/signing/${token}/pdf`;
 
   const canvasRef = useRef(null);
   const sigPadRef = useRef(null);
@@ -63,12 +67,39 @@ export default function SignDocument() {
     sigPadRef.current?.clear();
   }
 
+  async function handleDownloadPdf() {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadError('');
+    try {
+      const response = await fetch(pdfUrl);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Could not download the agreement.');
+      }
+      const blob = await response.blob();
+      if (!blob.size || !blob.type.includes('pdf')) throw new Error('The agreement PDF is not available.');
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `${(session?.title || 'LegalFlow Agreement').replace(/[^a-zA-Z0-9 _.-]/g, '_')}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Mobile browsers can finish saving after the click handler returns.
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    } catch (err) {
+      setDownloadError(`${err.message} You can also use Open PDF and your browser's Save or Share option.`);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   // Render PDF preview
   useEffect(() => {
     if (!session || !pdfCanvasRef.current) return;
     let cancelled = false;
-
-    const pdfUrl = `${API_URL}/signing/${token}/pdf`;
+    setPreviewError('');
 
     async function renderPdf() {
       try {
@@ -100,7 +131,7 @@ export default function SignDocument() {
           await page.render({ canvasContext: ctx, viewport }).promise;
         }
       } catch (err) {
-        console.error('PDF render failed:', err);
+        if (!cancelled) setPreviewError('The in-page preview could not load. Use Open PDF or Download PDF below to review the full agreement.');
       }
     }
 
@@ -233,8 +264,24 @@ export default function SignDocument() {
 
         {/* PDF Preview */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <h2 className="text-sm font-semibold text-slate-700 mb-3">Document Preview</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <h2 className="text-sm font-semibold text-slate-700">Document Preview</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={handleDownloadPdf} disabled={downloading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+                {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {downloading ? 'Downloading...' : 'Download PDF'}
+              </button>
+              <a href={pdfUrl} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                <ExternalLink className="h-4 w-4" /> Open PDF
+              </a>
+            </div>
+          </div>
+          {previewError && <p role="alert" className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{previewError}</p>}
+          {downloadError && <p role="alert" className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{downloadError}</p>}
           <div ref={pdfCanvasRef} className="overflow-auto max-h-[60vh] bg-slate-50 rounded-lg p-3 flex flex-col items-center" />
+          <p className="mt-3 text-xs text-slate-500">On iPhone or iPad, use Open PDF, then Share → Save to Files. This copy is unsigned until you complete signing.</p>
         </div>
 
         {isReviewOnly ? (
