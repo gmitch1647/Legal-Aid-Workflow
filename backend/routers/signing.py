@@ -1990,6 +1990,96 @@ def _execution_label_rects(page, label: str):
     return matches
 
 
+def _merged_horizontal_execution_rules(page):
+    """Join adjacent Word tab-leader segments into native horizontal rules."""
+    import fitz
+
+    segments = []
+    for drawing in page.get_drawings():
+        rect = drawing.get("rect")
+        if rect and rect.width >= 8 and rect.height <= 2.5:
+            segments.append(fitz.Rect(rect))
+    merged = []
+    for rect in sorted(segments, key=lambda item: (round(item.y0), item.x0)):
+        if merged and abs(merged[-1].y0 - rect.y0) <= 1.0 and rect.x0 <= merged[-1].x1 + 2.0:
+            previous = merged[-1]
+            # A stroked PDF rule has zero height and is an "empty" fitz Rect;
+            # geometric union would silently discard its earlier segments.
+            merged[-1] = fitz.Rect(
+                min(previous.x0, rect.x0), min(previous.y0, rect.y0),
+                max(previous.x1, rect.x1), max(previous.y1, rect.y1),
+            )
+        else:
+            merged.append(rect)
+    return [rect for rect in merged if rect.width >= 80]
+
+
+def _dated_left_client_execution_placement(doc, signer_name: str | None = None) -> Optional[dict]:
+    """Locate ``DATED: ____    By: ____`` using the named client and both rules.
+
+    Require the exact printed signer immediately below the By rule and a
+    same-row date rule. Never infer a signature from a recital or counsel block.
+    """
+    import fitz
+
+    name = " ".join(str(signer_name or "").split())
+    if not name:
+        return None
+    for page in reversed(doc):
+        names = _execution_label_rects(page, name)
+        by_labels = _execution_label_rects(page, "By:")
+        date_labels = _execution_label_rects(page, "DATED:") + _execution_label_rects(page, "Date:")
+        if not names or not by_labels or not date_labels:
+            continue
+        rules = _merged_horizontal_execution_rules(page)
+        for name_rect in names:
+            line_texts = [
+                " ".join("".join(span.get("text", "") for span in line.get("spans", [])).split())
+                for block in page.get_text("dict").get("blocks", [])
+                for line in block.get("lines", [])
+                if fitz.Rect(line["bbox"]).intersects(name_rect)
+            ]
+            if not any(text.casefold() == name.casefold() for text in line_texts):
+                continue
+            for by_rect in by_labels:
+                if not (0 <= name_rect.y0 - by_rect.y0 <= 36 and 0 <= name_rect.x0 - by_rect.x1 <= 48):
+                    continue
+                signature_rules = [
+                    rule for rule in rules
+                    if by_rect.x1 + 4 <= rule.x0 <= name_rect.x0 + 12
+                    and rule.x1 >= name_rect.x1 - 3
+                    and name_rect.y0 - 16 <= rule.y0 <= name_rect.y0 + 2
+                    and by_rect.y0 <= rule.y0 <= by_rect.y1 + 3
+                ]
+                for signature_rule in signature_rules:
+                    for date_rect in date_labels:
+                        if date_rect.x1 + 45 >= by_rect.x0 or abs(date_rect.y0 - by_rect.y0) > 12:
+                            continue
+                        date_rules = [
+                            rule for rule in rules
+                            if date_rect.x1 + 4 <= rule.x0
+                            and rule.x1 <= by_rect.x0 - 12
+                            and abs(rule.y0 - signature_rule.y0) <= 3
+                        ]
+                        if not date_rules:
+                            continue
+                        date_rule = min(date_rules, key=lambda rule: rule.x0)
+                        left, right = signature_rule.x0 + 5, signature_rule.x1 - 5
+                        top, bottom = _horizontal_signature_band(page, by_rect, left, right)
+                        bottom = min(bottom, signature_rule.y0 - 2, name_rect.y0 - 3)
+                        if right - left < 80 or bottom - top < 14:
+                            continue
+                        return {
+                            "strategy": "dated_left_named_client_execution_block",
+                            "layout": "horizontal_date_left",
+                            "page": page.number,
+                            "signature_rect": [round(left, 2), round(top, 2), round(right, 2), round(bottom, 2)],
+                            "date_origin": [round(date_rule.x0 + 4, 2), round(date_rule.y0 - 2, 2)],
+                            "date_label_rect": [round(value, 2) for value in date_rect],
+                        }
+    return None
+
+
 def _execution_block_placement(doc, signer_name: str | None = None) -> Optional[dict]:
     """Locate the client-side `By:` / `Date:` pair in a two-party execution block.
 
@@ -1998,6 +2088,10 @@ def _execution_block_placement(doc, signer_name: str | None = None) -> Optional[
     followed by exhibits, while excluding the document-header area.
     """
     import fitz  # PyMuPDF
+
+    dated_left_placement = _dated_left_client_execution_placement(doc, signer_name)
+    if dated_left_placement:
+        return dated_left_placement
 
     # Attorney-managed engagement templates use an explicit client execution
     # block. Prefer it ahead of generic By:/Date: detection so signatures stay
@@ -2239,6 +2333,20 @@ def _execution_block_placement(doc, signer_name: str | None = None) -> Optional[
                 if rect.y0 >= minimum_execution_y
             ]
             for signer_rect in signer_rects:
+                # A name mentioned in body/acknowledgment prose is not a
+                # printed-name execution caption. Leave that prose alone so
+                # the explicit APPROVED AND ACCEPTED block can be used below.
+                caption_lines = [
+                    " ".join("".join(span.get("text", "") for span in line.get("spans", [])).split())
+                    for block in page.get_text("dict").get("blocks", [])
+                    for line in block.get("lines", [])
+                    if fitz.Rect(line["bbox"]).intersects(signer_rect)
+                ]
+                if not any(
+                    text.casefold() in {normalized_signer_name.casefold(), f"{normalized_signer_name}, Client".casefold()}
+                    for text in caption_lines
+                ):
+                    continue
                 matching_dates = [
                     date_rect for date_rect in date_labels
                     if date_rect.y0 > signer_rect.y1 + 18
