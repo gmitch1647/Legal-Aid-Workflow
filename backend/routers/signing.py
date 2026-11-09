@@ -727,7 +727,7 @@ async def create_generated_pdf_signing_session(
               <p>Hello {escape(signer_name)},</p>
               <p>{escape(message)}</p>
               <p><strong>Document:</strong> {escape(title)}</p>
-              <p><strong>From:</strong> {escape(profile.get('full_name') or 'Your Attorney')}</p>
+              <p><strong>From:</strong> LegalFlow</p>
               <p><a href=\"{signing_url}\" style=\"background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;\">Review &amp; Sign Closing Statement</a></p>
               <p style=\"font-size:12px;color:#64748b;\">For your security, do not forward this link.</p>
             </div>
@@ -916,7 +916,7 @@ async def create_signing_session(
                 <p>Hello {escape(signer_name)},</p>
                 <p>{escape(email_message)}</p>
                 <p><strong>Document:</strong> {escape(title)}</p>
-                <p><strong>From:</strong> {escape(profile.get('full_name', 'Your Attorney'))}</p>
+                <p><strong>From:</strong> LegalFlow</p>
                 <div style="margin:24px 0;">
                     <a href="{signing_url}"
                        style="background:#2563eb;color:white;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">
@@ -1151,7 +1151,7 @@ async def create_corrected_signing_request(
           <p>Hello {escape(str(record['signer_name']))},</p>
           <p>{escape(message)}</p>
           <p><strong>Document:</strong> {escape(corrected_title)}</p>
-          <p><strong>From:</strong> {escape(str(profile.get('full_name') or 'Your Attorney'))}</p>
+          <p><strong>From:</strong> LegalFlow</p>
           <p><a href="{signing_url}" style="background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;">Review &amp; Sign Corrected Agreement</a></p>
           <p style="font-size:12px;color:#64748b;">This is a replacement signature request. Do not forward this secure link.</p>
         </div>
@@ -1382,9 +1382,9 @@ async def send_oise_engagement_contract(
         <div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:560px;\">
           <h2 style=\"color:#1e40af;\">Representation Agreement Signature Required</h2>
           <p>Hello {escape(str(signer_name))},</p>
-          <p>Esther Oise has asked you to review and sign your Oise Law Group PC representation agreement.</p>
+          <p>LegalFlow has sent your Oise Law Group PC representation agreement for you to review and sign.</p>
           <p><strong>Document:</strong> Oise Law Group PC Representation Agreement</p>
-          <p><strong>From:</strong> {escape(str(contract_attorney.get('full_name') or OISE_ENGAGEMENT_ATTORNEY_NAME))}</p>
+          <p><strong>From:</strong> LegalFlow</p>
           <p><a href=\"{signing_url}\" style=\"background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;\">Review &amp; Sign Agreement</a></p>
           <p style=\"font-size:12px;color:#64748b;\">For your security, do not forward this link.</p>
         </div>

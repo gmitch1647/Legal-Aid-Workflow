@@ -252,9 +252,7 @@ export default function SignDocument() {
         {/* Document info */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <h1 className="text-lg font-bold text-slate-900">{session?.title}</h1>
-          {session?.attorney_name && (
-            <p className="text-sm text-slate-500 mt-1">From: {session.attorney_name}</p>
-          )}
+          <p className="text-sm text-slate-500 mt-1">From: LegalFlow</p>
           {session?.message && (
             <p className="text-sm text-slate-600 mt-3 bg-blue-50 rounded-lg p-3 border border-blue-100">
               {session.message}

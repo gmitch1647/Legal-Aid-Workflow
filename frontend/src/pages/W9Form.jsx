@@ -219,7 +219,7 @@ export default function W9Form() {
       <div className="max-w-4xl mx-auto px-4 py-6 md:py-10">
         <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 md:p-7">
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-5">
-            <div><p className="text-xs font-semibold tracking-wider uppercase text-blue-700">IRS Form W-9</p><h1 className="mt-1 text-2xl font-bold text-slate-950">{request?.title}</h1><p className="mt-2 text-sm text-slate-600">Requested for <span className="font-semibold">{request?.signer_name}</span>{request?.attorney_name ? ` by ${request.attorney_name}` : ''}.</p>{request?.message && <p className="mt-4 max-w-2xl rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-blue-950">{request.message}</p>}</div>
+            <div><p className="text-xs font-semibold tracking-wider uppercase text-blue-700">IRS Form W-9</p><h1 className="mt-1 text-2xl font-bold text-slate-950">{request?.title}</h1><p className="mt-2 text-sm text-slate-600">Requested for <span className="font-semibold">{request?.signer_name}</span> by LegalFlow.</p>{request?.message && <p className="mt-4 max-w-2xl rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-blue-950">{request.message}</p>}</div>
             <a href={publicW9TemplateUrl(token)} target="_blank" rel="noreferrer" className="shrink-0 inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-50"><ExternalLink className="w-4 h-4" />View blank IRS W-9</a>
           </div>
         </section>

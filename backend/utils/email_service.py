@@ -14,6 +14,7 @@ import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr, parseaddr
 from typing import Any
 
 from dotenv import load_dotenv
@@ -45,6 +46,19 @@ def get_last_email_error() -> str | None:
     return _last_email_error
 
 
+def _sender_address(configured_address: str) -> str:
+    """Keep the verified mailbox, never an old personal display name."""
+    cleaned = str(configured_address or "").replace("\r", "").replace("\n", "").strip()
+    address = parseaddr(cleaned)[1]
+    if not address or "@" not in address:
+        raise ValueError("The email sender must contain a valid mailbox address.")
+    return address
+
+
+def _platform_from_header(configured_address: str) -> str:
+    return formataddr((PLATFORM_FROM_NAME, _sender_address(configured_address)))
+
+
 async def send_email(
     to: str,
     subject: str,
@@ -65,7 +79,7 @@ async def send_email(
     _last_email_error = None
 
     resend_key = os.environ.get("RESEND_API_KEY", "")
-    email_from = os.environ.get("EMAIL_FROM", SMTP_FROM_EMAIL or "onboarding@resend.dev")
+    email_from = os.environ.get("EMAIL_FROM") or SMTP_FROM_EMAIL or "onboarding@resend.dev"
 
     normalized_attachments: list[dict[str, Any]] = []
     for attachment in attachments or []:
@@ -80,14 +94,14 @@ async def send_email(
     if resend_key:
         try:
             import httpx
-            from_header = f"{PLATFORM_FROM_NAME} <{email_from}>"
+            from_header = _platform_from_header(email_from)
             # Resend rejects reuse of a key when any request-body field changes.
             # Add a compact payload fingerprint so identical retries deduplicate,
             # while intentional resends with changed content receive a new key.
             effective_idempotency_key = idempotency_key
             if idempotency_key:
                 payload_fingerprint = hashlib.sha256(
-                    (to + "\n" + subject + "\n" + body + "\n" + (reply_to or "") + "\n" +
+                    (from_header + "\n" + to + "\n" + subject + "\n" + body + "\n" + (reply_to or "") + "\n" +
                      "\n".join(
                          f"{a['filename']}:{hashlib.sha256(a['content']).hexdigest()}"
                          for a in normalized_attachments
@@ -142,7 +156,7 @@ async def send_email(
 
     try:
         msg = MIMEMultipart("mixed")
-        msg["From"] = f"{PLATFORM_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+        msg["From"] = _platform_from_header(SMTP_FROM_EMAIL)
         msg["To"] = to
         msg["Subject"] = subject
         if reply_to:
@@ -167,7 +181,7 @@ async def send_email(
         if SMTP_USER and SMTP_PASSWORD:
             server.login(SMTP_USER, SMTP_PASSWORD)
 
-        server.sendmail(SMTP_FROM_EMAIL, [to], msg.as_string())
+        server.sendmail(_sender_address(SMTP_FROM_EMAIL), [to], msg.as_string())
         server.quit()
 
         logger.info("Email sent to %s – subject: %s", to, subject)
